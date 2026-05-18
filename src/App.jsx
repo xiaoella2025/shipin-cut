@@ -4,17 +4,6 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 
 const TOTAL = 30
 
-const MOCK_VIDEOS_BASE = [
-  { id: 1, name: '素材_01.mp4', dur: '00:15', size: '45.2 MB', fps: '30fps', res: '1080p' },
-  { id: 2, name: '素材_02.mp4', dur: '00:22', size: '67.8 MB', fps: '30fps', res: '1080p' },
-  { id: 3, name: '素材_03.mp4', dur: '00:08', size: '23.1 MB', fps: '24fps', res:  '720p' },
-]
-
-const IMPORT_MOCK = [
-  { name: '素材_04.mp4', size: '52.1 MB', dur: '00:18', res: '1080p', fps: '30fps' },
-  { name: '素材_05.mp4', size: '38.6 MB', dur: '00:12', res:  '720p', fps: '24fps' },
-]
-
 // Scenes mapped to TRACKS_GEN video segments
 const SCENES = [
   { start: 0,    end: 7,    name: '素材_01',   num: 1, bg: 'linear-gradient(160deg,#0f0c29,#1e1060,#0a0728)', color: '#4f46e5' },
@@ -40,7 +29,7 @@ const WAVE_MINI = Array.from({ length: 50 }, (_, i) =>
 const SUB_TICKS = Array.from({ length: 29 }, (_, i) => i + 1).filter(t => t % 5 !== 0)
 
 const TRACKS_INIT = {
-  video:    [ { id:'v1', name:'素材_01', start:0, dur:8, color:'#3730a3' }, { id:'v2', name:'素材_03', start:10, dur:8, color:'#5b21b6' } ],
+  video:    [],
   image:    [ { id:'i1', name:'片尾图', start:25, dur:5, color:'#0c4a6e' } ],
   audio:    [ { id:'a1', name:'BGM · 背景音乐', start:0, dur:30, color:'#064e3b' } ],
   subtitle: [],
@@ -88,6 +77,8 @@ const DEDUP_META = {
   endImage:   { label:'片尾图片', ico:'⬜', desc:'结尾插入品牌片尾图' },
 }
 
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
 function fmt(s) {
   return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`
 }
@@ -95,6 +86,21 @@ function fmtMs(s) {
   return `${fmt(s)}.${String(Math.floor((s%1)*10))}`
 }
 function pct(v) { return `${(v/TOTAL)*100}%` }
+
+function formatSize(bytes) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function readVideoMeta(url) {
+  return new Promise(resolve => {
+    const v = document.createElement('video')
+    v.preload = 'metadata'
+    v.onloadedmetadata = () => resolve({ dur: v.duration, width: v.videoWidth, height: v.videoHeight })
+    v.onerror = () => resolve({ dur: 0, width: 0, height: 0 })
+    v.src = url
+  })
+}
 
 // ─── sub-components ──────────────────────────────────────────────────────────
 
@@ -138,75 +144,6 @@ function TrackRow({ type, segments, isAudio, isDedup, currentTime }) {
             </div>
           ))}
         </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── import modal ─────────────────────────────────────────────────────────────
-
-function ImportModal({ phase, progs, onClose }) {
-  return (
-    <div className="overlay" onClick={phase==='done' ? onClose : undefined}>
-      <div className="import-box" onClick={e => e.stopPropagation()}>
-        <div className="import-header">
-          <div className="import-title">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-            导入素材
-          </div>
-          {phase !== 'scanning' && (
-            <button className="import-close" onClick={onClose}>✕</button>
-          )}
-        </div>
-
-        {phase === 'scanning' && (
-          <div className="import-scanning">
-            <div className="import-spinner" />
-            <p>正在扫描文件系统…</p>
-            <span>检索可导入的视频素材</span>
-          </div>
-        )}
-
-        {(phase === 'importing' || phase === 'done') && (
-          <div className="import-files">
-            {IMPORT_MOCK.map((f, i) => (
-              <div key={i} className="import-file-item">
-                <div className="import-file-thumb">
-                  <div className="import-file-icon">
-                    {progs[i] >= 100
-                      ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                      : <div className="import-file-spin" />
-                    }
-                  </div>
-                </div>
-                <div className="import-file-info">
-                  <div className="import-file-name">{f.name}</div>
-                  <div className="import-file-meta">
-                    <span>{f.res}</span><span>{f.fps}</span><span>{f.dur}</span><span>{f.size}</span>
-                  </div>
-                  <div className="import-prog-wrap">
-                    <div className="import-prog-bar" style={{ width:`${Math.min(progs[i],100)}%`, background: progs[i]>=100 ? '#10b981' : '#5b6af0' }} />
-                  </div>
-                  <div className="import-prog-label">
-                    {progs[i] >= 100 ? '✓ 导入完成' : `解析中 ${Math.round(progs[i])}%`}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {phase === 'done' && (
-          <div className="import-done">
-            <div className="import-done-badge">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-            </div>
-            <p>已成功导入 <strong>2 个素材</strong>，素材库共 5 段视频</p>
-            <button className="import-done-btn" onClick={onClose}>添加到素材区</button>
-          </div>
-        )}
       </div>
     </div>
   )
@@ -355,13 +292,11 @@ export default function App() {
   const [tlFlash, setTlFlash]     = useState(false)
 
   const [isPlaying, setPlaying]   = useState(false)
-  const [currentTime, setCurrent] = useState(4.2)
+  const [currentTime, setCurrent] = useState(0)
 
-  // import flow
-  const [showImport, setShowImport]   = useState(false)
-  const [importPhase, setImportPhase] = useState('idle')
-  const [importProgs, setImportProgs] = useState([0, 0])
-  const [totalVideos, setTotalVideos] = useState(3)
+  // uploaded local videos
+  const [uploadedVideos, setUploadedVideos] = useState([])
+  const [selectedVideoId, setSelectedVideoId] = useState(null)
 
   // export flow
   const [showExport, setShowExport]   = useState(false)
@@ -382,10 +317,22 @@ export default function App() {
   })
   const [toast, setToast] = useState('')
 
-  const timerRef = useRef(null)
+  const timerRef   = useRef(null)
+  const fileInputRef = useRef(null)
+  const videoRef   = useRef(null)
+
   const tracks = isGenerated ? TRACKS_GEN : TRACKS_INIT
 
-  // computed: current scene and subtitle
+  // selected video object
+  const selectedVideo = useMemo(
+    () => uploadedVideos.find(v => v.id === selectedVideoId) || uploadedVideos[0] || null,
+    [uploadedVideos, selectedVideoId]
+  )
+
+  // duration used by progress bar / controls
+  const effectiveDuration = isGenerated ? TOTAL : (selectedVideo?.dur || 0)
+
+  // current scene and subtitle (only relevant in generated mode)
   const currentScene = useMemo(() => {
     if (!isGenerated) return null
     return SCENES.find(s => currentTime >= s.start && currentTime < s.end) || null
@@ -399,16 +346,9 @@ export default function App() {
   const dedupSelected = Object.values(dedup).filter(Boolean).length
   const enabledDedupKeys = Object.entries(dedup).filter(([,v])=>v).map(([k])=>k)
 
-  // mock video list for left panel
-  const allVideos = useMemo(() => {
-    const extra = totalVideos > 3
-      ? IMPORT_MOCK.slice(0, totalVideos - 3)
-      : []
-    return [...MOCK_VIDEOS_BASE, ...extra.map((f,i) => ({...f, id: 4+i}))]
-  }, [totalVideos])
-
-  // playback timer
+  // ── interval-based playback for generated abstract preview ──
   useEffect(() => {
+    if (!isGenerated) return
     if (isPlaying) {
       timerRef.current = setInterval(() => {
         setCurrent(t => {
@@ -420,41 +360,63 @@ export default function App() {
       clearInterval(timerRef.current)
     }
     return () => clearInterval(timerRef.current)
-  }, [isPlaying])
+  }, [isPlaying, isGenerated])
+
+  // ── real video element playback ──
+  useEffect(() => {
+    if (isGenerated) { clearInterval(timerRef.current); return }
+    const video = videoRef.current
+    if (!video) return
+    if (isPlaying) {
+      video.play().catch(() => setPlaying(false))
+    } else {
+      video.pause()
+    }
+    return () => { video.pause() }
+  }, [isPlaying, isGenerated])
+
+  // reset playback when selected video changes
+  useEffect(() => {
+    setPlaying(false)
+    setCurrent(0)
+  }, [selectedVideoId])
 
   function showToast(msg) {
     setToast(msg)
     setTimeout(() => setToast(''), 3000)
   }
 
-  // ── import flow ──
+  // ── file import ──
   function handleImportClick() {
-    setShowImport(true)
-    setImportPhase('scanning')
-    setImportProgs([0, 0])
-    setTimeout(() => {
-      setImportPhase('importing')
-      let p = [0, 0]
-      const iv = setInterval(() => {
-        p = p.map(v => Math.min(v + Math.random() * 22 + 8, 100))
-        setImportProgs([...p])
-        if (p.every(v => v >= 100)) {
-          clearInterval(iv)
-          setImportPhase('done')
-        }
-      }, 140)
-    }, 1000)
+    fileInputRef.current?.click()
   }
 
-  function handleImportClose() {
-    if (importPhase === 'done') setTotalVideos(v => Math.min(v + 2, 5))
-    setShowImport(false)
-    setTimeout(() => setImportPhase('idle'), 300)
+  async function handleFileSelect(e) {
+    const files = Array.from(e.target.files)
+    if (!files.length) return
+    const idBase = Date.now()
+    const newVideos = await Promise.all(files.map(async (file, i) => {
+      const url = URL.createObjectURL(file)
+      const meta = await readVideoMeta(url)
+      return {
+        id: idBase + i,
+        name: file.name,
+        sizeStr: formatSize(file.size),
+        dur: meta.dur || 0,
+        durStr: meta.dur > 0 ? fmt(meta.dur) : '—',
+        res: meta.width > 0 ? `${meta.width}×${meta.height}` : '—',
+        url,
+      }
+    }))
+    setUploadedVideos(prev => [...prev, ...newVideos])
+    setSelectedVideoId(prev => prev ?? (newVideos[0]?.id ?? null))
+    e.target.value = ''
   }
 
   // ── generate flow ──
   function handleGenerate() {
     if (isGenerating) return
+    setPlaying(false)
     setGen(true); setDone(false); setGenProg(0); setGenStep(GEN_STEPS[0])
     let p = 0, si = 0
     const iv = setInterval(() => {
@@ -466,6 +428,7 @@ export default function App() {
         setGenProg(100)
         setTimeout(() => {
           setGen(false); setDone(true)
+          setCurrent(0)
           setTlFlash(true)
           setTimeout(() => setTlFlash(false), 800)
         }, 400)
@@ -503,6 +466,17 @@ export default function App() {
     setTimeout(() => { setExportPhase('confirm'); setExportProg(0) }, 300)
   }
 
+  function handleSeek(newTime) {
+    const clamped = Math.max(0, Math.min(newTime, effectiveDuration))
+    setCurrent(clamped)
+    if (!isGenerated && videoRef.current) videoRef.current.currentTime = clamped
+  }
+
+  function handleSelectVideo(v) {
+    setSelectedVideoId(v.id)
+    // reset happens via the selectedVideoId effect
+  }
+
   function toggleDedup(k) { setDedup(d => ({ ...d, [k]: !d[k] })) }
 
   return (
@@ -510,13 +484,15 @@ export default function App() {
 
       {toast && <div className="toast">{toast}</div>}
 
-      {showImport && (
-        <ImportModal
-          phase={importPhase}
-          progs={importProgs}
-          onClose={handleImportClose}
-        />
-      )}
+      {/* hidden file input — no server upload, local only */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/*"
+        multiple
+        style={{ display: 'none' }}
+        onChange={handleFileSelect}
+      />
 
       {showExport && (
         <ExportModal
@@ -582,7 +558,9 @@ export default function App() {
             </div>
             <div className="hstat">
               <span className="hstat-l">素材</span>
-              <span className={`hstat-v ${totalVideos>3?'hstat-changed':''}`}>{totalVideos} 段视频</span>
+              <span className={`hstat-v ${uploadedVideos.length > 0 ? 'hstat-changed' : ''}`}>
+                {uploadedVideos.length > 0 ? `${uploadedVideos.length} 段视频` : '无素材'}
+              </span>
             </div>
             <div className="hstat">
               <span className="hstat-l">轨道</span>
@@ -620,39 +598,54 @@ export default function App() {
               <div className="card-head-l">
                 <div className="card-dot dot-video" />
                 <span>视频素材</span>
-                <span className="card-count">{totalVideos}</span>
+                {uploadedVideos.length > 0 && <span className="card-count">{uploadedVideos.length}</span>}
               </div>
               <button className="btn-add" onClick={handleImportClick}>+ 导入</button>
             </div>
-            <div className="mat-list">
-              {allVideos.map((v, i) => (
-                <div key={v.id} className={`mat-item ${i>=3?'mat-item-new':''}`}>
-                  <div className="mat-thumb">
-                    <div className="mat-thumb-bars">
-                      {[0.3,0.7,0.5,0.9,0.4,0.8].map((h,j)=>(
-                        <div key={j} className="mat-thumb-bar" style={{height:`${h*100}%`}} />
-                      ))}
+
+            {uploadedVideos.length === 0 ? (
+              <div className="mat-empty" onClick={handleImportClick}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" opacity="0.25">
+                  <rect x="2" y="2" width="20" height="20" rx="2.18"/>
+                  <line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/>
+                  <line x1="2" y1="12" x2="22" y2="12"/>
+                </svg>
+                <p>点击「+ 导入」选择本地视频文件</p>
+                <span>支持 MP4、MOV、AVI 等格式</span>
+              </div>
+            ) : (
+              <div className="mat-list">
+                {uploadedVideos.map(v => (
+                  <div
+                    key={v.id}
+                    className={`mat-item ${selectedVideo?.id === v.id ? 'mat-item-active' : ''}`}
+                    onClick={() => handleSelectVideo(v)}
+                  >
+                    <div className="mat-thumb">
+                      {/* video thumbnail — first frame from local file */}
+                      <video
+                        src={v.url}
+                        className="mat-thumb-video"
+                        preload="metadata"
+                        muted
+                        playsInline
+                      />
+                      <span className="mat-dur-badge">{v.durStr}</span>
                     </div>
-                    <span className="mat-play">▶</span>
-                    <span className="mat-dur-badge">{v.dur}</span>
+                    <div className="mat-info">
+                      <div className="mat-name">{v.name}</div>
+                      <div className="mat-meta">
+                        {v.res !== '—' && <span className="mat-tag">{v.res}</span>}
+                        <span className="mat-tag">{v.sizeStr}</span>
+                      </div>
+                      <div className="mat-status">
+                        <span className="badge-ok">● 就绪</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="mat-info">
-                    <div className="mat-name">{v.name}</div>
-                    <div className="mat-meta">
-                      <span className="mat-tag">{v.res}</span>
-                      <span className="mat-tag">{v.fps}</span>
-                      <span className="mat-tag">{v.size}</span>
-                    </div>
-                    <div className="mat-status">
-                      {i>=3
-                        ? <span className="badge-new">● 新导入</span>
-                        : <span className="badge-ok">● 就绪</span>
-                      }
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="card card-image">
@@ -746,10 +739,29 @@ export default function App() {
                     {currentScene.isEnd ? '片尾' : `SCENE ${currentScene.num}`}
                   </span>
                 )}
+                {selectedVideo && !isGenerated && (
+                  <span className="preview-scene-badge">{selectedVideo.name.replace(/\.[^.]+$/, '')}</span>
+                )}
                 <span className="preview-ratio-tag">{ratio}</span>
               </div>
 
-              {/* scene info */}
+              {/* real local video preview */}
+              {selectedVideo && !isGenerated && (
+                <video
+                  ref={videoRef}
+                  key={selectedVideo.id}
+                  src={selectedVideo.url}
+                  className="preview-video"
+                  preload="auto"
+                  playsInline
+                  onTimeUpdate={() => {
+                    if (videoRef.current) setCurrent(videoRef.current.currentTime)
+                  }}
+                  onEnded={() => { setPlaying(false); setCurrent(0) }}
+                />
+              )}
+
+              {/* scene info (generated mode) */}
               {isGenerated && currentScene && !currentScene.isEnd && (
                 <div className="preview-scene-info">
                   <span className="scene-label">SCENE {currentScene.num} / 4</span>
@@ -757,10 +769,16 @@ export default function App() {
                 </div>
               )}
 
-              {/* background — changes per scene */}
+              {/* background — changes per scene in generated mode, black under video */}
               <div
                 className="preview-bg"
-                style={currentScene ? { background: currentScene.bg, transition:'background 0.6s ease' } : {}}
+                style={
+                  isGenerated && currentScene
+                    ? { background: currentScene.bg, transition:'background 0.6s ease' }
+                    : selectedVideo && !isGenerated
+                    ? { background: '#000', animation: 'none' }
+                    : {}
+                }
               />
               <div className="preview-scanlines" />
 
@@ -777,7 +795,7 @@ export default function App() {
 
               {/* idle / content state */}
               <div className="preview-center-state">
-                {!isGenerated ? (
+                {!isGenerated && !selectedVideo && (
                   <div className="preview-idle">
                     <div className="preview-idle-icon">
                       <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="1.4">
@@ -786,12 +804,11 @@ export default function App() {
                         <line x1="2" y1="12" x2="22" y2="12"/>
                       </svg>
                     </div>
-                    <p>上传素材后点击<br/>「生成混剪方案」</p>
+                    <p>点击「上传素材」选择本地视频<br/>上传后点击「生成混剪方案」</p>
                   </div>
-                ) : (
-                  !currentScene?.isEnd && (
-                    <div className="preview-film-grain" />
-                  )
+                )}
+                {isGenerated && !currentScene?.isEnd && (
+                  <div className="preview-film-grain" />
                 )}
               </div>
 
@@ -827,32 +844,38 @@ export default function App() {
           {/* playback controls */}
           <div className="controls-bar">
             <div className="ctrl-left">
-              <button className="ctrl-btn" onClick={() => setCurrent(0)}>⏮</button>
-              <button className="play-btn" onClick={() => setPlaying(p => !p)}>
+              <button className="ctrl-btn" onClick={() => handleSeek(0)}>⏮</button>
+              <button
+                className="play-btn"
+                onClick={() => setPlaying(p => !p)}
+                disabled={!isGenerated && !selectedVideo}
+              >
                 {isPlaying
                   ? <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                   : <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 }
               </button>
-              <button className="ctrl-btn" onClick={() => setCurrent(TOTAL)}>⏭</button>
+              <button className="ctrl-btn" onClick={() => handleSeek(effectiveDuration)}>⏭</button>
             </div>
             <div className="ctrl-time">
               <span className="time-cur">{fmtMs(currentTime)}</span>
               <div className="prog-wrap">
                 <div className="prog-track" onClick={e => {
                   const r = e.currentTarget.getBoundingClientRect()
-                  setCurrent(((e.clientX-r.left)/r.width)*TOTAL)
+                  handleSeek(((e.clientX-r.left)/r.width) * effectiveDuration)
                 }}>
-                  <div className="prog-fill" style={{width:`${(currentTime/TOTAL)*100}%`}} />
-                  {/* scene color markers */}
+                  <div className="prog-fill" style={{width: effectiveDuration > 0 ? `${(currentTime/effectiveDuration)*100}%` : '0%'}} />
+                  {/* scene color markers (generated mode) */}
                   {isGenerated && SCENES.map(s => (
                     <div key={s.num} className="prog-scene-marker"
                       style={{left:`${(s.start/TOTAL)*100}%`, background:s.color}} />
                   ))}
-                  <div className="prog-thumb" style={{left:`${(currentTime/TOTAL)*100}%`}} />
+                  <div className="prog-thumb" style={{left: effectiveDuration > 0 ? `${(currentTime/effectiveDuration)*100}%` : '0%'}} />
                 </div>
               </div>
-              <span className="time-tot">{fmt(TOTAL)}</span>
+              <span className="time-tot">
+                {effectiveDuration > 0 ? fmt(effectiveDuration) : '--:--'}
+              </span>
             </div>
             <div className="ctrl-right">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--txt-3)" strokeWidth="2">
@@ -903,7 +926,7 @@ export default function App() {
                 <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>生成混剪方案</>
               )}
             </button>
-            <button className="btn-ghost" onClick={() => { if(!isGenerated){showToast('请先生成混剪方案')} else {setPlaying(true)} }}>
+            <button className="btn-ghost" onClick={() => { if(!isGenerated && !selectedVideo){showToast('请先上传素材或生成混剪方案')} else {setPlaying(true)} }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               预览效果
             </button>
