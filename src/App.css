@@ -6353,22 +6353,108 @@ input[type=range] {
 }
 
 /* ── candidate detail panel ── */
-.r3-cd-preview {
-  padding: 8px 14px 4px;
+
+/* Replacement relationship header */
+.r3-cd-rel {
+  padding: 7px 14px 8px;
+  background: rgba(99,102,241,.07);
   border-bottom: 1px solid rgba(255,255,255,.06);
+  font-size: 11px;
+}
+.r3-cd-rel-pos {
+  color: #64748b;
+  margin-bottom: 4px;
+}
+.r3-cd-comp-tag {
+  color: #94a3b8;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.r3-cd-rel-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.r3-cd-rel-from { font-weight: 600; }
+.r3-cd-rel-arrow { color: #475569; }
+.r3-cd-rel-to { font-weight: 600; }
+
+/* Segment-limited mini player */
+.r3-cd-player {
+  padding: 8px 14px 6px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.r3-cd-video-wrap {
+  position: relative;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+  /* height fixed so it shows a useful preview without being too tall */
+  height: 150px;
+  cursor: pointer;
 }
 .r3-cd-video {
   width: 100%;
-  border-radius: 5px;
-  background: #000;
-  display: block;
-  max-height: 130px;
+  height: 100%;
   object-fit: contain;
+  display: block;
 }
-.r3-cd-preview-hint {
+.r3-cd-play-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0,0,0,.60);
+  border: 2px solid rgba(255,255,255,.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: background .15s;
+}
+.r3-cd-video-wrap:hover .r3-cd-play-btn { background: rgba(0,0,0,.82); }
+.r3-cd-play-btn.playing { background: rgba(99,102,241,.55); border-color: rgba(99,102,241,.85); }
+
+/* Segment progress bar */
+.r3-cd-seg-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+.r3-cd-seg-prog {
+  flex: 1;
+  height: 4px;
+  background: rgba(255,255,255,.12);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.r3-cd-seg-fill {
+  height: 100%;
+  background: #6366f1;
+  border-radius: 2px;
+  transition: width .1s linear;
+}
+.r3-cd-seg-t {
   font-size: 10px;
   color: #64748b;
-  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.r3-cd-seg-range {
+  font-size: 10px;
+  color: #475569;
+  text-align: center;
+  margin-top: 3px;
+}
+.r3-cd-no-vid {
+  padding: 14px;
+  font-size: 11px;
+  color: #475569;
   text-align: center;
 }
 .r3-cd-used {
@@ -6380,6 +6466,7 @@ input[type=range] {
   display: flex;
   gap: 8px;
   padding: 10px 14px 14px;
+  flex-shrink: 0;
 }
 .r3-cd-confirm {
   flex: 1;
