@@ -6320,3 +6320,116 @@ input[type=range] {
   overflow-y: auto;
   min-width: 0;
 }
+
+/* ── big play overlay button in main video area ── */
+.s2-vid-big-play {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(0,0,0,.52);
+  border: 2px solid rgba(255,255,255,.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 12;
+  transition: background .15s, border-color .15s, opacity .15s;
+  opacity: 0.85;
+}
+.s2-vid-big-play:hover {
+  opacity: 1;
+  background: rgba(0,0,0,.72);
+  border-color: rgba(255,255,255,.55);
+}
+.s2-vid-big-play.playing {
+  background: rgba(99,102,241,.45);
+  border-color: rgba(99,102,241,.75);
+}
+
+/* ── candidate detail panel ── */
+.r3-cd-preview {
+  padding: 8px 14px 4px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.r3-cd-video {
+  width: 100%;
+  border-radius: 5px;
+  background: #000;
+  display: block;
+  max-height: 130px;
+  object-fit: contain;
+}
+.r3-cd-preview-hint {
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 4px;
+  text-align: center;
+}
+.r3-cd-used {
+  font-size: 10px;
+  color: #f59e0b;
+  margin-top: 4px;
+}
+.r3-cd-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px 14px;
+}
+.r3-cd-confirm {
+  flex: 1;
+  padding: 7px 0;
+  border-radius: 5px;
+  border: none;
+  background: #6366f1;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.r3-cd-confirm:hover { background: #4f46e5; }
+.r3-cd-cancel {
+  padding: 7px 14px;
+  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05);
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: pointer;
+}
+.r3-cd-cancel:hover { background: rgba(255,255,255,.1); }
+
+/* empty recs hints */
+.r3-no-recs { padding: 4px 0; }
+.r3-no-recs-hint {
+  font-size: 10px;
+  color: #475569;
+  margin-top: 3px;
+}
+.r3-no-recs-sub {
+  font-size: 10px;
+  color: #64748b;
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+
+/* type group count */
+.r3-type-cnt {
+  font-size: 10px;
+  color: #64748b;
+  margin-left: 4px;
+}
+
+/* small candidate sub-text */
+.r3-cand-sm-sub {
+  font-size: 9px;
+  color: #475569;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

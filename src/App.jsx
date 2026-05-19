@@ -473,6 +473,7 @@ export default function App() {
   const [editingSeg, setEditingSeg]     = useState(null)   // {compId, segIdx}
   const [lockedSegs, setLockedSegs]     = useState({})     // {compId: {segIdx: true}}
   const [showAllCands, setShowAllCands] = useState({})     // {'compId_segIdx': true}
+  const [pendingCand, setPendingCand]   = useState(null)   // {cand, compId, segIdx}
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -504,6 +505,7 @@ export default function App() {
   const videoAnalysisRef      = useRef({})
   const scrubberRef           = useRef(null)
   const scrubDragRef          = useRef(false)
+  const candPreviewRef        = useRef(null)
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -602,6 +604,14 @@ export default function App() {
   useEffect(()=>{
     setEditorTime(0); setEditorPlaying(false); setSelectedCutIdx(null); setSelectedSegIdx(null); setSelectedSubIdx(null)
   }, [currentVideoId])
+
+  // seek candidate preview video when selection changes
+  useEffect(()=>{
+    if (!candPreviewRef.current || !pendingCand) return
+    const vid = candPreviewRef.current
+    vid.pause()
+    vid.currentTime = pendingCand.cand.startSec || 0
+  }, [pendingCand])
 
   // scrubber drag
   useEffect(()=>{
@@ -1107,6 +1117,49 @@ export default function App() {
                     ].slice(0,5):[]
                     const allCands=editSeg?allSelectedSegs.filter(c=>c.id!==editSeg.id&&!compSegIds.has(c.id)):[]
                     const candsByType=allCands.reduce((g,c)=>{(g[c.type]=g[c.type]||[]).push(c);return g},{})
+                    // fallback recs: adjacent segs from same video
+                    const adjFallback=editSeg&&recs.length===0?allSelectedSegs.filter(c=>c.videoIndex===editSeg.videoIndex&&c.id!==editSeg.id&&!compSegIds.has(c.id)).slice(0,3):[]
+
+                    // ── candidate detail panel ──
+                    if (pendingCand) {
+                      const {cand:pc,compId:pCompId,segIdx:pSegIdx}=pendingCand
+                      const pctc=SEG_TYPE_COLORS[pc.type]||'#6366f1'
+                      const srcVid=uploadedVideos[pc.videoIndex]
+                      const usedInComps=compositions.filter(c=>c.id!==pCompId&&c.segments.some(s=>s.id===pc.id))
+                      return (
+                        <>
+                          <div className="r3-edit-header">
+                            <button className="r3-back-btn" onClick={()=>setPendingCand(null)}>← 返回</button>
+                            <span className="r3-edit-title">候选详情</span>
+                          </div>
+                          {srcVid&&(
+                            <div className="r3-cd-preview">
+                              <video ref={candPreviewRef} src={srcVid.url} className="r3-cd-video" controls playsInline preload="metadata"/>
+                              <div className="r3-cd-preview-hint">▶ 片段 {pc.startStr} – {pc.endStr}（已定位）</div>
+                            </div>
+                          )}
+                          <div className="r3-current" style={{paddingTop:8}}>
+                            <div className="r3-cur-card">
+                              <div className="r3-cur-top">
+                                <span className="r3-cur-label" style={{color:pctc}}>{pc.label}</span>
+                                <span className="r3-cur-type" style={{color:pctc,borderColor:pctc+'44',background:pctc+'18'}}>{pc.type}</span>
+                                <span className="r3-cur-src">V{pc.videoIndex+1}</span>
+                              </div>
+                              <div className="r3-cur-time">{pc.startStr} – {pc.endStr}</div>
+                              {pc.subtitle&&<div className="r3-cur-sub">{pc.subtitle}</div>}
+                              {usedInComps.length>0&&<div className="r3-cd-used">已用于：{usedInComps.map(c=>c.name).join('、')}</div>}
+                            </div>
+                          </div>
+                          <div className="r3-cd-actions">
+                            <button className="r3-cd-confirm" onClick={()=>{ replaceCompSeg(pCompId,pSegIdx,pc); showToast(`已替换为 ${pc.label}`); setPendingCand(null) }}>
+                              ✓ 确认替换
+                            </button>
+                            <button className="r3-cd-cancel" onClick={()=>setPendingCand(null)}>取消</button>
+                          </div>
+                        </>
+                      )
+                    }
+
                     return (
                       <>
                         <div className="r3-edit-header">
@@ -1140,7 +1193,7 @@ export default function App() {
                             const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
                             return (
                               <div key={cand.id} className="r3-cand-item"
-                                onClick={()=>{ replaceCompSeg(editingSeg.compId,editingSeg.segIdx,cand); showToast(`已替换为 ${cand.label}`) }}>
+                                onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
                                 <div className="r3-cand-top">
                                   <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
                                   <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
@@ -1150,7 +1203,30 @@ export default function App() {
                                 {cand.subtitle&&<div className="r3-cand-sub">{cand.subtitle.slice(0,34)}{cand.subtitle.length>34?'…':''}</div>}
                               </div>
                             )
-                          }):<div className="r3-no-recs">无同类型推荐片段</div>}
+                          }):(
+                            <div className="r3-no-recs">
+                              <div>暂无同类型推荐</div>
+                              <div className="r3-no-recs-hint">可从下方展开全部候选中选择</div>
+                              {adjFallback.length>0&&(
+                                <>
+                                  <div className="r3-no-recs-sub">同视频相邻片段：</div>
+                                  {adjFallback.map(cand=>{
+                                    const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
+                                    return (
+                                      <div key={cand.id} className="r3-cand-item"
+                                        onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
+                                        <div className="r3-cand-top">
+                                          <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
+                                          <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
+                                        </div>
+                                        <div className="r3-cand-time">{cand.startStr} – {cand.endStr}</div>
+                                      </div>
+                                    )
+                                  })}
+                                </>
+                              )}
+                            </div>
+                          )}
                         </div>
                         <div className="r3-all-section">
                           <button className="r3-all-toggle" onClick={()=>setShowAllCands(p=>({...p,[allCandsKey]:!p[allCandsKey]}))}>
@@ -1163,17 +1239,18 @@ export default function App() {
                                 const ttc=SEG_TYPE_COLORS[type]||'#6366f1'
                                 return (
                                   <div key={type} className="r3-type-group">
-                                    <div className="r3-type-group-head" style={{color:ttc}}>{type}<span>({cands.length})</span></div>
+                                    <div className="r3-type-group-head" style={{color:ttc}}>{type}<span className="r3-type-cnt">({cands.length})</span></div>
                                     {cands.map(cand=>{
                                       const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
                                       return (
                                         <div key={cand.id} className="r3-cand-item r3-cand-sm"
-                                          onClick={()=>{ replaceCompSeg(editingSeg.compId,editingSeg.segIdx,cand); showToast(`已替换为 ${cand.label}`) }}>
+                                          onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
                                           <div className="r3-cand-top">
                                             <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
                                             <span className="r3-cand-src">V{cand.videoIndex+1}</span>
                                             <span className="r3-cand-time">{cand.startStr}–{cand.endStr}</span>
                                           </div>
+                                          {cand.subtitle&&<div className="r3-cand-sub r3-cand-sm-sub">{cand.subtitle.slice(0,28)}{cand.subtitle.length>28?'…':''}</div>}
                                         </div>
                                       )
                                     })}
@@ -1422,6 +1499,18 @@ export default function App() {
                 )}
                 {currentSubIdx>=0&&editorSubtitles[currentSubIdx]&&(
                   <div className="s2-vid-sub-overlay">{editorSubtitles[currentSubIdx].text}</div>
+                )}
+                {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
+                  <button
+                    className={`s2-vid-big-play${editorPlaying?' playing':''}`}
+                    onClick={()=>{ setEditorPlaying(p=>{ if(p) setPlayingSegEnd(null); return !p }) }}
+                    title={editorPlaying?'暂停':'播放'}
+                  >
+                    {editorPlaying
+                      ? <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                      : <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                    }
+                  </button>
                 )}
               </div>
 
