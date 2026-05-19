@@ -1,3 +1,10 @@
 node_modules/
 dist/
 .DS_Store
+
+# 本地视频分析输出（不提交到仓库）
+local-output/audio/*.wav
+local-output/thumbs/*.jpg
+local-output/thumbs/*.jpeg
+local-output/thumbs/*.png
+local-output/analysis/*.json
