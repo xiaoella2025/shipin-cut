@@ -8,3 +8,5 @@ local-output/thumbs/*.jpg
 local-output/thumbs/*.jpeg
 local-output/thumbs/*.png
 local-output/analysis/*.json
+local-output/subtitles/*.srt
+local-output/subtitles/*.json

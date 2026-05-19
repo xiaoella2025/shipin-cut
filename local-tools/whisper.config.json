@@ -1,0 +1,6 @@
+{
+  "whisperCliPath": "whisper-cli",
+  "modelPath": "models/ggml-base.bin",
+  "language": "zh",
+  "threads": 4
+}

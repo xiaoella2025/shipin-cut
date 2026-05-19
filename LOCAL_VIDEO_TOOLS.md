@@ -1,6 +1,6 @@
-# 本地视频工具 (v0.2 FFmpeg 能力验证)
+# 本地视频工具 (v0.3 whisper.cpp 字幕识别)
 
-这组脚本在本机开发环境中运行，用于通过 Node.js 调用本地 FFmpeg 完成视频分析、抽音频、截缩略图等操作。
+这组脚本在本机开发环境中运行，用于通过 Node.js 调用本地 FFmpeg 和 whisper.cpp 完成视频分析、抽音频、截缩略图、字幕识别等操作。
 
 **这些脚本与前端页面完全独立，不影响 GitHub Pages 部署。**
 
@@ -12,8 +12,9 @@
 
 | 工具 | 说明 | 下载 |
 |------|------|------|
-| Node.js | 运行脚本 | https://nodejs.org |
-| FFmpeg  | 视频处理 | https://ffmpeg.org/download.html |
+| Node.js      | 运行脚本           | https://nodejs.org |
+| FFmpeg       | 视频处理           | https://ffmpeg.org/download.html |
+| whisper.cpp  | 本地语音识别（v0.3）| https://github.com/ggerganov/whisper.cpp |
 
 ### FFmpeg 安装说明（Windows）
 
@@ -174,6 +175,127 @@ local-output/
 
 ---
 
+---
+
+## whisper.cpp 安装说明
+
+### 编译 whisper.cpp（推荐）
+
+```bash
+git clone https://github.com/ggerganov/whisper.cpp
+cd whisper.cpp
+make
+# 下载中文识别模型（base，约 142 MB）
+bash models/download-ggml-model.sh base
+```
+
+编译后会生成 `whisper-cli`（Windows 上为 `whisper-cli.exe`）。
+
+### 配置 whisper.config.json
+
+编辑 `local-tools/whisper.config.json`：
+
+```json
+{
+  "whisperCliPath": "/path/to/whisper.cpp/whisper-cli",
+  "modelPath": "/path/to/whisper.cpp/models/ggml-base.bin",
+  "language": "zh",
+  "threads": 4
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `whisperCliPath` | whisper-cli 可执行文件路径（可以是绝对路径或 PATH 中的命令名） |
+| `modelPath`      | ggml 模型文件路径（绝对路径或相对于项目根目录） |
+| `language`       | 识别语言，`zh` 为中文，`auto` 为自动检测 |
+| `threads`        | CPU 线程数，建议 4–8 |
+
+---
+
+## 检测 whisper.cpp 环境
+
+```
+npm run check:whisper
+```
+
+验证 `whisperCliPath` 可执行、`modelPath` 文件存在。
+
+**成功输出示例：**
+```
+── 检测 whisper.cpp 环境 ──
+
+配置文件: local-tools/whisper.config.json
+  whisperCliPath : /usr/local/bin/whisper-cli
+  modelPath      : models/ggml-base.bin
+  ...
+
+检测 whisper-cli 可执行文件... ✓ 可用
+检测模型文件... ✓ 存在 (141.1 MB): /home/user/models/ggml-base.bin
+
+✓ 检测通过，可以运行字幕识别脚本。
+```
+
+---
+
+## 识别音频字幕
+
+```
+npm run transcribe:audio -- "local-output/audio/test.wav"
+```
+
+对指定 WAV 文件调用 whisper.cpp，输出 SRT 和 JSON。
+
+**要求：** 音频须为 16kHz 单声道 WAV（用 `npm run extract:audio` 生成）。
+
+**输出文件：**
+```
+local-output/subtitles/test.srt             ← SRT 字幕文件
+local-output/subtitles/test.subtitles.json  ← 统一格式 JSON
+```
+
+**subtitles.json 格式：**
+```json
+{
+  "sourceAudio": "local-output/audio/test.wav",
+  "language": "zh",
+  "segmentCount": 12,
+  "segments": [
+    { "id": 1, "start": 0.0,  "end": 3.2,  "text": "大家好，今天我们来聊一聊" },
+    { "id": 2, "start": 3.5,  "end": 6.1,  "text": "这个话题非常有趣" }
+  ],
+  "createdAt": "2026-05-19T00:00:00.000Z"
+}
+```
+
+---
+
+## 一键视频字幕识别（推荐）
+
+```
+npm run local:transcribe -- "D:/videos/test.mp4"
+```
+
+依次执行：
+
+1. 检测 FFmpeg 环境
+2. 检测 whisper.cpp 环境（读取 whisper.config.json）
+3. 用 FFmpeg 抽取音频（WAV 16kHz 单声道）
+4. 调用 whisper.cpp 进行语音识别
+5. 生成 `subtitles.srt` 和 `subtitles.json`
+
+**输出文件：**
+```
+local-output/
+├── audio/
+│   └── test.wav
+└── subtitles/
+    ├── test.srt                ← SRT 字幕
+    └── test.subtitles.json     ← 统一 JSON（含 sourceVideo / sourceAudio / segments）
+```
+
+---
+
 ## 当前能力范围
 
 | 功能 | 状态 |
@@ -183,7 +305,7 @@ local-output/
 | 音频抽取（16kHz WAV） | ✓ 已完成 |
 | 缩略图截取（JPG） | ✓ 已完成 |
 | analysis.json 生成 | ✓ 已完成 |
-| Whisper 字幕识别 | ✗ 尚未接入（v0.3 计划） |
+| whisper.cpp 字幕识别 | ✓ 已完成（v0.3） |
 | 真实视频混剪导出 | ✗ 尚未实现（待 FFmpeg 合成阶段） |
 | 真实 MP4 合成 | ✗ 尚未实现 |
 | 前端与本地工具联动 | ✗ 尚未实现（需要本地服务层） |
@@ -195,11 +317,15 @@ local-output/
 ```
 local-tools/
 ├── package.json          ← 声明 CommonJS 模式（仅供本地脚本使用）
+├── whisper.config.json   ← whisper.cpp 配置（路径、模型、语言、线程数）
 ├── check-ffmpeg.js       ← FFmpeg 环境检测
 ├── analyze-video.js      ← 视频信息分析
 ├── extract-audio.js      ← 抽取音频
 ├── extract-thumbs.js     ← 截取缩略图
-└── local-analyze.js      ← 一键综合分析
+├── local-analyze.js      ← 一键综合分析（v0.2）
+├── check-whisper.js      ← whisper.cpp 环境检测（v0.3）
+├── transcribe-audio.js   ← 音频字幕识别（v0.3）
+└── local-transcribe.js   ← 一键视频字幕识别（v0.3）
 ```
 
 这些脚本仅依赖 Node.js 内置模块（`child_process`、`fs`、`path`），无需安装额外 npm 包。
