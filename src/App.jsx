@@ -23,16 +23,8 @@ const WAVE_MINI = Array.from({ length: 50 }, (_, i) =>
 )
 const SUB_TICKS = Array.from({ length: 29 }, (_, i) => i + 1).filter(t => t % 5 !== 0)
 
-const TRACKS_INIT = {
-  video:    [],
-  image:    [ { id:'i1', name:'片尾图', start:25, dur:5, color:'#0c4a6e' } ],
-  audio:    [ { id:'a1', name:'BGM · 背景音乐', start:0, dur:30, color:'#064e3b' } ],
-  subtitle: [],
-  dedup:    [],
-}
-
 const TIME_MARKS = [0, 5, 10, 15, 20, 25, 30]
-const GEN_STEPS  = ['分析素材中…', '计算混剪节点…', '生成轨道布局…', '应用去重处理…', '方案生成完成']
+const GEN_STEPS  = ['分析素材中…', '计算混剪节点…', '生成成品方案…', '应用去重处理…', '方案生成完成']
 
 const DEDUP_META = {
   crop:       { label:'裁剪边缘',   ico:'◰', desc:'画面边缘裁剪 4%，规避水印' },
@@ -100,10 +92,11 @@ const TRACK_COLORS = ['#3730a3','#5b21b6','#4c1d95','#1e3a8a','#065f46','#7f1d1d
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function fmt(s) {
+  if (!s && s !== 0) return '--:--'
   return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`
 }
 function fmtMs(s) {
-  return `${fmt(s)}.${String(Math.floor((s%1)*10))}`
+  return `${fmt(s)}.${String(Math.floor(((s||0)%1)*10))}`
 }
 function pct(v) { return `${(v/TOTAL)*100}%` }
 function pctOf(v, total) { return `${total > 0 ? (v/total)*100 : 0}%` }
@@ -139,6 +132,38 @@ function generateSegments(video, vidIndex) {
   }))
 }
 
+// Build composition plans from selected segments (with labels like "1-1")
+function buildCompositions(segs) {
+  if (!segs.length) return []
+  const byVid = {}
+  segs.forEach(s => { (byVid[s.videoIndex] = byVid[s.videoIndex] || []).push(s) })
+  const vidKeys = Object.keys(byVid).map(Number).sort()
+  const nVids   = vidKeys.length
+  const N = Math.min(5, Math.max(2, Math.ceil(segs.length / 3)))
+
+  return Array.from({ length: N }, (_, ci) => {
+    const picked = []
+    let step = 0
+    const maxPicks = Math.min(7, segs.length)
+    while (picked.length < maxPicks && step < 80) {
+      const vi   = vidKeys[(step * 2 + ci * 3) % nVids]
+      const vSegs = byVid[vi] || []
+      if (vSegs.length > 0) {
+        const seg = vSegs[(step + ci * 2) % vSegs.length]
+        if (seg && !picked.find(p => p.id === seg.id)) picked.push(seg)
+      }
+      step++
+    }
+    if (picked.length < 2) {
+      segs.slice(0, Math.min(4, segs.length)).forEach(s => {
+        if (!picked.find(p => p.id === s.id)) picked.push(s)
+      })
+    }
+    const totalDur = picked.reduce((acc, sg) => acc + (sg.endSec - sg.startSec), 0)
+    return { id: `comp${ci}`, idx: ci, name: `成品视频 ${ci + 1}`, segments: picked, totalDur }
+  })
+}
+
 // ─── sub-components ──────────────────────────────────────────────────────────
 
 function Toggle({ on, onToggle }) {
@@ -149,46 +174,7 @@ function Toggle({ on, onToggle }) {
   )
 }
 
-const TRACK_META = {
-  video:    { label:'视频轨道', cls:'tl-label-video' },
-  image:    { label:'图片轨道', cls:'tl-label-image' },
-  audio:    { label:'音频轨道', cls:'tl-label-audio' },
-  subtitle: { label:'字幕轨道', cls:'tl-label-sub' },
-  dedup:    { label:'去重处理', cls:'tl-label-dedup' },
-}
-
-function TrackRow({ type, segments, isAudio, isDedup, currentTime }) {
-  const { label, cls } = TRACK_META[type]
-  return (
-    <div className="tl-row">
-      <div className={`tl-label ${cls}`}><span>{label}</span></div>
-      <div className="tl-track-wrap">
-        <div className="tl-track">
-          <div className="tl-track-playhead" style={{ left: pct(currentTime) }} />
-          {segments.map(seg => (
-            <div
-              key={seg.id}
-              className={`tl-seg${isAudio?' tl-seg-audio':''}${isDedup?' tl-seg-dedup':''}`}
-              style={{ left:pct(seg.start), width:pct(seg.dur), '--seg-color':seg.color }}
-            >
-              <span className="seg-name">{seg.name}</span>
-              {!isAudio && !isDedup && <span className="seg-dur">{fmt(seg.dur)}</span>}
-              {isAudio && (
-                <div className="wave-mini-wrap">
-                  {WAVE_MINI.map((h,i) => <div key={i} className="wave-mini-bar" style={{height:h}} />)}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── export modal ─────────────────────────────────────────────────────────────
-
-function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, onConfirm, onClose }) {
+function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, compName, onConfirm, onClose }) {
   const enabledDedup = Object.entries(dedup).filter(([,v])=>v).map(([k])=>DEDUP_META[k])
   const EXPORT_STEPS = ['初始化编码器','处理视频轨道','混合音频','应用去重处理','封装 MP4']
   const stepIdx = Math.min(Math.floor(prog / 22), EXPORT_STEPS.length - 1)
@@ -202,6 +188,7 @@ function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, onConfir
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
               </svg>
               导出视频
+              {compName && <span className="export-comp-badge">{compName}</span>}
             </div>
             <button className="import-close" onClick={onClose}>✕</button>
           </div>
@@ -270,13 +257,14 @@ function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, onConfir
   )
 }
 
-// ─── cut timeline ─────────────────────────────────────────────────────────────
+// ─── CutTimeline ─────────────────────────────────────────────────────────────
 
-function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSelectCut }) {
+function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSelectCut, vidNum }) {
   if (!segs?.length || duration <= 0) {
     return <div className="cut-tl cut-tl-empty"><span>暂无分段数据</span></div>
   }
-  const p = sec => pctOf(sec, duration)
+  const p  = sec => pctOf(sec, duration)
+  const vn = vidNum >= 0 ? vidNum + 1 : 1
   return (
     <div className="cut-tl" onClick={e => {
       const r = e.currentTarget.getBoundingClientRect()
@@ -293,9 +281,11 @@ function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSe
               width: p(seg.endSec - seg.startSec),
               background: seg.selected ? tc + 'cc' : tc + '44',
               borderColor: tc,
+              borderTop: `2px solid ${tc}`,
             }}
-            title={`${seg.type}: ${seg.startStr}–${seg.endStr}\n${seg.subtitle}`}
+            title={`${vn}-${i+1} ${seg.type}: ${seg.startStr}–${seg.endStr}\n${seg.subtitle}`}
           >
+            <span className="cut-seg-num-lbl">{vn}-{i+1}</span>
             <span className="cut-seg-type-lbl">{seg.type}</span>
           </div>
         )
@@ -316,39 +306,56 @@ function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSe
   )
 }
 
-// ─── overview card (compact, bottom panel) ────────────────────────────────────
+// ─── VideoOverviewCard ────────────────────────────────────────────────────────
 
-function VideoOverviewCard({ video, analysis, isActive, onSelect }) {
+function VideoOverviewCard({ video, analysis, vidIdx, isActive, onSelect }) {
   const status   = analysis?.status || 'waiting'
   const segs     = analysis?.segments || []
   const selCount = segs.filter(s => s.selected).length
   const progress = analysis?.progress || 0
   const STATUS = {
-    waiting:   { label:'等待分析', cls:'sa-waiting'   },
-    analyzing: { label:'分析中',   cls:'sa-analyzing' },
-    done:      { label:'已完成',   cls:'sa-done'      },
-    confirmed: { label:'已确认',   cls:'sa-confirmed' },
+    waiting:   { label:'等待分析', cls:'voc-waiting'   },
+    analyzing: { label:'分析中',   cls:'voc-analyzing' },
+    done:      { label:'已完成',   cls:'voc-done'      },
+    confirmed: { label:'已确认',   cls:'voc-confirmed' },
   }
   const sc = STATUS[status] || STATUS.waiting
   return (
-    <div className={`voc ${isActive?'active':''} ${status}`} onClick={onSelect}>
+    <div className={`voc ${isActive?'active':''}`} onClick={onSelect}>
       <div className="voc-thumb">
         <video src={video.url} preload="metadata" muted playsInline />
         {status === 'analyzing' && (
           <div className="voc-prog-wrap">
-            <div className="voc-prog-fill" style={{ width:`${progress}%` }} />
+            <span className="voc-prog-pct">{Math.round(progress)}%</span>
+            <div className="voc-prog-bar"><div className="voc-prog-fill" style={{ width:`${progress}%` }} /></div>
           </div>
         )}
+        {isActive && <div className="voc-active-badge">编辑中</div>}
+        <span className="voc-num-badge">{vidIdx + 1}</span>
       </div>
       <div className="voc-body">
         <div className="voc-name" title={video.name}>{video.name.replace(/\.[^.]+$/,'')}</div>
-        <div className="voc-dur">{video.durStr}</div>
-        <div className={`voc-status ${sc.cls}`}>
-          {status==='analyzing' && <span className="s2s-pulse"/>}
-          {status==='confirmed' && <span style={{color:'var(--green)'}}>✓ </span>}
-          {sc.label}
-          {segs.length > 0 && <span className="voc-seg-cnt"> · {selCount}/{segs.length}</span>}
+        <div className="voc-row2">
+          <span className="voc-dur">{video.durStr}</span>
+          <span className={`voc-status ${sc.cls}`}>
+            {status==='analyzing' && <span className="s2s-pulse"/>}
+            {status==='confirmed' && '✓ '}
+            {sc.label}
+          </span>
         </div>
+        {segs.length > 0 && (
+          <div className="voc-seg-row">
+            {segs.map((s,i)=>(
+              <span
+                key={s.id}
+                className={`voc-seg-pip ${s.selected?'sel':''}`}
+                style={{background: s.selected ? (SEG_TYPE_COLORS[s.type]||'#6366f1') : undefined}}
+                title={`${vidIdx+1}-${i+1} ${s.type}`}
+              />
+            ))}
+            <span className="voc-seg-info">{selCount}/{segs.length}</span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -379,14 +386,18 @@ export default function App() {
   const [selectedVideoId, setSelectedVideoId] = useState(null)
 
   // ── step-2 analysis ──
-  const [videoAnalysis, setVideoAnalysis]   = useState({})
+  const [videoAnalysis, setVideoAnalysis] = useState({})
 
   // ── step-2 editor ──
-  const [currentVideoId, setCurrentVideoId] = useState(null)
-  const [editorTime, setEditorTime]         = useState(0)
-  const [editorPlaying, setEditorPlaying]   = useState(false)
-  const [selectedCutIdx, setSelectedCutIdx] = useState(null)
-  const [selectedSegIdx, setSelectedSegIdx] = useState(null)
+  const [currentVideoId, setCurrentVideoId]   = useState(null)
+  const [editorTime, setEditorTime]           = useState(0)
+  const [editorPlaying, setEditorPlaying]     = useState(false)
+  const [selectedCutIdx, setSelectedCutIdx]   = useState(null)
+  const [selectedSegIdx, setSelectedSegIdx]   = useState(null)
+
+  // ── step-3 compositions ──
+  const [compositions, setCompositions]   = useState([])
+  const [selectedCompId, setSelectedCompId] = useState(null)
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -394,6 +405,7 @@ export default function App() {
   const [exportProg, setExportProg]   = useState(0)
   const [exportRes, setExportRes]     = useState('1080p')
   const [exportFps, setExportFps]     = useState('30fps')
+  const [exportCompName, setExportCompName] = useState('')
 
   // ── content settings ──
   const [keepAudio, setKeepAudio]   = useState(true)
@@ -417,7 +429,7 @@ export default function App() {
   const videoAnalysisRef      = useRef({})
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
-  useEffect(() => { videoAnalysisRef.current = videoAnalysis },  [videoAnalysis])
+  useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
 
   // ── derived ──
   const enabledDedupKeys = Object.entries(dedup).filter(([,v])=>v).map(([k])=>k)
@@ -433,13 +445,6 @@ export default function App() {
     () => uploadedVideos.reduce((s,v)=>s+(v.dur||0), 0),
     [uploadedVideos]
   )
-  const dominantRes = useMemo(()=>{
-    if (!uploadedVideos.length) return '—'
-    if (uploadedVideos.some(v=>v.res?.startsWith('1920')||v.res?.startsWith('3840'))) return '1080p+'
-    if (uploadedVideos.some(v=>v.res?.startsWith('1280'))) return '720p'
-    if (uploadedVideos.some(v=>v.res!=='—')) return '混合'
-    return '—'
-  }, [uploadedVideos])
 
   const currentScene = useMemo(()=>{
     if (!isGenerated) return null
@@ -455,14 +460,16 @@ export default function App() {
   const editorVid      = useMemo(()=>uploadedVideos.find(v=>v.id===currentVideoId)||null, [uploadedVideos, currentVideoId])
   const editorAnalysis = useMemo(()=>videoAnalysis[currentVideoId]||null, [videoAnalysis, currentVideoId])
   const editorSegs     = editorAnalysis?.segments || []
+  const editorVidIdx   = useMemo(()=>uploadedVideos.findIndex(v=>v.id===currentVideoId), [uploadedVideos, currentVideoId])
 
-  // all selected segs across all videos
+  // all selected segs with segment-level labels (1-1, 2-3, etc.)
   const allSelectedSegs = useMemo(()=>
-    uploadedVideos.flatMap((v,vi)=>
-      (videoAnalysis[v.id]?.segments||[])
+    uploadedVideos.flatMap((v,vi)=>{
+      const segs = videoAnalysis[v.id]?.segments || []
+      return segs
+        .map((s,si)=>({...s, videoIndex:vi, segInVid:si, label:`${vi+1}-${si+1}`, videoName:v.name}))
         .filter(s=>s.selected)
-        .map(s=>({...s, videoName:v.name, videoIndex:vi}))
-    ),
+    }),
     [uploadedVideos, videoAnalysis]
   )
   const usedVideos = useMemo(()=>
@@ -471,28 +478,18 @@ export default function App() {
   )
   const totalSelectedSegs = allSelectedSegs.length
 
+  // selected composition
+  const selectedComp = useMemo(()=>
+    compositions.find(c=>c.id===selectedCompId) || compositions[0] || null,
+    [compositions, selectedCompId]
+  )
+
   // step-2 stats
   const waitingCount   = uploadedVideos.filter(v=>videoAnalysis[v.id]?.status==='waiting').length
   const analyzingCount = uploadedVideos.filter(v=>videoAnalysis[v.id]?.status==='analyzing').length
   const doneCount      = uploadedVideos.filter(v=>['done','confirmed'].includes(videoAnalysis[v.id]?.status)).length
   const totalSubCount  = uploadedVideos.reduce((s,v)=>s+(videoAnalysis[v.id]?.subtitleCount||0), 0)
   const totalSegCount  = uploadedVideos.reduce((s,v)=>s+(videoAnalysis[v.id]?.segments?.length||0), 0)
-
-  // timeline tracks
-  const computedTracks = useMemo(()=>{
-    if (!isGenerated||allSelectedSegs.length===0) return TRACKS_INIT
-    const n = allSelectedSegs.length
-    const sd = TOTAL/Math.max(n,1)
-    return {
-      video:    allSelectedSegs.map((s,i)=>({ id:`cv${i}`, name:`${s.type}·${s.videoName.replace(/\.[^.]+$/,'').slice(0,8)}`, start:i*sd, dur:sd*0.95, color:TRACK_COLORS[s.videoIndex%TRACK_COLORS.length] })),
-      image:    [{id:'i1',name:'片尾图',start:25,dur:5,color:'#0c4a6e'}],
-      audio:    [{id:'a1',name:'BGM · 背景音乐',start:0,dur:30,color:'#064e3b'}],
-      subtitle: allSelectedSegs.map((s,i)=>({ id:`cs${i}`, name:s.subtitle.slice(0,10)+'…', start:i*sd+0.3, dur:sd*0.6, color:'#78350f' })),
-      dedup:    enabledDedupKeys.length>0
-        ? enabledDedupKeys.map((k,i)=>({ id:`cd${i}`, name:DEDUP_META[k].label, start:(TOTAL/enabledDedupKeys.length)*i, dur:(TOTAL/enabledDedupKeys.length)*0.9, color:'#831843' }))
-        : [{id:'d0',name:'去重处理',start:0,dur:30,color:'#831843'}],
-    }
-  }, [isGenerated, allSelectedSegs, enabledDedupKeys])
 
   // ── effects ──
 
@@ -520,18 +517,15 @@ export default function App() {
     return ()=>{ vid.pause() }
   }, [editorPlaying])
 
-  // reset editor state when video changes
   useEffect(()=>{
     setEditorTime(0); setEditorPlaying(false); setSelectedCutIdx(null); setSelectedSegIdx(null)
   }, [currentVideoId])
 
-  // step 2: init analysis + currentVideoId
+  // step 2 init
   useEffect(()=>{
     if (step!==2) return
-    // fix currentVideoId if stale
     const exists = uploadedVideos.some(v=>v.id===currentVideoId)
     if (!exists||!currentVideoId) setCurrentVideoId(uploadedVideos[0]?.id??null)
-    // init waiting states
     setVideoAnalysis(prev=>{
       const next={...prev}
       uploadedVideos.forEach(v=>{ if (!next[v.id]) next[v.id]={status:'waiting',progress:0,segments:[],subtitleCount:0} })
@@ -577,12 +571,6 @@ export default function App() {
   // ── handlers ──
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''), 3000) }
-
-  function canGoToStep(n) {
-    if (n===step) return false
-    if (n===3&&!isGenerated) return false
-    return true
-  }
 
   function handleImportClick() { fileInputRef.current?.click() }
 
@@ -686,7 +674,7 @@ export default function App() {
     const seg=editorSegs[segIdx]
     const mid=(seg.startSec+seg.endSec)/2
     handleEditorSeek(mid)
-    showToast(`已跳至片段 ${segIdx+1} 中点（${fmt(mid)}），确认切割位置后点击"新增切割点"`)
+    showToast(`已跳至片段中点（${fmt(mid)}），确认位置后点击"新增切割点"`)
   }
 
   function handleConfirmVideo(videoId) {
@@ -704,12 +692,29 @@ export default function App() {
       p+=Math.random()*14+4; si=Math.min(Math.floor(p/22),GEN_STEPS.length-1); setGenStep(GEN_STEPS[si])
       if (p>=100) {
         clearInterval(iv); setGenProg(100)
-        setTimeout(()=>{ setGen(false); setDone(true); setCurrent(0); setTlFlash(true); setTimeout(()=>setTlFlash(false),800) }, 400)
+        setTimeout(()=>{
+          setGen(false); setDone(true); setCurrent(0); setTlFlash(true)
+          setTimeout(()=>setTlFlash(false),800)
+          const freshVids = uploadedVideosRef.current
+          const freshAna  = videoAnalysisRef.current
+          const freshSegs = freshVids.flatMap((v,vi)=>{
+            const segs = freshAna[v.id]?.segments || []
+            return segs
+              .map((s,si)=>({...s, videoIndex:vi, segInVid:si, label:`${vi+1}-${si+1}`, videoName:v.name}))
+              .filter(s=>s.selected)
+          })
+          const comps = buildCompositions(freshSegs)
+          setCompositions(comps)
+          setSelectedCompId(comps[0]?.id ?? null)
+        }, 400)
       } else { setGenProg(p) }
     }, 220)
   }
 
-  function handleExportOpen()    { setShowExport(true); setExportPhase('confirm'); setExportProg(0) }
+  function handleExportOpen(compName)  {
+    setExportCompName(compName||'')
+    setShowExport(true); setExportPhase('confirm'); setExportProg(0)
+  }
   function handleExportConfirm() {
     setExportPhase('exporting'); setExportProg(0)
     let p=0
@@ -781,7 +786,7 @@ export default function App() {
 
       {toast && <div className="toast">{toast}</div>}
 
-      {showExport && <ExportModal phase={exportPhase} prog={exportProg} exportRes={exportRes} exportFps={exportFps} ratio={ratio} dedup={dedup} onConfirm={handleExportConfirm} onClose={handleExportClose}/>}
+      {showExport && <ExportModal phase={exportPhase} prog={exportProg} exportRes={exportRes} exportFps={exportFps} ratio={ratio} dedup={dedup} compName={exportCompName} onConfirm={handleExportConfirm} onClose={handleExportClose}/>}
 
       {isGenerating && (
         <div className="overlay">
@@ -799,7 +804,7 @@ export default function App() {
             <p className="gen-step">{genStep}</p>
             {totalSelectedSegs>0&&<p className="gen-seg-info">基于 {totalSelectedSegs} 个片段 · {usedVideos.length} 个视频</p>}
             <div className="gen-steps-row">
-              {['素材分析','计算混剪','轨道布局','去重处理','完成'].map((s,i)=>(
+              {['素材分析','计算混剪','成品方案','去重处理','完成'].map((s,i)=>(
                 <div key={i} className={`gen-dot ${Math.floor(genProgress/22)>=i?'done':''}`} title={s}/>
               ))}
             </div>
@@ -824,7 +829,7 @@ export default function App() {
             return [
               i>0&&<div key={`sep-${n}`} className={`step-nav-sep ${isDone?'done':''}`}/>,
               <div key={n} className={`step-nav-item ${isActive?'active':''} ${isDone?'done':''} ${isLocked?'locked':''}`}
-                onClick={()=>canGoToStep(n)&&setStep(n)} title={isLocked?'请先完成混剪方案生成':undefined}>
+                onClick={()=>(step!==n&&!(isLocked))&&setStep(n)} title={isLocked?'请先完成混剪方案生成':undefined}>
                 <div className="step-nav-num">{isDone?<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>:n}</div>
                 <span className="step-nav-label">{label}</span>
               </div>,
@@ -905,7 +910,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ══ STEP 2: 字幕分段 */}
+      {/* ══ STEP 2: 字幕分段 NLE 编辑器 */}
       {step===2&&(
         <div className="step2">
 
@@ -937,11 +942,13 @@ export default function App() {
           {/* body */}
           <div className="s2-body">
 
-            {/* ── upper: editor ── */}
-            <div className="s2-editor">
+            {/* ─── NLE editor zone ─── */}
+            <div className="s2-nle">
 
-              {/* LEFT: video preview */}
-              <div className="s2-preview-col">
+              {/* LEFT: video + timeline */}
+              <div className="s2-video-panel">
+
+                {/* big video area */}
                 <div className="s2-video-area">
                   {editorVid&&(editorAnalysis?.status==='done'||editorAnalysis?.status==='confirmed')&&(
                     <video
@@ -952,23 +959,31 @@ export default function App() {
                       onEnded={()=>setEditorPlaying(false)}
                     />
                   )}
-                  {(!editorVid)&&(
+                  {!editorVid&&(
                     <div className="s2-vid-empty">
-                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.25"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
-                      <span>请从下方选择一个视频</span>
+                      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.2"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+                      <span>从下方选择一个视频开始编辑</span>
                     </div>
                   )}
                   {editorVid&&editorAnalysis?.status==='waiting'&&(
                     <div className="s2-vid-overlay">
-                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                       <span>等待分析中…</span>
+                      <span style={{fontSize:10,color:'var(--txt-3)'}}>将在分析完成后自动显示分段结果</span>
                     </div>
                   )}
                   {editorVid&&editorAnalysis?.status==='analyzing'&&(
                     <div className="s2-vid-overlay">
                       <span className="s2-vid-analyzing-pct">{Math.round(editorAnalysis.progress)}%</span>
                       <span>正在识别字幕与分段…</span>
-                      <div className="s2-vid-ana-bar"><div style={{width:`${editorAnalysis.progress}%`}}/></div>
+                      <div className="s2-vid-ana-bar"><div className="s2-vid-ana-bar-fill" style={{width:`${editorAnalysis.progress}%`}}/></div>
+                    </div>
+                  )}
+                  {/* HUD overlay when video is ready */}
+                  {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
+                    <div className="s2-vid-hud">
+                      <span className="s2-vid-timecode">{fmtMs(editorTime)}</span>
+                      {editorAnalysis?.status==='confirmed'&&<span className="s2-vid-confirmed-badge">✓ 已确认</span>}
                     </div>
                   )}
                 </div>
@@ -981,8 +996,8 @@ export default function App() {
                     disabled={!editorVid||!['done','confirmed'].includes(editorAnalysis?.status)}
                   >
                     {editorPlaying
-                      ? <svg width="12" height="12" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                      : <svg width="12" height="12" viewBox="0 0 24 24" fill="#fff"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                      : <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                     }
                   </button>
                   <div className="s2-scrubber" onClick={e=>{ const r=e.currentTarget.getBoundingClientRect(); handleEditorSeek(((e.clientX-r.left)/r.width)*(editorVid?.dur||0)) }}>
@@ -990,58 +1005,98 @@ export default function App() {
                     <div className="s2-scrub-thumb" style={{left:editorVid?.dur>0?pctOf(editorTime,editorVid.dur):'0%'}}/>
                   </div>
                   <span className="s2-time-disp">{fmtMs(editorTime)} / {editorVid?fmt(editorVid.dur):'--:--'}</span>
-                </div>
-
-                {/* video info */}
-                <div className="s2-vid-info">
-                  {editorVid?(
-                    <>
-                      <span className="s2-vid-info-name" title={editorVid.name}>{editorVid.name}</span>
-                      {editorVid.res!=='—'&&<span className="s2-vid-info-tag">{editorVid.res}</span>}
-                      <span className="s2-vid-info-tag">{editorVid.durStr}</span>
-                      <span className="s2-vid-info-tag">{editorVid.sizeStr}</span>
-                      {editorAnalysis?.status==='confirmed'&&<span className="s2-vid-info-confirmed">✓ 已确认</span>}
-                    </>
-                  ):<span className="s2-vid-info-none">未选择视频</span>}
-                </div>
-              </div>
-
-              {/* RIGHT: segment list */}
-              <div className="s2-segs-col">
-                <div className="s2-segs-header">
-                  <span className="s2-segs-title">
-                    字幕分段列表
-                    {editorSegs.length>0&&<span className="s2-segs-count">{editorSegs.filter(s=>s.selected).length}/{editorSegs.length}</span>}
-                  </span>
                   <button
                     className="s2-add-cut-btn"
                     onClick={addCutAtCurrentTime}
                     disabled={!editorVid||!['done','confirmed'].includes(editorAnalysis?.status)}
                     title="在当前播放时间点新增切割"
                   >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    新增切割点
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    切割
                   </button>
                 </div>
 
+                {/* video info */}
+                <div className="s2-vid-info">
+                  {editorVid?(
+                    <>
+                      <span className="s2-vid-info-num">V{editorVidIdx+1}</span>
+                      <span className="s2-vid-info-name" title={editorVid.name}>{editorVid.name}</span>
+                      {editorVid.res!=='—'&&<span className="s2-vid-info-tag">{editorVid.res}</span>}
+                      <span className="s2-vid-info-tag">{editorVid.durStr}</span>
+                      <span className="s2-vid-info-tag">{editorVid.sizeStr}</span>
+                    </>
+                  ):<span className="s2-vid-info-none">未选择视频</span>}
+                </div>
+
+                {/* cut-point timeline */}
+                <div className="s2-tl-section">
+                  <div className="s2-tl-head">
+                    <span className="s2-tl-title">
+                      分段时间轴
+                      {selectedCutIdx!==null&&editorSegs[selectedCutIdx]&&(
+                        <span className="s2-cut-sel-info"> · 切割点 @ {fmt(editorSegs[selectedCutIdx]?.endSec)}</span>
+                      )}
+                    </span>
+                    {selectedCutIdx!==null&&(
+                      <div className="s2-cut-adj">
+                        <button className="s2-cut-adj-btn" onClick={()=>adjustCutPoint(selectedCutIdx,-0.5)}>◀ -0.5s</button>
+                        <button className="s2-cut-adj-btn" onClick={()=>adjustCutPoint(selectedCutIdx,+0.5)}>+0.5s ▶</button>
+                        <button className="s2-cut-adj-btn s2-cut-del-btn" onClick={()=>{ mergeSegs(selectedCutIdx); setSelectedCutIdx(null) }}>删除切点</button>
+                        <button className="s2-cut-adj-btn" onClick={()=>setSelectedCutIdx(null)}>取消</button>
+                      </div>
+                    )}
+                    {selectedCutIdx===null&&<span className="s2-tl-hint">点击切割线选中 · 点击轨道跳转 · 片段编号：视频号-片段号</span>}
+                  </div>
+                  <CutTimeline
+                    segs={editorSegs}
+                    duration={editorVid?.dur||0}
+                    currentTime={editorTime}
+                    selectedCutIdx={selectedCutIdx}
+                    onSeek={handleEditorSeek}
+                    onSelectCut={setSelectedCutIdx}
+                    vidNum={editorVidIdx}
+                  />
+                </div>
+              </div>
+
+              {/* RIGHT: segment list */}
+              <div className="s2-seg-panel">
+                <div className="s2-segs-header">
+                  <span className="s2-segs-title">
+                    字幕 & 片段列表
+                    {editorSegs.length>0&&(
+                      <span className="s2-segs-count">{editorSegs.filter(s=>s.selected).length}/{editorSegs.length} 选中</span>
+                    )}
+                  </span>
+                  {editorVidIdx>=0&&<span className="s2-segs-vidnum">视频 V{editorVidIdx+1}</span>}
+                </div>
+
                 <div className="s2-segs-list">
-                  {!editorVid&&<div className="s2-seg-empty">请从下方选择一个视频</div>}
-                  {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-seg-empty">视频等待分析，完成后将自动显示分段结果</div>}
-                  {editorVid&&editorAnalysis?.status==='analyzing'&&(
+                  {!editorVid&&(
                     <div className="s2-seg-empty">
-                      <span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>
-                      正在识别字幕与分段，请稍候…
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.2"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+                      <span>点击下方视频卡片开始编辑</span>
                     </div>
                   )}
+                  {editorVid&&editorAnalysis?.status==='waiting'&&(
+                    <div className="s2-seg-empty"><span className="s2s-pulse" style={{display:'inline-block',marginRight:6,marginBottom:4}}/> 等待分析，完成后自动显示分段</div>
+                  )}
+                  {editorVid&&editorAnalysis?.status==='analyzing'&&(
+                    <div className="s2-seg-empty"><span className="s2s-pulse" style={{display:'inline-block',marginRight:6,marginBottom:4}}/>字幕识别中…</div>
+                  )}
+
                   {editorSegs.map((seg,i)=>{
                     const tc=SEG_TYPE_COLORS[seg.type]||'#6366f1'
+                    const segLabel=`${editorVidIdx>=0?editorVidIdx+1:'?'}-${i+1}`
                     return (
                       <div
                         key={seg.id}
                         className={`s2-seg-row ${selectedSegIdx===i?'active':''} ${seg.selected?'sel':''}`}
                         onClick={()=>{ setSelectedSegIdx(i); handleEditorSeek(seg.startSec) }}
+                        style={seg.selected?{'--seg-accent':tc}:{}}
                       >
-                        <div className="s2-seg-num">{i+1}</div>
+                        <div className="s2-seg-num" style={{color:tc}}>{segLabel}</div>
                         <div className="s2-seg-content">
                           <div className="s2-seg-top-row">
                             <span className="s2-seg-timerange">{seg.startStr} — {seg.endStr}</span>
@@ -1055,7 +1110,7 @@ export default function App() {
                               {ALL_SEG_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
                             </select>
                             <label className="s2-seg-mixlabel" onClick={e=>e.stopPropagation()}>
-                              <input type="checkbox" checked={seg.selected} onChange={()=>toggleEditorSeg(i)} style={{accentColor:'var(--accent)'}}/>
+                              <input type="checkbox" checked={seg.selected} onChange={()=>toggleEditorSeg(i)}/>
                               混剪
                             </label>
                           </div>
@@ -1064,7 +1119,7 @@ export default function App() {
                             <button className="s2-seg-act" onClick={e=>{ e.stopPropagation(); handleEditorSeek(seg.startSec); setEditorPlaying(true) }}>▶ 预览</button>
                             {i>0&&<button className="s2-seg-act" onClick={e=>{ e.stopPropagation(); mergeSegs(i-1) }}>← 合并上段</button>}
                             {i<editorSegs.length-1&&<button className="s2-seg-act" onClick={e=>{ e.stopPropagation(); mergeSegs(i) }}>合并下段 →</button>}
-                            <button className="s2-seg-act s2-seg-act-split" onClick={e=>{ e.stopPropagation(); splitSegAtMiddle(i) }} title="跳至中点后可新增切割点">拆分</button>
+                            <button className="s2-seg-act s2-seg-act-split" onClick={e=>{ e.stopPropagation(); splitSegAtMiddle(i) }}>拆分</button>
                           </div>
                         </div>
                       </div>
@@ -1078,52 +1133,25 @@ export default function App() {
                       className={`s2-confirm-vid-btn ${editorAnalysis?.status==='confirmed'?'confirmed':''}`}
                       onClick={()=>handleConfirmVideo(currentVideoId)}
                     >
-                      {editorAnalysis?.status==='confirmed'?'✓ 已确认此视频':'确认此视频分段'}
+                      {editorAnalysis?.status==='confirmed'?'✓ 已确认此视频分段':'确认此视频分段'}
                     </button>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* ── cut timeline ── */}
-            <div className="s2-cut-tl-wrap">
-              <div className="s2-cut-tl-head">
-                <span className="s2-cut-tl-title">
-                  分段时间轴
-                  {selectedCutIdx!==null&&editorSegs[selectedCutIdx]&&(
-                    <span className="s2-cut-sel-info"> · 已选切割点 @ {fmt(editorSegs[selectedCutIdx].endSec)}</span>
-                  )}
-                </span>
-                {selectedCutIdx!==null&&(
-                  <div className="s2-cut-adj">
-                    <button className="s2-cut-adj-btn" onClick={()=>adjustCutPoint(selectedCutIdx,-0.5)}>◀ -0.5s</button>
-                    <button className="s2-cut-adj-btn" onClick={()=>adjustCutPoint(selectedCutIdx,+0.5)}>+0.5s ▶</button>
-                    <button className="s2-cut-adj-btn s2-cut-del-btn" onClick={()=>{ mergeSegs(selectedCutIdx); setSelectedCutIdx(null) }}>删除此切点</button>
-                    <button className="s2-cut-adj-btn" onClick={()=>setSelectedCutIdx(null)}>取消选择</button>
-                  </div>
-                )}
-                <span className="s2-cut-tl-hint">点击切割线可选中调整 · 点击轨道可跳转</span>
-              </div>
-              <CutTimeline
-                segs={editorSegs}
-                duration={editorVid?.dur||0}
-                currentTime={editorTime}
-                selectedCutIdx={selectedCutIdx}
-                onSeek={handleEditorSeek}
-                onSelectCut={setSelectedCutIdx}
-              />
-            </div>
-
-            {/* ── overview: all videos ── */}
+            {/* ─── all-video overview ─── */}
             <div className="s2-overview">
               <div className="s2-overview-head">
-                <span className="s2-overview-title">所有视频分析状态</span>
-                <span className="s2-overview-hint">当前为原型模拟字幕识别，后续可接入 Whisper / faster-whisper。</span>
+                <span className="s2-overview-title">所有视频概览</span>
+                <span className="s2-overview-hint">
+                  当前为原型模拟字幕识别，后续可接入 Whisper / faster-whisper
+                </span>
               </div>
               <div className="s2-overview-grid">
-                {uploadedVideos.map(v=>(
+                {uploadedVideos.map((v,vi)=>(
                   <VideoOverviewCard
-                    key={v.id} video={v}
+                    key={v.id} video={v} vidIdx={vi}
                     analysis={videoAnalysis[v.id]}
                     isActive={v.id===currentVideoId}
                     onSelect={()=>setCurrentVideoId(v.id)}
@@ -1131,7 +1159,6 @@ export default function App() {
                 ))}
               </div>
 
-              {/* mixing config — visible after segments selected */}
               {totalSelectedSegs>0&&(
                 <div className="s2s-config">
                   <div className="s2s-config-header">
@@ -1188,8 +1215,8 @@ export default function App() {
                     <div className="s2s-result-card">
                       <div className="s2s-result-check"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
                       <div className="s2s-result-info">
-                        <span className="s2s-result-title">混剪方案已生成</span>
-                        <span className="s2s-result-sub">{usedVideos.length} 个视频 · {totalSelectedSegs} 个片段 · {dedupSelected} 种去重 · 时长 00:30</span>
+                        <span className="s2s-result-title">混剪方案已生成 · {compositions.length} 个成品视频</span>
+                        <span className="s2s-result-sub">{usedVideos.length} 个视频 · {totalSelectedSegs} 个片段 · {dedupSelected} 种去重</span>
                       </div>
                       <button className="s2s-regen-btn" onClick={handleGenerate}>
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
@@ -1227,24 +1254,26 @@ export default function App() {
         </div>
       )}
 
-      {/* ══ STEP 3 */}
+      {/* ══ STEP 3: 预览导出 */}
       {step===3&&(
         <div className="step3">
           <div className="main">
+
+            {/* LEFT: material list */}
             <aside className="panel-l">
               <div className="s3-mat-header">
                 <span className="s3-mat-title">参与混剪素材</span>
                 <span className="s3-mat-count">{(usedVideos.length||uploadedVideos.length)} 个</span>
               </div>
               <div className="s3-mat-list">
-                {(usedVideos.length>0?usedVideos:uploadedVideos).map(v=>(
+                {(usedVideos.length>0?usedVideos:uploadedVideos).map((v,vi)=>(
                   <div key={v.id} className="s3-mat-item" onClick={()=>setPreviewVid(v)}>
                     <div className="s3-mat-thumb"><video src={v.url} preload="metadata" muted playsInline/></div>
                     <div className="s3-mat-info">
-                      <div className="s3-mat-name">{v.name}</div>
+                      <div className="s3-mat-name">V{vi+1} · {v.name.replace(/\.[^.]+$/,'').slice(0,18)}</div>
                       <div className="s3-mat-meta">
                         {v.durStr} · {v.sizeStr}
-                        {videoAnalysis[v.id]?.segments&&<span> · {videoAnalysis[v.id].segments.filter(s=>s.selected).length} 片段</span>}
+                        {videoAnalysis[v.id]?.segments&&<span> · {videoAnalysis[v.id].segments.filter(s=>s.selected).length}片</span>}
                       </div>
                     </div>
                   </div>
@@ -1258,6 +1287,7 @@ export default function App() {
               </div>
             </aside>
 
+            {/* CENTER: preview */}
             <main className="panel-c">
               <div className="preview-wrap">
                 <div className={`preview-screen r-${ratio.replace(':','-')}`}>
@@ -1265,7 +1295,7 @@ export default function App() {
                   <div className="preview-hud-top">
                     <span className="preview-timecode">{fmtMs(currentTime)}</span>
                     {isPlaying&&<span className="preview-rec"><span className="rec-dot"/>REC</span>}
-                    {isGenerated&&currentScene&&<span className="preview-scene-badge">{currentScene.isEnd?'片尾':`SCENE ${currentScene.num}`}</span>}
+                    {selectedComp&&<span className="preview-scene-badge">{selectedComp.name}</span>}
                     <span className="preview-ratio-tag">{ratio}</span>
                   </div>
                   {isGenerated&&currentScene&&!currentScene.isEnd&&<div className="preview-scene-info"><span className="scene-label">SCENE {currentScene.num} / 4</span><span className="scene-clip">{currentScene.name}</span></div>}
@@ -1283,7 +1313,7 @@ export default function App() {
                     </div>
                   )}
                   <div className="preview-center-state">
-                    {!isGenerated&&!selectedVideo&&<div className="preview-idle"><div className="preview-idle-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="1.4"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg></div><p>请返回第二步生成混剪方案</p></div>}
+                    {!isGenerated&&<div className="preview-idle"><div className="preview-idle-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="1.4"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg></div><p>请返回第二步生成混剪方案</p></div>}
                     {isGenerated&&!currentScene?.isEnd&&<div className="preview-film-grain"/>}
                   </div>
                   {isGenerated&&<div className="preview-storyboard">{SCENES.map(s=><div key={s.num} className={`preview-sb-seg ${currentScene?.num===s.num?'active':''}`} style={{flex:s.end-s.start,background:s.color}}/>)}</div>}
@@ -1318,20 +1348,6 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="summary-strip">
-                {[
-                  {key:'seg', icon:'✂', label:'混剪片段', val:isGenerated?`${totalSelectedSegs} 个`:'—', active:isGenerated},
-                  {key:'sub', icon:'T', label:'字幕轨道', val:isGenerated?`${totalSubCount} 条`:'—',    active:isGenerated},
-                  {key:'music',icon:'♪',label:'背景音乐', val:addMusic?'已启用':'未启用',                active:addMusic},
-                  {key:'dedup',icon:'◈',label:'去重处理', val:isGenerated?`${dedupSelected} 项`:'—',    active:isGenerated},
-                ].map(({key,icon,label,val,active})=>(
-                  <div key={key} className={`summary-item ${active?'sum-active':''}`}>
-                    <span className="sum-icon">{icon}</span>
-                    <div className="sum-text"><span className="sum-label">{label}</span><span className="sum-val">{val}</span></div>
-                  </div>
-                ))}
-              </div>
-
               <div className="action-row">
                 <button className="btn-ghost" onClick={()=>{ setPlaying(false); setStep(2) }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
@@ -1341,13 +1357,14 @@ export default function App() {
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                   预览效果
                 </button>
-                <button className="btn-export" style={{flex:1}} onClick={handleExportOpen}>
+                <button className="btn-export" style={{flex:1}} onClick={()=>handleExportOpen(selectedComp?.name)}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  导出视频
+                  {selectedComp ? `导出 ${selectedComp.name}` : '导出视频'}
                 </button>
               </div>
             </main>
 
+            {/* RIGHT: plan summary */}
             <aside className="panel-r">
               <div className="r-section">
                 <div className="r-section-title"><span className="r-title-dot" style={{'--dot-c':'#22c55e'}}/>方案摘要</div>
@@ -1356,6 +1373,7 @@ export default function App() {
                     ['字幕分段', isGenerated?'已确认':'待确认'],
                     ['参与视频', `${usedVideos.length||uploadedVideos.length} 个`],
                     ['混剪片段', isGenerated?`${totalSelectedSegs} 个`:'—'],
+                    ['成品方案', isGenerated?`${compositions.length} 个`:'—'],
                     ['视频比例', ratio],
                     ['混剪强度', {light:'轻度混剪',medium:'中度混剪',strong:'强力混剪'}[intensity]],
                     ['去重方式', `${dedupSelected} 项已启用`],
@@ -1384,40 +1402,111 @@ export default function App() {
                   <div className="export-row"><span className="export-label">分辨率</span><div className="btn-row">{['720p','1080p'].map(r=><button key={r} className={`opt-btn ${exportRes===r?'active':''}`} onClick={()=>setExportRes(r)}>{r}</button>)}</div></div>
                   <div className="export-row"><span className="export-label">帧率</span><div className="btn-row">{['24fps','30fps','60fps'].map(f=><button key={f} className={`opt-btn ${exportFps===f?'active':''}`} onClick={()=>setExportFps(f)}>{f}</button>)}</div></div>
                 </div>
-                <div className="s3-export-note">预计大小 ~{exportRes==='1080p'?'148':'64'} MB · 时长 00:30</div>
               </div>
+              {selectedComp&&(
+                <div className="r-section">
+                  <div className="r-section-title"><span className="r-title-dot" style={{'--dot-c':'#818cf8'}}/>当前预览方案</div>
+                  <div className="settings-col">
+                    <div className="s3-plan-row"><span>名称</span><span className="s3-plan-val">{selectedComp.name}</span></div>
+                    <div className="s3-plan-row"><span>片段数</span><span className="s3-plan-val">{selectedComp.segments.length} 个</span></div>
+                    <div className="s3-plan-row"><span>素材时长</span><span className="s3-plan-val">{fmt(selectedComp.totalDur)}</span></div>
+                  </div>
+                </div>
+              )}
             </aside>
           </div>
 
-          <div className={`timeline ${tlFlash?'tl-flash':''}`}>
-            <div className="tl-head">
-              <div className="tl-head-l">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-                <span>时间轴</span>
-                {isGenerated&&<span className="tl-head-badge">{totalSelectedSegs>0?`${totalSelectedSegs} 片段`:'5 轨道'}</span>}
+          {/* ══ Composition rows (replaces old NLE timeline) */}
+          <div className={`s3-comp-section ${tlFlash?'tl-flash':''}`}>
+            <div className="s3-comp-head">
+              <div className="s3-comp-head-l">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                <span>成品视频方案</span>
+                {compositions.length>0&&<span className="s3-comp-badge">{compositions.length} 个方案 · {totalSelectedSegs} 个片段</span>}
               </div>
-              <div className="tl-head-r">
-                <span className="tl-cur-time">{fmtMs(currentTime)}</span>
-                <span className="tl-sep">/</span>
-                <span className="tl-dur-label">00:30.0</span>
+              <div className="s3-comp-head-r">
+                {compositions.length>0&&(
+                  <button className="s3-batch-export-btn" onClick={()=>showToast('批量导出将在后续版本接入，当前为原型模拟')}>
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    批量导出全部
+                  </button>
+                )}
               </div>
             </div>
-            <div className="tl-body">
-              <div className="tl-row tl-ruler-row">
-                <div className="tl-label tl-label-ruler"/>
-                <div className="tl-track-wrap">
-                  <div className="tl-ruler">
-                    {SUB_TICKS.map(t=><div key={`sub-${t}`} className="tl-subtick" style={{left:pct(t)}}/>)}
-                    {TIME_MARKS.map(t=><div key={t} className="tl-mark" style={{left:pct(t)}}><span>{fmt(t)}</span></div>)}
-                    <div className="playhead" style={{left:pct(currentTime)}}><div className="playhead-handle"/></div>
-                  </div>
-                </div>
+
+            {!isGenerated&&(
+              <div className="s3-comp-empty">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                <p>请先返回第二步勾选片段并生成混剪方案</p>
               </div>
-              <TrackRow type="video"    segments={computedTracks.video}    currentTime={currentTime}/>
-              <TrackRow type="image"    segments={computedTracks.image}    currentTime={currentTime}/>
-              <TrackRow type="audio"    segments={computedTracks.audio}    isAudio currentTime={currentTime}/>
-              <TrackRow type="subtitle" segments={computedTracks.subtitle} currentTime={currentTime}/>
-              <TrackRow type="dedup"    segments={computedTracks.dedup}    isDedup currentTime={currentTime}/>
+            )}
+
+            {isGenerated&&compositions.length===0&&(
+              <div className="s3-comp-empty"><p>未找到可组合的片段，请返回第二步勾选更多片段</p></div>
+            )}
+
+            <div className="s3-comp-list">
+              {compositions.map(comp=>{
+                const isActive = comp.id === selectedCompId
+                const maxDur   = compositions.reduce((m,c)=>Math.max(m,c.totalDur),0) || 1
+                return (
+                  <div
+                    key={comp.id}
+                    className={`comp-row ${isActive?'active':''}`}
+                    onClick={()=>{ setSelectedCompId(comp.id); setPlaying(false); setCurrent(0) }}
+                  >
+                    {/* row header */}
+                    <div className="comp-row-head">
+                      <span className={`comp-radio ${isActive?'on':''}`}/>
+                      <span className="comp-name">{comp.name}</span>
+                      <span className="comp-meta">{fmt(comp.totalDur)}</span>
+                      <span className="comp-meta">{comp.segments.length} 片段</span>
+                      <span className="comp-meta-segs">{comp.segments.map(s=>s.label).join(' → ')}</span>
+                      <button className="comp-act-btn" onClick={e=>{e.stopPropagation();setSelectedCompId(comp.id);setPlaying(true);setCurrent(0)}}>▶ 预览</button>
+                      <button className="comp-act-btn comp-export-btn" onClick={e=>{e.stopPropagation();handleExportOpen(comp.name)}}>⬇ 导出</button>
+                    </div>
+
+                    {/* row body: timeline + sequence */}
+                    <div className="comp-row-body">
+                      {/* proportional segment timeline */}
+                      <div className="comp-row-tl">
+                        {comp.segments.map((seg,si)=>{
+                          const dur = seg.endSec - seg.startSec
+                          const w   = `${comp.totalDur > 0 ? (dur / comp.totalDur) * 100 : (100 / comp.segments.length)}%`
+                          const tc  = SEG_TYPE_COLORS[seg.type] || '#6366f1'
+                          return (
+                            <div
+                              key={seg.id+'_'+si}
+                              className="comp-seg-blk"
+                              style={{ width:w, background:tc+'cc', borderTop:`2px solid ${tc}` }}
+                              title={`${seg.label} ${seg.type}\n${seg.startStr}–${seg.endStr}\n${seg.subtitle}`}
+                            >
+                              <span className="comp-seg-label">{seg.label}</span>
+                              <span className="comp-seg-type">{seg.type}</span>
+                              <span className="comp-seg-dur">{fmt(dur)}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      {/* sequence list */}
+                      <div className="comp-row-seq">
+                        <div className="comp-seq-title">组合顺序</div>
+                        {comp.segments.map((seg,si)=>{
+                          const tc = SEG_TYPE_COLORS[seg.type] || '#6366f1'
+                          return (
+                            <div key={seg.id+'seq'+si} className="comp-seq-item">
+                              <span className="comp-seq-lbl" style={{color:tc}}>{seg.label}</span>
+                              <span className="comp-seq-type">{seg.type}</span>
+                              <span className="comp-seq-time">{fmt(seg.endSec-seg.startSec)}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
         </div>
