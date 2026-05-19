@@ -1094,6 +1094,108 @@ export default function App() {
 
           {/* compose view (2B) */}
           {subStep==='compose'&&(
+            pendingCand ? (()=>{
+              const {cand:pc,compId:pCompId,segIdx:pSegIdx}=pendingCand
+              const pctc=SEG_TYPE_COLORS[pc.type]||'#6366f1'
+              const srcVid=uploadedVideos[pc.videoIndex]
+              const usedInComps=compositions.filter(c=>c.id!==pCompId&&c.segments.some(s=>s.id===pc.id))
+              const segDur=pc.endSec-pc.startSec
+              const pComp=compositions.find(c=>c.id===pCompId)
+              const pOrigSeg=pComp?.segments[pSegIdx]
+              const progPct=segDur>0?Math.max(0,Math.min(100,((candPreviewTime-pc.startSec)/segDur)*100)):0
+              function toggleCandPlay(){
+                const vid=candPreviewRef.current; if(!vid) return
+                if(candPreviewPlaying){ vid.pause(); setCandPrevPlay(false) }
+                else {
+                  if(vid.currentTime<pc.startSec||vid.currentTime>=pc.endSec) vid.currentTime=pc.startSec
+                  vid.play().then(()=>setCandPrevPlay(true)).catch(()=>{})
+                }
+              }
+              return (
+                <div className="s2-cand-fullview">
+                  <div className="s2-cand-header">
+                    <button className="r3-back-btn" onClick={()=>{setPendingCand(null);setCandPrevPlay(false)}}>← 返回</button>
+                    <span className="s2-cand-title">候选片段预览</span>
+                  </div>
+                  <div className="s2-cand-body">
+                    <div className="s2-cand-left">
+                      {srcVid?(
+                        <>
+                          <div className="s2-cand-video-wrap" onClick={toggleCandPlay}>
+                            <video
+                              ref={candPreviewRef}
+                              src={srcVid.url}
+                              className="s2-cand-video"
+                              playsInline preload="metadata"
+                              onTimeUpdate={()=>{
+                                const vid=candPreviewRef.current; if(!vid||!pendingCand) return
+                                const t=vid.currentTime; setCandPrevTime(t)
+                                if(t>=pendingCand.cand.endSec){ vid.pause(); vid.currentTime=pendingCand.cand.startSec; setCandPrevPlay(false) }
+                              }}
+                              onEnded={()=>setCandPrevPlay(false)}
+                            />
+                            <div className={`s2-cand-play-btn${candPreviewPlaying?' playing':''}`}>
+                              {candPreviewPlaying
+                                ? <svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                : <svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                              }
+                            </div>
+                          </div>
+                          <div className="s2-cand-prog-bar">
+                            <span className="s2-cand-prog-t">{fmt(Math.max(0,candPreviewTime-pc.startSec))}</span>
+                            <div className="s2-cand-prog-track"><div className="s2-cand-prog-fill" style={{width:`${progPct}%`}}/></div>
+                            <span className="s2-cand-prog-t">{fmt(segDur)}</span>
+                          </div>
+                          <div className="s2-cand-range">{pc.startStr} – {pc.endStr} · 共 {fmt(segDur)}</div>
+                        </>
+                      ):(
+                        <div className="r3-cd-no-vid">无法加载源视频</div>
+                      )}
+                    </div>
+                    <div className="s2-cand-right">
+                      <div className="s2-cand-rel-section">
+                        <div className="s2-cand-section-title">替换关系</div>
+                        <div className="s2-cand-pos">{pComp&&<span className="r3-cd-comp-tag">{pComp.name}</span>} 第 {pSegIdx+1} 段</div>
+                        {pOrigSeg&&(
+                          <div className="s2-cand-rel-row">
+                            <div className="s2-cand-rel-col">
+                              <div className="s2-cand-rel-lbl">原片段</div>
+                              <span className="r3-cur-label" style={{color:SEG_TYPE_COLORS[pOrigSeg.type]||'#6366f1'}}>{pOrigSeg.label}</span>
+                              <span className="r3-cur-type" style={{color:SEG_TYPE_COLORS[pOrigSeg.type]||'#6366f1',borderColor:(SEG_TYPE_COLORS[pOrigSeg.type]||'#6366f1')+'44',background:(SEG_TYPE_COLORS[pOrigSeg.type]||'#6366f1')+'18'}}>{pOrigSeg.type}</span>
+                            </div>
+                            <div className="s2-cand-rel-arrow">→</div>
+                            <div className="s2-cand-rel-col">
+                              <div className="s2-cand-rel-lbl">候选</div>
+                              <span className="r3-cur-label" style={{color:pctc}}>{pc.label}</span>
+                              <span className="r3-cur-type" style={{color:pctc,borderColor:pctc+'44',background:pctc+'18'}}>{pc.type}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="s2-cand-info-section">
+                        <div className="s2-cand-section-title">片段信息</div>
+                        <div className="r3-cur-card">
+                          <div className="r3-cur-top">
+                            <span className="r3-cur-label" style={{color:pctc}}>{pc.label}</span>
+                            <span className="r3-cur-type" style={{color:pctc,borderColor:pctc+'44',background:pctc+'18'}}>{pc.type}</span>
+                            <span className="r3-cur-src">V{pc.videoIndex+1}</span>
+                          </div>
+                          <div className="r3-cur-time">{pc.startStr} – {pc.endStr}</div>
+                          {pc.subtitle&&<div className="r3-cur-sub" style={{marginTop:6}}>{pc.subtitle}</div>}
+                          {usedInComps.length>0&&<div className="r3-cd-used">⚠ 已用于：{usedInComps.map(c=>c.name).join('、')}</div>}
+                        </div>
+                      </div>
+                      <div className="s2-cand-actions">
+                        <button className="r3-cd-confirm" onClick={()=>{ replaceCompSeg(pCompId,pSegIdx,pc); showToast(`已替换为 ${pc.label}`); setPendingCand(null); setCandPrevPlay(false) }}>
+                          ✓ 确认替换
+                        </button>
+                        <button className="r3-cd-cancel" onClick={()=>{setPendingCand(null);setCandPrevPlay(false)}}>取消</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })() : (
             <div className="s2-compose-view">
               <div className="s2-compose-cols">
                 {/* LEFT: simplified material list */}
@@ -1125,106 +1227,6 @@ export default function App() {
                     const candsByType=allCands.reduce((g,c)=>{(g[c.type]=g[c.type]||[]).push(c);return g},{})
                     // fallback recs: adjacent segs from same video
                     const adjFallback=editSeg&&recs.length===0?allSelectedSegs.filter(c=>c.videoIndex===editSeg.videoIndex&&c.id!==editSeg.id&&!compSegIds.has(c.id)).slice(0,3):[]
-
-                    // ── candidate detail panel ──
-                    if (pendingCand) {
-                      const {cand:pc,compId:pCompId,segIdx:pSegIdx}=pendingCand
-                      const pctc=SEG_TYPE_COLORS[pc.type]||'#6366f1'
-                      const srcVid=uploadedVideos[pc.videoIndex]
-                      const usedInComps=compositions.filter(c=>c.id!==pCompId&&c.segments.some(s=>s.id===pc.id))
-                      const segDur=pc.endSec-pc.startSec
-                      const pComp=compositions.find(c=>c.id===pCompId)
-                      const pOrigSeg=pComp?.segments[pSegIdx]
-                      const progPct=segDur>0?Math.max(0,Math.min(100,((candPreviewTime-pc.startSec)/segDur)*100)):0
-                      function toggleCandPlay(){
-                        const vid=candPreviewRef.current; if(!vid) return
-                        if(candPreviewPlaying){ vid.pause(); setCandPrevPlay(false) }
-                        else {
-                          if(vid.currentTime<pc.startSec||vid.currentTime>=pc.endSec) vid.currentTime=pc.startSec
-                          vid.play().then(()=>setCandPrevPlay(true)).catch(()=>{})
-                        }
-                      }
-                      return (
-                        <>
-                          <div className="r3-edit-header">
-                            <button className="r3-back-btn" onClick={()=>{setPendingCand(null);setCandPrevPlay(false)}}>← 返回</button>
-                            <span className="r3-edit-title">候选预览</span>
-                          </div>
-
-                          {/* Replacement relationship */}
-                          <div className="r3-cd-rel">
-                            <div className="r3-cd-rel-pos">
-                              {pComp&&<span className="r3-cd-comp-tag">{pComp.name}</span>} 第 {pSegIdx+1} 段
-                            </div>
-                            {pOrigSeg&&(
-                              <div className="r3-cd-rel-row">
-                                <span className="r3-cd-rel-from" style={{color:SEG_TYPE_COLORS[pOrigSeg.type]||'#6366f1'}}>
-                                  {pOrigSeg.label}&nbsp;{pOrigSeg.type}
-                                </span>
-                                <span className="r3-cd-rel-arrow">→</span>
-                                <span className="r3-cd-rel-to" style={{color:pctc}}>
-                                  {pc.label}&nbsp;{pc.type}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Segment-limited video player */}
-                          {srcVid?(
-                            <div className="r3-cd-player">
-                              <div className="r3-cd-video-wrap" onClick={toggleCandPlay}>
-                                <video
-                                  ref={candPreviewRef}
-                                  src={srcVid.url}
-                                  className="r3-cd-video"
-                                  playsInline preload="metadata"
-                                  onTimeUpdate={()=>{
-                                    const vid=candPreviewRef.current; if(!vid||!pendingCand) return
-                                    const t=vid.currentTime; setCandPrevTime(t)
-                                    if(t>=pendingCand.cand.endSec){ vid.pause(); vid.currentTime=pendingCand.cand.startSec; setCandPrevPlay(false) }
-                                  }}
-                                  onEnded={()=>setCandPrevPlay(false)}
-                                />
-                                <div className={`r3-cd-play-btn${candPreviewPlaying?' playing':''}`}>
-                                  {candPreviewPlaying
-                                    ? <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                                    : <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-                                  }
-                                </div>
-                              </div>
-                              <div className="r3-cd-seg-bar">
-                                <span className="r3-cd-seg-t">{fmt(Math.max(0,candPreviewTime-pc.startSec))}</span>
-                                <div className="r3-cd-seg-prog"><div className="r3-cd-seg-fill" style={{width:`${progPct}%`}}/></div>
-                                <span className="r3-cd-seg-t">{fmt(segDur)}</span>
-                              </div>
-                              <div className="r3-cd-seg-range">{pc.startStr} – {pc.endStr} · 共 {fmt(segDur)}</div>
-                            </div>
-                          ):(
-                            <div className="r3-cd-no-vid">无法加载源视频</div>
-                          )}
-
-                          {/* Segment info */}
-                          <div className="r3-current" style={{paddingTop:6}}>
-                            <div className="r3-cur-card">
-                              <div className="r3-cur-top">
-                                <span className="r3-cur-label" style={{color:pctc}}>{pc.label}</span>
-                                <span className="r3-cur-type" style={{color:pctc,borderColor:pctc+'44',background:pctc+'18'}}>{pc.type}</span>
-                                <span className="r3-cur-src">V{pc.videoIndex+1}</span>
-                              </div>
-                              {pc.subtitle&&<div className="r3-cur-sub" style={{marginTop:4}}>{pc.subtitle}</div>}
-                              {usedInComps.length>0&&<div className="r3-cd-used">⚠ 已用于：{usedInComps.map(c=>c.name).join('、')}</div>}
-                            </div>
-                          </div>
-
-                          <div className="r3-cd-actions">
-                            <button className="r3-cd-confirm" onClick={()=>{ replaceCompSeg(pCompId,pSegIdx,pc); showToast(`已替换为 ${pc.label}`); setPendingCand(null); setCandPrevPlay(false) }}>
-                              ✓ 确认替换
-                            </button>
-                            <button className="r3-cd-cancel" onClick={()=>{setPendingCand(null);setCandPrevPlay(false)}}>取消</button>
-                          </div>
-                        </>
-                      )
-                    }
 
                     return (
                       <>
@@ -1411,6 +1413,7 @@ export default function App() {
                 </div>
               </div>
             </div>
+            )
           )}
 
           {/* 3-column workspace + bottom timeline (cut sub-step) */}
