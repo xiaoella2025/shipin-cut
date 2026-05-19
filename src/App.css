@@ -6322,32 +6322,46 @@ input[type=range] {
 }
 
 /* ── big play overlay button in main video area ── */
+/* ── big play overlay on main video (step 2) ── */
+/* When paused: large centered button; when playing: small corner button */
 .s2-vid-big-play {
   position: absolute;
-  bottom: 18px;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
-  width: 56px;
-  height: 56px;
+  transform: translate(-50%, -50%);
+  width: 62px;
+  height: 62px;
   border-radius: 50%;
-  background: rgba(0,0,0,.52);
-  border: 2px solid rgba(255,255,255,.28);
+  background: rgba(0,0,0,.58);
+  border: 2px solid rgba(255,255,255,.45);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 12;
-  transition: background .15s, border-color .15s, opacity .15s;
-  opacity: 0.85;
+  z-index: 20;
+  transition: background .15s, border-color .15s, width .18s, height .18s, top .18s, left .18s, transform .18s;
+  box-shadow: 0 2px 16px rgba(0,0,0,.55);
 }
 .s2-vid-big-play:hover {
-  opacity: 1;
-  background: rgba(0,0,0,.72);
-  border-color: rgba(255,255,255,.55);
+  background: rgba(0,0,0,.80);
+  border-color: rgba(255,255,255,.72);
 }
+/* When playing: shrink to small bottom-right corner, don't block video */
 .s2-vid-big-play.playing {
-  background: rgba(99,102,241,.45);
-  border-color: rgba(99,102,241,.75);
+  top: auto;
+  bottom: 48px;
+  left: auto;
+  right: 10px;
+  transform: none;
+  width: 36px;
+  height: 36px;
+  background: rgba(99,102,241,.60);
+  border-color: rgba(99,102,241,.85);
+  opacity: 0.7;
+}
+.s2-vid-big-play.playing:hover {
+  opacity: 1;
+  background: rgba(99,102,241,.85);
 }
 
 /* ── candidate detail panel ── */
