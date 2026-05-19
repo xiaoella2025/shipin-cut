@@ -132,6 +132,39 @@ function generateSegments(video, vidIndex) {
   }))
 }
 
+function generateSubtitles(video, vidIndex) {
+  const tpl   = SEGMENT_TEMPLATES[vidIndex % SEGMENT_TEMPLATES.length]
+  const dur   = video?.dur > 0 ? video.dur : 60
+  const count = tpl.length
+  const EXTRA = [
+    ['精彩内容即将开始', '请跟着我一起来'],
+    ['注意这里的细节', '大家可以暂停看'],
+    ['关键步骤来了', '注意力度要均匀'],
+    ['接下来非常重要', '按照这个方式操作'],
+    ['这里是重点', '认真学习这个步骤'],
+  ]
+  const extras = EXTRA[vidIndex % EXTRA.length]
+  const subs   = []
+  tpl.forEach((seg, si) => {
+    const segStart = (dur / count) * si
+    const segEnd   = (dur / count) * (si + 1)
+    const segDur   = segEnd - segStart
+    const subCount = si % 2 === 0 ? 2 : 3
+    for (let i = 0; i < subCount; i++) {
+      const subDur = segDur / subCount
+      const start  = segStart + subDur * i
+      const end    = start + subDur * 0.85
+      subs.push({
+        id:       `${video.id}-sub${si}-${i}`,
+        startSec: +start.toFixed(2),
+        endSec:   +end.toFixed(2),
+        text:     i === 0 ? seg.sub : (extras[i - 1] || `${seg.type} 内容 ${i}`),
+      })
+    }
+  })
+  return subs
+}
+
 // Build composition plans from selected segments (with labels like "1-1")
 function buildCompositions(segs) {
   if (!segs.length) return []
@@ -162,6 +195,10 @@ function buildCompositions(segs) {
     const totalDur = picked.reduce((acc, sg) => acc + (sg.endSec - sg.startSec), 0)
     return { id: `comp${ci}`, idx: ci, name: `成品视频 ${ci + 1}`, segments: picked, totalDur }
   })
+}
+
+function getSubtitlesForSeg(seg, subtitles) {
+  return subtitles.filter(s => s.startSec >= seg.startSec && s.startSec < seg.endSec)
 }
 
 // ─── sub-components ──────────────────────────────────────────────────────────
@@ -259,7 +296,7 @@ function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, compName
 
 // ─── CutTimeline ─────────────────────────────────────────────────────────────
 
-function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSelectCut, vidNum }) {
+function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSelectCut, vidNum, selectedSegIdx, onSelectSeg }) {
   if (!segs?.length || duration <= 0) {
     return <div className="cut-tl cut-tl-empty"><span>暂无分段数据</span></div>
   }
@@ -272,18 +309,19 @@ function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSe
     }}>
       {segs.map((seg, i) => {
         const tc = SEG_TYPE_COLORS[seg.type] || '#6366f1'
+        const isSelSeg = selectedSegIdx === i
         return (
           <div
             key={seg.id}
-            className={`cut-seg-blk ${!seg.selected ? 'unsel' : ''}`}
+            className={`cut-seg-blk ${!seg.selected ? 'unsel' : ''} ${isSelSeg ? 'seg-selected' : ''}`}
             style={{
               left: p(seg.startSec),
               width: p(seg.endSec - seg.startSec),
               background: seg.selected ? tc + 'cc' : tc + '44',
-              borderColor: tc,
               borderTop: `2px solid ${tc}`,
             }}
             title={`${vn}-${i+1} ${seg.type}: ${seg.startStr}–${seg.endStr}\n${seg.subtitle}`}
+            onClick={onSelectSeg ? e => { e.stopPropagation(); onSelectSeg(i) } : undefined}
           >
             <span className="cut-seg-num-lbl">{vn}-{i+1}</span>
             <span className="cut-seg-type-lbl">{seg.type}</span>
@@ -394,6 +432,7 @@ export default function App() {
   const [editorPlaying, setEditorPlaying]     = useState(false)
   const [selectedCutIdx, setSelectedCutIdx]   = useState(null)
   const [selectedSegIdx, setSelectedSegIdx]   = useState(null)
+  const [selectedSubIdx, setSelectedSubIdx]  = useState(null)
 
   // ── step-3 compositions ──
   const [compositions, setCompositions]   = useState([])
@@ -460,7 +499,12 @@ export default function App() {
   const editorVid      = useMemo(()=>uploadedVideos.find(v=>v.id===currentVideoId)||null, [uploadedVideos, currentVideoId])
   const editorAnalysis = useMemo(()=>videoAnalysis[currentVideoId]||null, [videoAnalysis, currentVideoId])
   const editorSegs     = editorAnalysis?.segments || []
-  const editorVidIdx   = useMemo(()=>uploadedVideos.findIndex(v=>v.id===currentVideoId), [uploadedVideos, currentVideoId])
+  const editorVidIdx    = useMemo(()=>uploadedVideos.findIndex(v=>v.id===currentVideoId), [uploadedVideos, currentVideoId])
+  const editorSubtitles = editorAnalysis?.subtitles || []
+  const currentSubIdx   = useMemo(()=>{
+    if (!editorSubtitles.length) return -1
+    return editorSubtitles.findIndex(s=>editorTime>=s.startSec&&editorTime<s.endSec)
+  }, [editorSubtitles, editorTime])
 
   // all selected segs with segment-level labels (1-1, 2-3, etc.)
   const allSelectedSegs = useMemo(()=>
@@ -518,7 +562,7 @@ export default function App() {
   }, [editorPlaying])
 
   useEffect(()=>{
-    setEditorTime(0); setEditorPlaying(false); setSelectedCutIdx(null); setSelectedSegIdx(null)
+    setEditorTime(0); setEditorPlaying(false); setSelectedCutIdx(null); setSelectedSegIdx(null); setSelectedSubIdx(null)
   }, [currentVideoId])
 
   // step 2 init
@@ -554,9 +598,10 @@ export default function App() {
         const vid    = uploadedVideosRef.current.find(v=>v.id===waiting.id)
         const vidIdx = uploadedVideosRef.current.findIndex(v=>v.id===waiting.id)
         const segs   = generateSegments(vid, vidIdx)
-        const subCnt = segs.length+Math.floor(Math.random()*4)+2
+        const subs   = generateSubtitles(vid, vidIdx)
+        const subCnt = subs.length
         setVideoAnalysis(prev=>{
-          const next={...prev,[waiting.id]:{status:'done',progress:100,segments:segs,subtitleCount:subCnt}}
+          const next={...prev,[waiting.id]:{status:'done',progress:100,segments:segs,subtitleCount:subCnt,subtitles:subs}}
           videoAnalysisRef.current=next
           return next
         })
