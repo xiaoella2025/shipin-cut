@@ -297,13 +297,30 @@ function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, compName
 // ─── CutTimeline ─────────────────────────────────────────────────────────────
 
 function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSelectCut, vidNum, selectedSegIdx, onSelectSeg }) {
+  const tlRef   = useRef(null)
+  const dragRef = useRef(false)
+
+  useEffect(()=>{
+    const onMove=e=>{
+      if(!dragRef.current||!tlRef.current||duration<=0) return
+      const r=tlRef.current.getBoundingClientRect()
+      const t=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*duration
+      onSeek(t)
+    }
+    const onUp=()=>{dragRef.current=false; document.body.style.userSelect=''}
+    document.addEventListener('mousemove',onMove)
+    document.addEventListener('mouseup',onUp)
+    return()=>{ document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp) }
+  },[duration,onSeek])
+
   if (!segs?.length || duration <= 0) {
     return <div className="cut-tl cut-tl-empty"><span>暂无分段数据</span></div>
   }
   const p  = sec => pctOf(sec, duration)
   const vn = vidNum >= 0 ? vidNum + 1 : 1
   return (
-    <div className="cut-tl" onClick={e => {
+    <div ref={tlRef} className="cut-tl" onClick={e => {
+      if(dragRef.current) return
       const r = e.currentTarget.getBoundingClientRect()
       onSeek(((e.clientX - r.left) / r.width) * duration)
     }}>
@@ -337,8 +354,19 @@ function CutTimeline({ segs, duration, currentTime, selectedCutIdx, onSeek, onSe
           title={`切割点 @ ${fmt(seg.endSec)} — 点击选中`}
         />
       ))}
-      <div className="cut-playhead" style={{ left: p(currentTime) }}>
+      <div
+        className="cut-playhead"
+        style={{ left: p(currentTime) }}
+        onMouseDown={e=>{
+          e.preventDefault(); e.stopPropagation()
+          dragRef.current=true
+          document.body.style.userSelect='none'
+        }}
+        title={fmtMs(currentTime)}
+      >
+        <div className="cut-playhead-head"/>
         <div className="cut-playhead-line" />
+        <div className="cut-playhead-time">{fmtMs(currentTime)}</div>
       </div>
     </div>
   )
@@ -430,9 +458,12 @@ export default function App() {
   const [currentVideoId, setCurrentVideoId]   = useState(null)
   const [editorTime, setEditorTime]           = useState(0)
   const [editorPlaying, setEditorPlaying]     = useState(false)
+  const [playingSegEnd, setPlayingSegEnd]     = useState(null)
   const [selectedCutIdx, setSelectedCutIdx]   = useState(null)
   const [selectedSegIdx, setSelectedSegIdx]   = useState(null)
   const [selectedSubIdx, setSelectedSubIdx]  = useState(null)
+  const [expandedSegs, setExpandedSegs]       = useState({})
+  const [subStep, setSubStep]                 = useState('cut')
 
   // ── step-3 compositions ──
   const [compositions, setCompositions]     = useState([])
@@ -471,6 +502,8 @@ export default function App() {
   const currentlyAnalyzingRef = useRef(null)
   const uploadedVideosRef     = useRef([])
   const videoAnalysisRef      = useRef({})
+  const scrubberRef           = useRef(null)
+  const scrubDragRef          = useRef(false)
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -569,6 +602,20 @@ export default function App() {
   useEffect(()=>{
     setEditorTime(0); setEditorPlaying(false); setSelectedCutIdx(null); setSelectedSegIdx(null); setSelectedSubIdx(null)
   }, [currentVideoId])
+
+  // scrubber drag
+  useEffect(()=>{
+    const onMove=e=>{
+      if(!scrubDragRef.current||!scrubberRef.current||!editorVid) return
+      const r=scrubberRef.current.getBoundingClientRect()
+      const t=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))
+      handleEditorSeek(t*editorVid.dur)
+    }
+    const onUp=()=>{scrubDragRef.current=false; document.body.style.userSelect=''}
+    document.addEventListener('mousemove',onMove)
+    document.addEventListener('mouseup',onUp)
+    return ()=>{ document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp) }
+  },[editorVid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // step 2 init
   useEffect(()=>{
@@ -756,6 +803,7 @@ export default function App() {
           const comps = buildCompositions(freshSegs)
           setCompositions(comps)
           setSelectedCompId(comps[0]?.id ?? null)
+          setSubStep('compose')
         }, 400)
       } else { setGenProg(p) }
     }, 220)
@@ -1133,7 +1181,13 @@ export default function App() {
                     ref={editorVideoRef} key={currentVideoId}
                     src={editorVid.url} className="s2-video-el"
                     preload="auto" playsInline
-                    onTimeUpdate={()=>{ if(editorVideoRef.current) setEditorTime(editorVideoRef.current.currentTime) }}
+                    onTimeUpdate={()=>{
+                      if(editorVideoRef.current){
+                        const t=editorVideoRef.current.currentTime
+                        setEditorTime(t)
+                        if(playingSegEnd!==null && t>=playingSegEnd){ setEditorPlaying(false); setPlayingSegEnd(null) }
+                      }
+                    }}
                     onEnded={()=>setEditorPlaying(false)}
                   />
                 )}
@@ -1170,7 +1224,7 @@ export default function App() {
               <div className="s2-player-ctrl">
                 <button
                   className="s2-play-btn"
-                  onClick={()=>setEditorPlaying(p=>!p)}
+                  onClick={()=>{ setEditorPlaying(p=>{ if(p) setPlayingSegEnd(null); return !p }) }}
                   disabled={!editorVid||!['done','confirmed'].includes(editorAnalysis?.status)}
                 >
                   {editorPlaying
@@ -1178,7 +1232,17 @@ export default function App() {
                     : <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                   }
                 </button>
-                <div className="s2-scrubber" onClick={e=>{ const r=e.currentTarget.getBoundingClientRect(); handleEditorSeek(((e.clientX-r.left)/r.width)*(editorVid?.dur||0)) }}>
+                <div
+                  ref={scrubberRef}
+                  className="s2-scrubber"
+                  onMouseDown={e=>{
+                    e.preventDefault()
+                    const r=e.currentTarget.getBoundingClientRect()
+                    handleEditorSeek(((e.clientX-r.left)/r.width)*(editorVid?.dur||0))
+                    scrubDragRef.current=true
+                    document.body.style.userSelect='none'
+                  }}
+                >
                   <div className="s2-scrub-fill" style={{width:editorVid?.dur>0?pctOf(editorTime,editorVid.dur):'0%'}}/>
                   <div className="s2-scrub-thumb" style={{left:editorVid?.dur>0?pctOf(editorTime,editorVid.dur):'0%'}}/>
                 </div>
@@ -1321,13 +1385,30 @@ export default function App() {
                       </label>
                     </div>
                     <div className="s2-seg-card-time">{seg.startStr} – {seg.endStr}</div>
-                    <div className="s2-seg-card-subs">
-                      {segSubs.length>0?segSubs.map(s=>(
-                        <div key={s.id} className="s2-seg-card-sub">{s.text}</div>
-                      )):<div className="s2-seg-card-no-sub">—</div>}
-                    </div>
+                    {(()=>{
+                      const isExp=!!expandedSegs[seg.id]
+                      const displaySubs=segSubs.length>0?segSubs:[{id:'nosub',text:seg.subtitle||'—'}]
+                      const needsExpand=displaySubs.length>2||displaySubs.some(s=>s.text.length>20)
+                      const shown=(!needsExpand||isExp)?displaySubs:displaySubs.slice(0,2)
+                      return (
+                        <div className="s2-seg-card-subs">
+                          {shown.map((s,si)=>(
+                            <div key={s.id||si} className="s2-seg-card-sub">{s.text}</div>
+                          ))}
+                          {needsExpand&&(
+                            <button className="s2-seg-card-expand" onClick={e=>{e.stopPropagation();setExpandedSegs(p=>({...p,[seg.id]:!p[seg.id]}))}}>
+                              {isExp?'▲ 收起':`▼ 展开 +${displaySubs.length-2} 条`}
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })()}
                     <div className="s2-seg-card-acts">
-                      <button className="s2-seg-act" onClick={e=>{ e.stopPropagation(); handleEditorSeek(seg.startSec); setEditorPlaying(true) }}>▶</button>
+                      {(()=>{ const playing=editorPlaying&&editorTime>=seg.startSec&&editorTime<seg.endSec; return (
+                        <button className="s2-seg-act" onClick={e=>{e.stopPropagation(); if(playing){setEditorPlaying(false);setPlayingSegEnd(null)}else{handleEditorSeek(seg.startSec);setEditorPlaying(true);setPlayingSegEnd(seg.endSec)}}}>
+                          {playing?'⏸':'▶'}
+                        </button>
+                      )})()}
                       {i>0&&<button className="s2-seg-act" onClick={e=>{ e.stopPropagation(); mergeSegs(i-1) }}>←并</button>}
                       {i<editorSegs.length-1&&<button className="s2-seg-act" onClick={e=>{ e.stopPropagation(); mergeSegs(i) }}>并→</button>}
                       <button className="s2-seg-act s2-seg-act-split" onClick={e=>{ e.stopPropagation(); splitSegAtMiddle(i) }}>拆</button>
@@ -1345,11 +1426,11 @@ export default function App() {
 
           {/* footer */}
           <div className="step-footer">
-            <button className="step-back-btn" onClick={()=>setStep(1)}>
+            <button className="step-back-btn" onClick={()=>{ if(subStep==='compose'){setSubStep('cut')}else{setStep(1)} }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-              返回素材准备
+              {subStep==='compose'?'返回切片配置':'返回素材准备'}
             </button>
-            {!isGenerated?(
+            {subStep==='cut'&&!isGenerated&&(
               <button
                 className={`step-next-btn s2s-gen-btn ${totalSelectedSegs===0?'disabled':''}`}
                 onClick={()=>totalSelectedSegs===0?showToast('请先勾选要参与混剪的片段'):handleGenerate()}
@@ -1358,9 +1439,16 @@ export default function App() {
                 确认片段，生成混剪方案
                 {totalSelectedSegs>0&&<span className="s2s-gen-count">{totalSelectedSegs}</span>}
               </button>
-            ):(
+            )}
+            {subStep==='cut'&&isGenerated&&(
+              <button className="step-next-btn" onClick={()=>setSubStep('compose')}>
+                查看组合方案
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+            )}
+            {subStep==='compose'&&(
               <button className="step-next-btn" onClick={()=>setStep(3)}>
-                下一步：预览导出
+                确认方案，进入预览导出
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
               </button>
             )}
@@ -1394,7 +1482,7 @@ export default function App() {
                 ))}
               </div>
               <div className="s3-mat-footer">
-                <button className="s3-back-link" onClick={()=>{ setPlaying(false); setStep(2) }}>
+                <button className="s3-back-link" onClick={()=>{ setPlaying(false); setSubStep('cut'); setStep(2) }}>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
                   返回分段配置
                 </button>
@@ -1463,7 +1551,7 @@ export default function App() {
               </div>
 
               <div className="action-row">
-                <button className="btn-ghost" onClick={()=>{ setPlaying(false); setStep(2) }}>
+                <button className="btn-ghost" onClick={()=>{ setPlaying(false); setSubStep('cut'); setStep(2) }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
                   重新配置
                 </button>
