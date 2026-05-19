@@ -212,13 +212,22 @@ function Toggle({ on, onToggle }) {
 }
 
 function BatchExportModal({ comps, exportRes, exportFps, ratio, dedup, onClose, onComplete }) {
-  const [statuses, setStatuses] = useState(()=>Object.fromEntries(comps.map((c,i)=>[c.id,i===0?'exporting':'waiting'])))
+  const today = new Date().toISOString().slice(0,10)
+  const [batchPhase, setBatchPhase] = useState('config') // 'config' | 'exporting'
+  const [nameRule, setNameRule] = useState('混剪成品_{序号}_{日期}')
+  const [statuses, setStatuses] = useState(()=>Object.fromEntries(comps.map(c=>[c.id,'waiting'])))
   const [currentIdx, setCurrentIdx] = useState(0)
   const [prog, setProg] = useState(0)
   const [allDone, setAllDone] = useState(false)
-  const enabledDedup = Object.entries(dedup).filter(([,v])=>v).map(([k])=>DEDUP_META[k])
+  function resolveFileName(rule, idx, comp) {
+    return rule
+      .replace(/{序号}/g, String(idx+1).padStart(2,'0'))
+      .replace(/{日期}/g, today)
+      .replace(/{成品名}/g, comp.name) + '.mp4'
+  }
   useEffect(()=>{
-    if(allDone) return
+    if(batchPhase!=='exporting'||allDone) return
+    setStatuses(prev=>({...prev,[comps[currentIdx]?.id]:'exporting'}))
     let p=0
     const iv=setInterval(()=>{
       p+=Math.random()*8+4
@@ -230,16 +239,18 @@ function BatchExportModal({ comps, exportRes, exportFps, ratio, dedup, onClose, 
           setAllDone(true)
           onComplete(comps.map(c=>c.id))
         } else {
-          setStatuses(prev=>({...prev,[comps[currentIdx].id]:'done',[comps[nextIdx].id]:'exporting'}))
-          setCurrentIdx(nextIdx); setProg(0)
+          setStatuses(prev=>({...prev,[comps[currentIdx].id]:'done'}))
+          setCurrentIdx(nextIdx)
+          setProg(0)
         }
       } else setProg(p)
     },220)
     return()=>clearInterval(iv)
-  },[currentIdx,allDone]) // eslint-disable-line react-hooks/exhaustive-deps
+  },[batchPhase,currentIdx,allDone]) // eslint-disable-line react-hooks/exhaustive-deps
+  const enabledDedup = Object.entries(dedup).filter(([,v])=>v)
   return (
     <div className="overlay" onClick={allDone?onClose:undefined}>
-      <div className="export-modal" onClick={e=>e.stopPropagation()} style={{width:460}}>
+      <div className="export-modal batch-modal" onClick={e=>e.stopPropagation()}>
         <div className="export-modal-header">
           <div className="export-modal-title">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -251,51 +262,113 @@ function BatchExportModal({ comps, exportRes, exportFps, ratio, dedup, onClose, 
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           当前为原型模拟导出，不会生成真实 MP4 文件
         </div>
-        <div className="export-settings-summary" style={{marginBottom:0}}>
+        <div className="export-settings-summary">
           {[['格式','MP4 (H.264)'],['分辨率',exportRes==='1080p'?'1920×1080':'1280×720'],['帧率',exportFps],['比例',ratio],['数量',`${comps.length} 个`]].map(([l,v])=>(
             <div key={l} className="export-setting-card"><span className="esc-label">{l}</span><span className="esc-val">{v}</span></div>
           ))}
         </div>
-        <div className="batch-export-list">
-          {comps.map((comp,ci)=>{
-            const st=statuses[comp.id]
-            return (
-              <div key={comp.id} className={`batch-export-item batch-st-${st}`}>
-                <div className="batch-export-item-info">
-                  <span className="batch-export-name">{comp.name}</span>
-                  <span className="batch-export-meta">{fmt(comp.totalDur)} · {comp.segments.length} 片段</span>
-                </div>
-                <div className="batch-export-status">
-                  {st==='done'&&<span className="batch-status-label done">✓ 完成</span>}
-                  {st==='exporting'&&(
-                    <div className="batch-exporting-row">
-                      <div className="batch-mini-bar"><div className="batch-mini-fill" style={{width:`${prog}%`}}/></div>
-                      <span className="batch-status-label exporting">{Math.round(prog)}%</span>
-                    </div>
-                  )}
-                  {st==='waiting'&&<span className="batch-status-label waiting">等待中</span>}
+
+        {batchPhase==='config'&&(
+          <>
+            <div className="export-file-section">
+              <div className="export-file-row">
+                <label className="export-file-label">批量命名规则</label>
+                <div className="export-file-input-wrap" style={{flex:1}}>
+                  <input className="export-file-input" value={nameRule} onChange={e=>setNameRule(e.target.value||'混剪成品_{序号}_{日期}')} maxLength={50}/>
+                  <span className="export-file-ext">.mp4</span>
                 </div>
               </div>
-            )
-          })}
-        </div>
-        {allDone?(
-          <div className="batch-done-banner">✓ 全部模拟导出完成 · 共 {comps.length} 个成品视频</div>
-        ):(
-          <div className="batch-progress-status">正在模拟导出 {currentIdx+1}/{comps.length}：{comps[currentIdx]?.name}</div>
+              <div className="export-batch-vars">
+                可用变量：
+                <span className="export-var-chip">{'{序号}'} = 01、02…</span>
+                <span className="export-var-chip">{'{日期}'} = {today}</span>
+                <span className="export-var-chip">{'{成品名}'} = 成品视频1…</span>
+              </div>
+            </div>
+            <div className="export-batch-preview">
+              <div className="export-batch-preview-title">文件名预览</div>
+              {comps.map((comp,ci)=>(
+                <div key={comp.id} className="export-batch-preview-row">
+                  <span className="export-batch-preview-comp">{comp.name}</span>
+                  <span className="export-batch-preview-file">{resolveFileName(nameRule,ci,comp)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="export-file-section" style={{borderTop:'1px solid var(--bdr)',marginTop:0}}>
+              <div className="export-file-row">
+                <label className="export-file-label">保存位置</label>
+                <div className="export-save-loc">
+                  <span className="export-save-path">本地默认导出文件夹（原型模拟）</span>
+                  <button className="export-save-browse" disabled>选择文件夹</button>
+                </div>
+              </div>
+              <div className="export-save-hint">当前为网页原型，暂不支持选择真实本地文件夹。真实版本将在本地软件阶段支持选择保存目录。</div>
+            </div>
+            <div className="export-action-row">
+              <button className="export-cancel-btn" onClick={onClose}>取消</button>
+              <button className="export-confirm-btn" onClick={()=>{
+                setBatchPhase('exporting')
+                setStatuses(Object.fromEntries(comps.map((c,i)=>[c.id,i===0?'exporting':'waiting'])))
+              }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                开始批量导出
+              </button>
+            </div>
+          </>
         )}
-        <div className="export-action-row">
-          <button className="export-cancel-btn" style={{flex:1}} onClick={onClose}>{allDone?'关闭':'取消'}</button>
-        </div>
+
+        {batchPhase==='exporting'&&(
+          <>
+            <div className="batch-export-list">
+              {comps.map((comp,ci)=>{
+                const st=statuses[comp.id]
+                const fname=resolveFileName(nameRule,ci,comp)
+                return (
+                  <div key={comp.id} className={`batch-export-item batch-st-${st}`}>
+                    <div className="batch-export-item-info">
+                      <span className="batch-export-name">{comp.name}</span>
+                      <span className="batch-export-meta">{fmt(comp.totalDur)} · {comp.segments.length} 片段</span>
+                      <span className="batch-export-fname">{fname}</span>
+                    </div>
+                    <div className="batch-export-status">
+                      {st==='done'&&<span className="batch-status-label done">✓ 完成</span>}
+                      {st==='exporting'&&(
+                        <div className="batch-exporting-row">
+                          <div className="batch-mini-bar"><div className="batch-mini-fill" style={{width:`${prog}%`}}/></div>
+                          <span className="batch-status-label exporting">{Math.round(prog)}%</span>
+                        </div>
+                      )}
+                      {st==='waiting'&&<span className="batch-status-label waiting">等待中</span>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {allDone?(
+              <>
+                <div className="export-done-loc" style={{margin:'6px 0'}}>保存位置：本地默认导出文件夹（原型模拟）</div>
+                <div className="batch-done-banner">✓ 全部模拟导出完成 · 共 {comps.length} 个成品视频</div>
+              </>
+            ):(
+              <div className="batch-progress-status">正在模拟导出 {currentIdx+1}/{comps.length}：{comps[currentIdx]?.name}</div>
+            )}
+            <div className="export-action-row">
+              <button className="export-cancel-btn" style={{flex:1}} onClick={onClose}>{allDone?'关闭':'取消'}</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
 }
 
-function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, compName, onConfirm, onClose }) {
+function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, compName, defaultFileName, onConfirm, onClose }) {
   const enabledDedup = Object.entries(dedup).filter(([,v])=>v).map(([k])=>DEDUP_META[k])
   const EXPORT_STEPS = ['初始化编码器','处理视频轨道','混合音频','应用去重处理','封装 MP4']
   const stepIdx = Math.min(Math.floor(prog / 22), EXPORT_STEPS.length - 1)
+  const [fileName, setFileName] = useState(defaultFileName||'混剪成品.mp4')
+  useEffect(()=>{ setFileName(defaultFileName||'混剪成品.mp4') }, [defaultFileName])
+  const nameNoExt = fileName.replace(/\.mp4$/i,'')
   return (
     <div className="overlay" onClick={phase==='confirm'&&prog===0?onClose:undefined}>
       <div className="export-modal" onClick={e=>e.stopPropagation()}>
@@ -311,9 +384,32 @@ function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, compName
             <button className="import-close" onClick={onClose}>✕</button>
           </div>
           <div className="export-settings-summary">
-            {[['格式','MP4 (H.264)'],['分辨率',exportRes==='1080p'?'1920×1080':'1280×720'],['帧率',exportFps],['比例',ratio],['时长','00:30'],['预计大小',`~${exportRes==='1080p'?'148':'64'} MB`]].map(([l,v])=>(
+            {[['格式','MP4 (H.264)'],['分辨率',exportRes==='1080p'?'1920×1080':'1280×720'],['帧率',exportFps],['比例',ratio],['预计大小',`~${exportRes==='1080p'?'148':'64'} MB`]].map(([l,v])=>(
               <div key={l} className="export-setting-card"><span className="esc-label">{l}</span><span className="esc-val">{v}</span></div>
             ))}
+          </div>
+          <div className="export-file-section">
+            <div className="export-file-row">
+              <label className="export-file-label">文件名</label>
+              <div className="export-file-input-wrap">
+                <input
+                  className="export-file-input"
+                  value={nameNoExt}
+                  onChange={e=>setFileName((e.target.value||'混剪成品')+'.mp4')}
+                  maxLength={60}
+                  placeholder="输入文件名"
+                />
+                <span className="export-file-ext">.mp4</span>
+              </div>
+            </div>
+            <div className="export-file-row">
+              <label className="export-file-label">保存位置</label>
+              <div className="export-save-loc">
+                <span className="export-save-path">本地默认导出文件夹（原型模拟）</span>
+                <button className="export-save-browse" disabled title="真实版本将在本地软件阶段支持选择保存目录">选择文件夹</button>
+              </div>
+            </div>
+            <div className="export-save-hint">当前为网页原型，暂不支持选择真实本地文件夹。真实版本将在本地软件阶段支持。</div>
           </div>
           <div className="export-dedup-section">
             <div className="export-dedup-title">已应用去重处理（{enabledDedup.length} 项）</div>
@@ -362,11 +458,13 @@ function ExportModal({ phase, prog, exportRes, exportFps, ratio, dedup, compName
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
             </div>
             <h3>导出完成（模拟）</h3>
-            <p>当前为原型模拟，不会生成真实 MP4 文件。在真实版本中，视频将保存至本地。</p>
+            <p>当前为原型模拟，不会生成真实 MP4 文件。</p>
             <div className="export-done-file">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              混剪成品_{new Date().toISOString().slice(0,10)}.mp4 · {exportRes} · {exportFps}
+              {fileName}
             </div>
+            <div className="export-done-meta">{exportRes} · {exportFps} · {ratio}</div>
+            <div className="export-done-loc">保存位置：本地默认导出文件夹（原型模拟）</div>
             <button className="import-done-btn" style={{marginTop:16}} onClick={onClose}>关闭</button>
           </div>
         )}
@@ -1035,7 +1133,12 @@ export default function App() {
 
       {toast && <div className="toast">{toast}</div>}
 
-      {showExport && <ExportModal phase={exportPhase} prog={exportProg} exportRes={exportRes} exportFps={exportFps} ratio={ratio} dedup={dedup} compName={exportCompName} onConfirm={handleExportConfirm} onClose={handleExportClose}/>}
+      {showExport && (()=>{
+        const expComp=compositions.find(c=>c.id===exportingCompId)
+        const today=new Date().toISOString().slice(0,10)
+        const defName=expComp?`混剪成品_${expComp.name}_${today}.mp4`:`混剪成品_${today}.mp4`
+        return <ExportModal phase={exportPhase} prog={exportProg} exportRes={exportRes} exportFps={exportFps} ratio={ratio} dedup={dedup} compName={exportCompName} defaultFileName={defName} onConfirm={handleExportConfirm} onClose={handleExportClose}/>
+      })()}
 
       {isGenerating && (
         <div className="overlay">
@@ -2087,6 +2190,24 @@ export default function App() {
                 </div>
               )
             })()}
+
+            {selectedComp&&(
+              <div className="s3v2-right-section">
+                <div className="s3v2-right-sec-head">导出文件</div>
+                <div className="s3v2-param-grid">
+                  <div className="s3v2-param-row s3v2-param-col">
+                    <span>文件名</span>
+                    <span className="s3v2-param-val s3v2-fname-val">
+                      {`混剪成品_${selectedComp.name}_${new Date().toISOString().slice(0,10)}.mp4`}
+                    </span>
+                  </div>
+                  <div className="s3v2-param-row s3v2-param-col">
+                    <span>保存位置</span>
+                    <span className="s3v2-param-val">本地默认导出文件夹（原型模拟）</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="s3v2-right-section">
               <div className="s3v2-right-sec-head">导出参数</div>

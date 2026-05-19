@@ -7248,3 +7248,168 @@ input[type=range] {
   padding: 6px;
   margin-bottom: 4px;
 }
+
+/* ── Export file name / save location UI ── */
+.export-file-section {
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid var(--bdr);
+}
+.export-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.export-file-label {
+  font-size: 11px;
+  color: var(--text-lo);
+  flex-shrink: 0;
+  width: 70px;
+}
+.export-file-input-wrap {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--bdr-hi);
+  border-radius: 5px;
+  overflow: hidden;
+  flex: 1;
+  background: var(--bg-surf);
+}
+.export-file-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-hi);
+  font-size: 12px;
+  padding: 5px 8px;
+  min-width: 0;
+}
+.export-file-input:focus { background: rgba(255,255,255,.03); }
+.export-file-ext {
+  font-size: 11px;
+  color: #6366f1;
+  background: rgba(99,102,241,.12);
+  padding: 5px 8px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--bdr);
+  font-weight: 600;
+}
+.export-save-loc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+.export-save-path {
+  font-size: 11px;
+  color: var(--text-hi);
+  background: var(--bg-surf);
+  border: 1px solid var(--bdr);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.export-save-browse {
+  font-size: 10px;
+  color: var(--text-lo);
+  background: transparent;
+  border: 1px solid var(--bdr);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: not-allowed;
+  opacity: .5;
+}
+.export-save-hint {
+  font-size: 10px;
+  color: var(--text-lo);
+  line-height: 1.5;
+  padding-left: 80px;
+}
+/* batch naming */
+.export-batch-vars {
+  font-size: 10px;
+  color: var(--text-lo);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  padding-left: 80px;
+}
+.export-var-chip {
+  background: rgba(99,102,241,.12);
+  color: #818cf8;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+}
+.export-batch-preview {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--bdr);
+  max-height: 160px;
+  overflow-y: auto;
+}
+.export-batch-preview-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-lo);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 6px;
+}
+.export-batch-preview-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  font-size: 11px;
+}
+.export-batch-preview-comp {
+  color: var(--text-lo);
+  flex-shrink: 0;
+  width: 80px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.export-batch-preview-file {
+  color: var(--text-hi);
+  word-break: break-all;
+}
+/* batch export modal width */
+.batch-modal { width: 500px !important; }
+.batch-export-fname {
+  font-size: 9px;
+  color: var(--text-lo);
+  margin-top: 2px;
+  word-break: break-all;
+}
+/* done screen additions */
+.export-done-meta {
+  font-size: 11px;
+  color: var(--text-lo);
+  margin-top: 4px;
+}
+.export-done-loc {
+  font-size: 10px;
+  color: var(--text-lo);
+  background: var(--bg-surf);
+  border: 1px solid var(--bdr);
+  border-radius: 4px;
+  padding: 5px 10px;
+  margin-top: 6px;
+}
+/* right panel filename column layout */
+.s3v2-param-row.s3v2-param-col {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+.s3v2-fname-val {
+  font-size: 10px !important;
+  word-break: break-all;
+  color: #818cf8 !important;
+}
