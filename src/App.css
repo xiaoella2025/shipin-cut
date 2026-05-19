@@ -5950,3 +5950,275 @@ input[type=range] {
   max-width: calc(100% - 8px);
   pointer-events: none;
 }
+
+/* ── Step 3 composition editing ── */
+.comp-seg-blk {
+  cursor: pointer;
+  position: relative;
+}
+.comp-seg-blk:hover {
+  filter: brightness(1.15);
+}
+.comp-seg-blk.editing {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+  filter: brightness(1.2);
+  z-index: 2;
+}
+.comp-seg-blk.locked::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(45deg,transparent,transparent 4px,rgba(0,0,0,.18) 4px,rgba(0,0,0,.18) 5px);
+  pointer-events: none;
+}
+.comp-seg-lock {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 9px;
+  line-height: 1;
+  background: rgba(0,0,0,.35);
+  border: none;
+  border-radius: 3px;
+  padding: 1px 2px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.comp-seg-blk:hover .comp-seg-lock,
+.comp-seg-blk.locked .comp-seg-lock {
+  opacity: 1;
+}
+.comp-seg-lock.on {
+  background: rgba(0,0,0,.55);
+}
+
+.comp-regen-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(99,102,241,.5);
+  background: rgba(99,102,241,.12);
+  color: #a5b4fc;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+.comp-regen-btn:hover {
+  background: rgba(99,102,241,.28);
+}
+
+/* right panel edit mode */
+.r3-edit-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  flex-shrink: 0;
+}
+.r3-back-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,.15);
+  background: rgba(255,255,255,.06);
+  color: #94a3b8;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.r3-back-btn:hover { background: rgba(255,255,255,.12); color: #e2e8f0; }
+.r3-edit-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.r3-edit-comp {
+  font-size: 10px;
+  color: #64748b;
+  margin-left: auto;
+}
+
+.r3-current {
+  padding: 10px 14px 6px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.r3-cur-head {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+.r3-cur-card {
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.r3-cur-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.r3-cur-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+.r3-cur-type {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid;
+}
+.r3-cur-src {
+  font-size: 10px;
+  color: #64748b;
+  margin-left: auto;
+}
+.r3-cur-time {
+  font-size: 10px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 3px;
+}
+.r3-cur-sub {
+  font-size: 10px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r3-rec-section {
+  padding: 10px 14px 6px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.r3-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.r3-sec-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #64748b;
+}
+.r3-sec-hint {
+  font-size: 9px;
+  color: #94a3b8;
+  margin-left: auto;
+}
+.r3-no-recs {
+  font-size: 11px;
+  color: #475569;
+  padding: 4px 0;
+}
+
+.r3-cand-item {
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 5px;
+  padding: 7px 9px;
+  margin-bottom: 5px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.r3-cand-item:hover {
+  background: rgba(99,102,241,.12);
+  border-color: rgba(99,102,241,.4);
+}
+.r3-cand-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 3px;
+}
+.r3-cand-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+.r3-cand-type {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid;
+}
+.r3-cand-src {
+  font-size: 10px;
+  color: #64748b;
+  margin-left: auto;
+}
+.r3-cand-time {
+  font-size: 10px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 2px;
+}
+.r3-cand-sub {
+  font-size: 10px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.r3-cand-sm {
+  font-size: 9px;
+  color: #475569;
+}
+
+.r3-all-section {
+  padding: 8px 14px 10px;
+}
+.r3-all-toggle {
+  width: 100%;
+  text-align: left;
+  font-size: 11px;
+  color: #64748b;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color .15s;
+}
+.r3-all-toggle:hover { color: #94a3b8; }
+.r3-all-count {
+  font-size: 10px;
+  background: rgba(255,255,255,.08);
+  border-radius: 10px;
+  padding: 0 6px;
+  margin-left: auto;
+}
+.r3-all-list {
+  margin-top: 6px;
+}
+.r3-type-group {
+  margin-bottom: 8px;
+}
+.r3-type-group-head {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: #475569;
+  margin-bottom: 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+}
+
+.r3-hint-text {
+  font-size: 11px;
+  color: #475569;
+  text-align: center;
+  padding: 6px 0;
+  line-height: 1.5;
+}
