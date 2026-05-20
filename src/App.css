@@ -5672,7 +5672,7 @@ input[type=range] {
 
 /* ── Right panel: subtitle list ── */
 .s2-right-panel {
-  width: 264px;
+  width: 320px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -5745,6 +5745,22 @@ input[type=range] {
 .s2-sub-row.selected { background: rgba(91,106,240,0.07); }
 .s2-sub-row.current.selected { background: rgba(91,106,240,0.14); }
 
+.s2-sub-idx-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  min-width: 28px;
+}
+.s2-sub-num {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--txt-3);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.s2-sub-row.current .s2-sub-num { color: var(--accent); }
 .s2-sub-time {
   font-size: 9px;
   color: var(--txt-3);
@@ -5764,8 +5780,8 @@ input[type=range] {
 .s2-sub-text {
   font-size: 11px;
   color: var(--txt-2);
-  line-height: 1.45;
-  word-break: break-all;
+  line-height: 1.5;
+  word-break: break-word;
 }
 .s2-sub-row.current .s2-sub-text { color: var(--txt); font-weight: 600; }
 .s2-sub-seg {
@@ -7544,4 +7560,43 @@ input[type=range] {
   margin: 2px 0 4px;
   word-break: break-all;
   line-height: 1.5;
+}
+
+/* ── v0.4.1: UX improvements ─────────────────────────────────────────────── */
+
+/* Undo button in timeline header */
+.s2-undo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--bdr-hi);
+  background: var(--bg-surf);
+  color: var(--txt-2);
+  font-size: 10px;
+  cursor: pointer;
+  margin-left: auto;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.s2-undo-btn:hover:not(:disabled) {
+  background: var(--bg-lift);
+  color: var(--txt);
+}
+.s2-undo-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Delete/replace video hint in left panel */
+.s2-vid-manage-hint {
+  font-size: 9px;
+  color: var(--txt-3);
+  padding: 5px 10px 4px;
+  background: var(--bg-surf2, #0f0f17);
+  border-bottom: 1px solid var(--bdr);
+  line-height: 1.4;
+  opacity: 0.8;
 }

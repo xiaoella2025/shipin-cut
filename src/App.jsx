@@ -677,6 +677,7 @@ export default function App() {
   const [selectedSegIdx, setSelectedSegIdx]   = useState(null)
   const [selectedSubIdx, setSelectedSubIdx]  = useState(null)
   const [expandedSegs, setExpandedSegs]       = useState({})
+  const [prevSegmentsForUndo, setPrevSegmentsForUndo] = useState(null) // { videoId, segments }
   const [subStep, setSubStep]                 = useState('cut')
 
   // ── step-3 compositions ──
@@ -730,6 +731,7 @@ export default function App() {
   const scrubDragRef          = useRef(false)
   const candPreviewRef        = useRef(null)
   const subtitleFileRef       = useRef(null)
+  const subListRef            = useRef(null)
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -827,6 +829,7 @@ export default function App() {
 
   useEffect(()=>{
     setEditorTime(0); setEditorPlaying(false); setSelectedCutIdx(null); setSelectedSegIdx(null); setSelectedSubIdx(null)
+    setPrevSegmentsForUndo(null)
   }, [currentVideoId])
 
   // seek candidate preview when selection changes, reset play state
@@ -840,6 +843,13 @@ export default function App() {
     vid.currentTime = t
     setCandPrevTime(t)
   }, [pendingCand])
+
+  // auto-scroll subtitle list to current subtitle
+  useEffect(()=>{
+    if (currentSubIdx < 0 || !subListRef.current) return
+    const items = subListRef.current.querySelectorAll('.s2-sub-row')
+    if (items[currentSubIdx]) items[currentSubIdx].scrollIntoView({ block:'nearest', behavior:'smooth' })
+  },[currentSubIdx])
 
   // scrubber drag
   useEffect(()=>{
@@ -906,6 +916,23 @@ export default function App() {
   // ── handlers ──
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''), 3000) }
+
+  function saveUndoState() {
+    if (!currentVideoId || !editorSegs.length) return
+    setPrevSegmentsForUndo({ videoId: currentVideoId, segments: editorSegs.map(s => ({...s})) })
+  }
+
+  function handleUndo() {
+    if (!prevSegmentsForUndo || prevSegmentsForUndo.videoId !== currentVideoId) return
+    setVideoAnalysis(prev => ({
+      ...prev,
+      [currentVideoId]: { ...prev[currentVideoId], segments: prevSegmentsForUndo.segments }
+    }))
+    setPrevSegmentsForUndo(null)
+    setSelectedCutIdx(null)
+    setSelectedSegIdx(null)
+    showToast('已撤销上一步操作')
+  }
 
   function handleImportClick() { fileInputRef.current?.click() }
 
@@ -979,6 +1006,7 @@ export default function App() {
 
   function toggleEditorSeg(segIdx) {
     if (!currentVideoId) return
+    saveUndoState()
     setVideoAnalysis(prev=>({
       ...prev,
       [currentVideoId]: {
@@ -990,6 +1018,7 @@ export default function App() {
 
   function changeSegType(segIdx, newType) {
     if (!currentVideoId) return
+    saveUndoState()
     setVideoAnalysis(prev=>({
       ...prev,
       [currentVideoId]: {
@@ -1001,9 +1030,20 @@ export default function App() {
 
   function addCutAtCurrentTime() {
     if (!currentVideoId||!editorSegs.length) return
-    const time=editorTime
-    const idx=editorSegs.findIndex(s=>time>s.startSec+0.5&&time<s.endSec-0.5)
-    if (idx===-1) { showToast('当前时间点无法新增切割点（距片段边缘太近）'); return }
+    // Prefer selected subtitle's startSec as cut point
+    let time = editorTime
+    let cutLabel = `${fmt(time)}`
+    if (selectedSubIdx >= 0 && editorSubtitles[selectedSubIdx]) {
+      const sub = editorSubtitles[selectedSubIdx]
+      time = sub.startSec
+      cutLabel = `字幕 #${selectedSubIdx+1} 起始 ${fmt(time)}`
+    }
+    const idx=editorSegs.findIndex(s=>time>s.startSec+0.1&&time<s.endSec-0.1)
+    if (idx===-1) {
+      showToast(selectedSubIdx>=0 ? '该字幕边界已是片段边缘，无需切割' : '当前时间点无法新增切割点（距片段边缘太近）')
+      return
+    }
+    saveUndoState()
     const seg=editorSegs[idx]
     const newSegs=[
       ...editorSegs.slice(0,idx),
@@ -1013,11 +1053,12 @@ export default function App() {
     ]
     setVideoAnalysis(prev=>({ ...prev, [currentVideoId]:{...prev[currentVideoId],segments:newSegs} }))
     setSelectedCutIdx(idx)
-    showToast(`已在 ${fmt(time)} 新增切割点`)
+    showToast(`已按 ${cutLabel} 新增切割点`)
   }
 
   function adjustCutPoint(cutIdx, delta) {
     if (!currentVideoId||cutIdx===null||cutIdx<0||cutIdx>=editorSegs.length-1) return
+    saveUndoState()
     const segs=editorSegs
     const newTime=segs[cutIdx].endSec+delta
     const clamped=Math.max(segs[cutIdx].startSec+0.5, Math.min(segs[cutIdx+1].endSec-0.5, newTime))
@@ -1036,6 +1077,7 @@ export default function App() {
 
   function mergeSegs(segIdx) {
     if (!currentVideoId||segIdx<0||segIdx>=editorSegs.length-1) return
+    saveUndoState()
     const a=editorSegs[segIdx], b=editorSegs[segIdx+1]
     const merged={ id:a.id, startSec:a.startSec, startStr:a.startStr, endSec:b.endSec, endStr:b.endStr, type:a.type, subtitle:[a.subtitle,b.subtitle].filter(Boolean).join(' '), selected:a.selected||b.selected }
     const newSegs=[...editorSegs.slice(0,segIdx), merged, ...editorSegs.slice(segIdx+2)]
@@ -1712,6 +1754,7 @@ export default function App() {
                 <span className="s2-left-title">素材列表</span>
                 <span className="s2-left-count">{uploadedVideos.length}</span>
               </div>
+              <div className="s2-vid-manage-hint">如需删除或更换视频，请返回素材准备页操作</div>
               <div className="s2-left-list">
                 {uploadedVideos.map((v,vi)=>{
                   const ana=videoAnalysis[v.id]
@@ -1959,7 +2002,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="s2-sub-list">
+              <div className="s2-sub-list" ref={subListRef}>
                 {!editorVid&&<div className="s2-sub-empty">从左侧选择视频</div>}
                 {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-sub-empty"><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>等待分析…</div>}
                 {editorVid&&editorAnalysis?.status==='analyzing'&&<div className="s2-sub-empty"><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>字幕识别中…</div>}
@@ -1974,7 +2017,10 @@ export default function App() {
                       className={`s2-sub-row ${isCurrent?'current':''} ${isSelected?'selected':''}`}
                       onClick={()=>{ setSelectedSubIdx(si); handleEditorSeek(sub.startSec) }}
                     >
-                      <span className="s2-sub-time">{fmt(sub.startSec)}</span>
+                      <div className="s2-sub-idx-col">
+                        <span className="s2-sub-num">{si+1}</span>
+                        <span className="s2-sub-time">{fmt(sub.startSec)}</span>
+                      </div>
                       <div className="s2-sub-body">
                         <span className="s2-sub-text">{sub.text}</span>
                         {segIdx>=0&&(
@@ -2030,17 +2076,28 @@ export default function App() {
                   <button className="s2-cut-adj-btn" onClick={()=>setSelectedCutIdx(null)}>取消</button>
                 </div>
               ):(
-                <span className="s2-tl-hint">点击切割线选中 · 点击轨道跳转 · 片段编号：视频号-片段号</span>
+                <span className="s2-tl-hint">
+                  {selectedSubIdx>=0&&editorSubtitles[selectedSubIdx]
+                    ? `切割点：字幕 #${selectedSubIdx+1} 起始 ${fmt(editorSubtitles[selectedSubIdx].startSec)}`
+                    : '建议先点击右侧字幕，再切割 · 点击切割线选中'
+                  }
+                </span>
               )}
               <button
+                className="s2-undo-btn"
+                onClick={handleUndo}
+                disabled={!prevSegmentsForUndo||prevSegmentsForUndo.videoId!==currentVideoId}
+                title="撤销上一步操作"
+              >↩ 撤销</button>
+              <button
                 className="s2-add-cut-btn"
-                style={{marginLeft:selectedCutIdx===null?'auto':'8px',flexShrink:0}}
+                style={{marginLeft:'8px',flexShrink:0}}
                 onClick={addCutAtCurrentTime}
                 disabled={!editorVid||!['done','confirmed'].includes(editorAnalysis?.status)}
-                title="在当前播放时间点新增切割"
+                title={selectedSubIdx>=0&&editorSubtitles[selectedSubIdx]?`按字幕 #${selectedSubIdx+1} 起始时间切割`:'在当前播放时间点新增切割'}
               >
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                切割
+                {selectedSubIdx>=0&&editorSubtitles[selectedSubIdx]?'按字幕切割':'切割'}
               </button>
             </div>
             <CutTimeline
