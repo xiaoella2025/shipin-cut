@@ -7413,3 +7413,135 @@ input[type=range] {
   word-break: break-all;
   color: #818cf8 !important;
 }
+
+/* ── v0.4: 真实字幕导入 UI ─────────────────────────────────────────────────── */
+
+/* Left panel: subtitle source badge per video item */
+.s2-vid-item-sub-src {
+  min-height: 14px;
+  margin-top: 2px;
+}
+.s2-vid-subsrc {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.s2-vid-subsrc.real {
+  background: #064e3b;
+  color: #34d399;
+  border: 1px solid #065f46;
+}
+.s2-vid-subsrc.sim {
+  background: var(--bg-surf2);
+  color: var(--txt-3);
+  border: 1px solid var(--bdr);
+}
+
+/* Right panel header: small "真实" badge */
+.s2-sub-src-head-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #064e3b;
+  color: #34d399;
+  border: 1px solid #065f46;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  margin-left: auto;
+}
+
+/* Import bar */
+.s2-sub-import-bar {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--bdr);
+  background: var(--bg-surf2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.s2-sub-source-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.s2-sub-src-label {
+  font-size: 10px;
+  color: var(--txt-3);
+  white-space: nowrap;
+}
+.s2-sub-source-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.s2-sub-source-badge.real {
+  background: #064e3b;
+  color: #34d399;
+  border: 1px solid #065f46;
+}
+.s2-sub-source-badge.sim {
+  background: var(--bg-surf3, #1e1e2e);
+  color: var(--txt-3);
+  border: 1px solid var(--bdr);
+}
+.s2-sub-import-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid #4f46e5;
+  background: #1e1b4b;
+  color: #a5b4fc;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  align-self: flex-start;
+}
+.s2-sub-import-btn:hover:not(:disabled) {
+  background: #312e81;
+  color: #c7d2fe;
+}
+.s2-sub-import-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Import guide at bottom of right panel */
+.s2-sub-import-guide {
+  padding: 8px 10px;
+  border-top: 1px solid var(--bdr);
+  background: var(--bg-surf2);
+  flex-shrink: 0;
+}
+.s2-sub-guide-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--txt-2);
+  margin-bottom: 6px;
+}
+.s2-sub-guide-step {
+  font-size: 10px;
+  color: var(--txt-3);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.s2-sub-guide-cmd {
+  font-size: 9px;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  color: #818cf8;
+  background: #0f0f1a;
+  border: 1px solid #1e1b4b;
+  border-radius: 3px;
+  padding: 3px 7px;
+  margin: 2px 0 4px;
+  word-break: break-all;
+  line-height: 1.5;
+}

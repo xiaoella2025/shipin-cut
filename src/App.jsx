@@ -132,6 +132,41 @@ function generateSegments(video, vidIndex) {
   }))
 }
 
+// Build segments from real subtitle JSON segments (each has start/end/text)
+function generateSegmentsFromSubtitles(video, vidIndex, subs) {
+  if (!subs || !subs.length) return []
+  const n = subs.length
+  const targetGroups = Math.min(6, Math.max(3, Math.ceil(n / 4)))
+  const groupSize = Math.ceil(n / targetGroups)
+  const groups = []
+  for (let i = 0; i < n; i += groupSize) {
+    groups.push(subs.slice(i, Math.min(i + groupSize, n)))
+  }
+  const totalGroups = groups.length
+  function getType(gi) {
+    if (gi === 0) return '开场'
+    if (gi === totalGroups - 1) return '结尾'
+    if (totalGroups >= 4 && gi === totalGroups - 2) return '成品展示'
+    return '制作步骤'
+  }
+  return groups.map((group, gi) => {
+    const startSec = group[0].start
+    const endSec   = group[group.length - 1].end
+    const fullText = group.map(s => s.text.trim()).join(' ')
+    const type     = getType(gi)
+    return {
+      id:       `${video.id}-rs${gi}`,
+      startSec,
+      endSec,
+      startStr: fmt(startSec),
+      endStr:   fmt(endSec),
+      type,
+      subtitle: fullText,
+      selected: type !== '开场' && type !== '结尾',
+    }
+  })
+}
+
 function generateSubtitles(video, vidIndex) {
   const tpl   = SEGMENT_TEMPLATES[vidIndex % SEGMENT_TEMPLATES.length]
   const dur   = video?.dur > 0 ? video.dur : 60
@@ -694,6 +729,7 @@ export default function App() {
   const scrubberRef           = useRef(null)
   const scrubDragRef          = useRef(false)
   const candPreviewRef        = useRef(null)
+  const subtitleFileRef       = useRef(null)
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -898,6 +934,47 @@ export default function App() {
     const clamped=Math.max(0,Math.min(time, editorVid?.dur||0))
     setEditorTime(clamped)
     if (editorVideoRef.current) editorVideoRef.current.currentTime=clamped
+  }
+
+  function handleSubtitleImport(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (!currentVideoId) { showToast('请先在左侧选择一个视频'); return }
+    if (!file.name.toLowerCase().endsWith('.json')) { showToast('请选择 .json 格式的字幕文件'); return }
+    const reader = new FileReader()
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target.result)
+        if (!data.segments || !Array.isArray(data.segments)) { showToast('格式错误：JSON 中缺少 segments 数组'); return }
+        if (data.segments.length === 0) { showToast('字幕文件为空（segments 数组为空）'); return }
+        const invalid = data.segments.find(s => typeof s.start !== 'number' || typeof s.end !== 'number' || !s.text?.trim())
+        if (invalid) { showToast('字幕格式错误：缺少 start / end / text 字段，或文本为空'); return }
+        const vid    = uploadedVideosRef.current.find(v => v.id === currentVideoId)
+        const vidIdx = uploadedVideosRef.current.findIndex(v => v.id === currentVideoId)
+        const convertedSubs = data.segments.map((s, i) => ({
+          id: `${currentVideoId}-rsub${i}`, startSec: s.start, endSec: s.end, text: s.text.trim(),
+        }))
+        const newSegs = generateSegmentsFromSubtitles(vid, vidIdx, data.segments)
+        setVideoAnalysis(prev => ({
+          ...prev,
+          [currentVideoId]: {
+            ...(prev[currentVideoId] || {}),
+            status:        prev[currentVideoId]?.status === 'confirmed' ? 'confirmed' : 'done',
+            progress:      100,
+            segments:      newSegs,
+            subtitles:     convertedSubs,
+            subtitleCount: convertedSubs.length,
+            subtitleSource:'real',
+          }
+        }))
+        showToast(`✓ 已导入真实字幕：共 ${convertedSubs.length} 条，已生成 ${newSegs.length} 个分段`)
+      } catch (err) {
+        showToast(err instanceof SyntaxError ? 'JSON 解析失败，请检查文件格式' : '导入失败：' + err.message)
+      }
+    }
+    reader.onerror = () => showToast('文件读取失败')
+    reader.readAsText(file, 'utf-8')
   }
 
   function toggleEditorSeg(segIdx) {
@@ -1114,6 +1191,7 @@ export default function App() {
     <div className="app">
 
       <input ref={fileInputRef} type="file" accept="video/*" multiple style={{display:'none'}} onChange={handleFileSelect}/>
+      <input ref={subtitleFileRef} type="file" accept=".json" style={{display:'none'}} onChange={handleSubtitleImport}/>
 
       {previewVid && (
         <div className="overlay" onClick={()=>setPreviewVid(null)}>
@@ -1173,7 +1251,7 @@ export default function App() {
               <line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>
             </svg>
           </div>
-          <div className="logo-text"><span className="logo-title">视频混剪工具</span><span className="logo-ver">v0.1</span></div>
+          <div className="logo-text"><span className="logo-title">视频混剪工具</span><span className="logo-ver">v0.4</span></div>
         </div>
         <nav className="step-nav">
           {[{n:1,label:'素材准备'},{n:2,label:'字幕分段'},{n:3,label:'预览导出'}].flatMap(({n,label},i)=>{
@@ -1669,6 +1747,14 @@ export default function App() {
                             <span className="s2-vid-item-seg-cnt">{segs.filter(s=>s.selected).length}/{segs.length}</span>
                           </div>
                         )}
+                        <div className="s2-vid-item-sub-src">
+                          {ana?.subtitleSource==='real'
+                            ? <span className="s2-vid-subsrc real">真实字幕</span>
+                            : ana?.subtitleCount>0
+                              ? <span className="s2-vid-subsrc sim">模拟字幕</span>
+                              : null
+                          }
+                        </div>
                       </div>
                     </div>
                   )
@@ -1848,7 +1934,31 @@ export default function App() {
                 <span className="s2-right-title">字幕列表</span>
                 {editorSubtitles.length>0&&<span className="s2-right-count">{editorSubtitles.length} 条</span>}
                 {editorVidIdx>=0&&<span className="s2-right-vidnum">V{editorVidIdx+1}</span>}
+                {editorAnalysis?.subtitleSource==='real'&&<span className="s2-sub-src-head-badge">真实</span>}
               </div>
+
+              {/* Import bar */}
+              <div className="s2-sub-import-bar">
+                <div className="s2-sub-source-row">
+                  <span className="s2-sub-src-label">字幕来源：</span>
+                  <span className={`s2-sub-source-badge${editorAnalysis?.subtitleSource==='real'?' real':' sim'}`}>
+                    {editorAnalysis?.subtitleSource==='real'
+                      ? `真实字幕 JSON（${editorSubtitles.length} 条）`
+                      : editorSubtitles.length>0 ? `模拟字幕（${editorSubtitles.length} 条）` : '未导入'
+                    }
+                  </span>
+                </div>
+                <button
+                  className="s2-sub-import-btn"
+                  onClick={()=>subtitleFileRef.current?.click()}
+                  disabled={!editorVid}
+                  title="选择本地生成的 subtitles.json 文件（不上传服务器）"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  导入真实字幕 JSON
+                </button>
+              </div>
+
               <div className="s2-sub-list">
                 {!editorVid&&<div className="s2-sub-empty">从左侧选择视频</div>}
                 {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-sub-empty"><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>等待分析…</div>}
@@ -1885,6 +1995,18 @@ export default function App() {
                   >
                     {editorAnalysis?.status==='confirmed'?'✓ 已确认此视频分段':'确认此视频分段'}
                   </button>
+                </div>
+              )}
+
+              {editorVid&&editorAnalysis?.subtitleSource!=='real'&&(
+                <div className="s2-sub-import-guide">
+                  <div className="s2-sub-guide-title">真实字幕导入流程</div>
+                  <div className="s2-sub-guide-step">① 本地生成字幕：</div>
+                  <div className="s2-sub-guide-cmd">npm run local:transcribe -- "video.mp4"</div>
+                  <div className="s2-sub-guide-step">② 点击上方"导入真实字幕 JSON"</div>
+                  <div className="s2-sub-guide-step">③ 选择生成的字幕文件：</div>
+                  <div className="s2-sub-guide-cmd">local-output/subtitles/test.subtitles.json</div>
+                  <div className="s2-sub-guide-step">④ 系统自动生成真实字幕分段</div>
                 </div>
               )}
             </div>
