@@ -5659,19 +5659,28 @@ input[type=range] {
 }
 
 /* ── Center panel: big video player ── */
-.s2-center-panel {
+/* ── Center: subtitle work area + timeline ── */
+.s2-main-work {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  padding: 10px 12px;
   background: var(--bg);
   overflow: hidden;
 }
 
-/* ── Right panel: subtitle list ── */
-.s2-right-panel {
+/* Subtitle list section (fills upper part of main-work) */
+.s2-sub-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-bottom: 1px solid var(--bdr);
+}
+
+/* ── Right: vertical video preview panel ── */
+.s2-vid-panel {
   width: 320px;
   flex-shrink: 0;
   display: flex;
@@ -5679,6 +5688,53 @@ input[type=range] {
   border-left: 1px solid var(--bdr);
   background: var(--bg-panel);
   overflow: hidden;
+}
+
+.s2-vid-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
+  background: var(--bg-card);
+}
+.s2-vid-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--txt);
+}
+
+.s2-vid-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+  background: #060608;
+  overflow: hidden;
+}
+
+/* Portrait 9:16 video inside the panel */
+.s2-vid-panel .s2-video-area {
+  flex: 1;
+  width: auto;
+  aspect-ratio: 9/16;
+  max-width: 100%;
+  min-height: 0;
+}
+
+.s2-vid-panel-ctrl {
+  padding: 8px 10px;
+  border-top: 1px solid var(--bdr);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+
+.s2-vid-panel .s2-vid-info {
+  margin: 0 10px 8px;
+  flex-shrink: 0;
 }
 
 .s2-right-head {
