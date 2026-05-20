@@ -140,68 +140,55 @@ fs.mkdirSync(subtitleDir, { recursive: true })
 
 const outPrefix = path.join(subtitleDir, baseName)
 const srtPath   = outPrefix + '.srt'
+const txtPath   = outPrefix + '.txt'
 const jsonOut   = outPrefix + '.subtitles.json'
 
-const cmd = [
+// 与手动验证命令保持一致: whisper-cli -m model -f audio -l zh -osrt -otxt -of prefix
+const cmdParts = [
   `"${whisperCliPath}"`,
   `-m "${absModel}"`,
   `-f "${audioPath}"`,
   `-l ${language}`,
-  `-t ${threads}`,
-  `-osrt`,
-  `-ojson`,
-  `-of "${outPrefix}"`,
-].join(' ')
+]
+if (threads) cmdParts.push(`-t ${threads}`)
+cmdParts.push('-osrt', '-otxt', `-of "${outPrefix}"`)
+const cmd = cmdParts.join(' ')
+
+console.log('命令:')
+console.log('  ' + cmd)
+console.log()
 
 try {
   execSync(cmd, {
     encoding: 'utf8',
     shell: true,
     maxBuffer: 50 * 1024 * 1024,
-    stdio: ['pipe', 'pipe', 'pipe'],
+    stdio: 'pipe',
   })
   console.log('✓ 识别完成\n')
 } catch (e) {
-  console.error('✗ whisper-cli 执行失败:', e.message.split('\n')[0])
+  const errMsg = (e.stderr || e.stdout || e.message || '').split('\n').slice(0, 5).join('\n  ')
+  console.error('✗ whisper-cli 执行失败:')
+  console.error('  ' + errMsg)
   process.exit(1)
 }
 
-// ─── Step 5: 解析识别结果 → 生成统一 JSON ─────────────────────────────────
+// ─── Step 5: 解析 SRT → 生成统一 JSON ────────────────────────────────────
 
 console.log('── Step 5: 生成 subtitles.json ──')
 
 let segments = []
 
-// 优先读 whisper 输出的 JSON
-const whisperJsonPath = outPrefix + '.json'
-if (fs.existsSync(whisperJsonPath)) {
+if (fs.existsSync(srtPath)) {
   try {
-    const raw   = JSON.parse(fs.readFileSync(whisperJsonPath, 'utf8'))
-    const items = raw.transcription || raw.segments || []
-    segments = items.map((item, idx) => {
-      let start = null, end = null
-      if (item.offsets) {
-        start = item.offsets.from / 1000
-        end   = item.offsets.to   / 1000
-      } else if (item.timestamps) {
-        start = srtTimeToSec(item.timestamps.from)
-        end   = srtTimeToSec(item.timestamps.to)
-      } else if (item.start != null) {
-        start = item.start; end = item.end
-      }
-      return {
-        id:    idx + 1,
-        start: start != null ? Math.round(start * 1000) / 1000 : null,
-        end:   end   != null ? Math.round(end   * 1000) / 1000 : null,
-        text:  (item.text || '').trim(),
-      }
-    }).filter(s => s.text)
-  } catch {}
-}
-
-// 回退：解析 SRT
-if (segments.length === 0 && fs.existsSync(srtPath)) {
-  try { segments = parseSrt(fs.readFileSync(srtPath, 'utf8')) } catch {}
+    const srtContent = fs.readFileSync(srtPath, 'utf8').replace(/^﻿/, '')  // 去除 BOM
+    segments = parseSrt(srtContent)
+    console.log(`✓ 从 SRT 解析 ${segments.length} 条字幕`)
+  } catch (e) {
+    console.warn('⚠  SRT 解析失败:', e.message)
+  }
+} else {
+  console.warn(`⚠  未找到 SRT 文件: ${path.relative(process.cwd(), srtPath)}`)
 }
 
 const result = {
@@ -237,6 +224,7 @@ console.log()
 console.log('输出文件:')
 console.log(`  音频:    ${path.relative(process.cwd(), audioPath)}`)
 if (fs.existsSync(srtPath)) console.log(`  SRT:     ${path.relative(process.cwd(), srtPath)}`)
+if (fs.existsSync(txtPath)) console.log(`  TXT:     ${path.relative(process.cwd(), txtPath)}`)
 console.log(`  JSON:    ${path.relative(process.cwd(), jsonOut)}`)
 console.log()
 console.log('说明: 当前为 v0.3 whisper.cpp 能力验证，尚未接入前端或真实视频合成。')
@@ -253,21 +241,23 @@ function srtTimeToSec(str) {
 function secToHms(sec) {
   if (sec == null) return '??:??:??.???'
   const h  = Math.floor(sec / 3600)
-  const m  = Math.floor((sec % 3600) / 60)
+  const mi = Math.floor((sec % 3600) / 60)
   const s  = Math.floor(sec % 60)
   const ms = Math.round((sec - Math.floor(sec)) * 1000)
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`
+  return `${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`
 }
 
 function parseSrt(content) {
-  const blocks = content.trim().split(/\n\s*\n/)
-  const result = []
+  // 统一换行符，兼容 Windows \r\n
+  const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const blocks = normalized.trim().split(/\n{2,}/)
+  const result  = []
   for (const block of blocks) {
-    const lines = block.trim().split('\n')
+    const lines    = block.trim().split('\n')
     if (lines.length < 3) continue
     const idLine   = lines[0].trim()
     const timeLine = lines[1].trim()
-    const text     = lines.slice(2).join(' ').trim()
+    const text     = lines.slice(2).map(l => l.trim()).filter(Boolean).join(' ')
     const id       = parseInt(idLine, 10)
     const tm       = timeLine.match(/(\d+:\d+:\d+[,.]\d+)\s*-->\s*(\d+:\d+:\d+[,.]\d+)/)
     if (!tm || !text) continue

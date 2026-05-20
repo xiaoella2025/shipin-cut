@@ -1,6 +1,6 @@
 /**
  * 调用本地 whisper.cpp 对 WAV 音频进行字幕识别
- * 输出: local-output/subtitles/{basename}.srt + {basename}.subtitles.json
+ * 输出: local-output/subtitles/{basename}.srt + {basename}.txt + {basename}.subtitles.json
  * 运行: npm run transcribe:audio -- "local-output/audio/test.wav"
  */
 const { execSync } = require('child_process')
@@ -41,7 +41,9 @@ try {
 }
 
 const { whisperCliPath, modelPath, language = 'zh', threads = 4 } = config
-const absModel = path.isAbsolute(modelPath) ? modelPath : path.resolve(process.cwd(), modelPath)
+const absModel = path.isAbsolute(modelPath)
+  ? modelPath
+  : path.resolve(process.cwd(), modelPath)
 
 // ─── 准备输出目录 ─────────────────────────────────────────────────────────────
 
@@ -50,46 +52,48 @@ fs.mkdirSync(outDir, { recursive: true })
 
 const outPrefix = path.join(outDir, baseName)
 const srtPath   = outPrefix + '.srt'
+const txtPath   = outPrefix + '.txt'
 const jsonOut   = outPrefix + '.subtitles.json'
 
 console.log('═══════════════════════════════════════════')
 console.log('  whisper.cpp 字幕识别  (shipin-cut v0.3)')
 console.log('═══════════════════════════════════════════')
-console.log(`音频: ${path.basename(absInput)}`)
+console.log(`音频: ${path.relative(process.cwd(), absInput)}`)
 console.log(`模型: ${absModel}`)
 console.log(`语言: ${language}  线程: ${threads}`)
 console.log()
 
 // ─── 调用 whisper-cli ─────────────────────────────────────────────────────────
+// 与手动验证命令保持一致: whisper-cli -m model -f audio -l zh -osrt -otxt -of prefix
 
-console.log('── 正在识别字幕（可能需要数十秒）... ──')
-
-const cmd = [
+const parts = [
   `"${whisperCliPath}"`,
   `-m "${absModel}"`,
   `-f "${absInput}"`,
   `-l ${language}`,
-  `-t ${threads}`,
-  `-osrt`,
-  `-ojson`,
-  `-of "${outPrefix}"`,
-].join(' ')
+]
+if (threads) parts.push(`-t ${threads}`)
+parts.push('-osrt', '-otxt', `-of "${outPrefix}"`)
 
-let whisperFailed = false
-let whisperOutput = ''
+const cmd = parts.join(' ')
+
+console.log('── 正在识别字幕（可能需要数十秒）... ──')
+console.log('命令:')
+console.log('  ' + cmd)
+console.log()
 
 try {
-  whisperOutput = execSync(cmd, {
+  execSync(cmd, {
     encoding: 'utf8',
     shell: true,
     maxBuffer: 50 * 1024 * 1024,
-    stdio: ['pipe', 'pipe', 'pipe'],
+    stdio: 'pipe',
   })
-  console.log('✓ whisper-cli 执行完成\n')
+  console.log('✓ whisper-cli 执行完成')
 } catch (e) {
-  whisperFailed = true
   console.error('✗ whisper-cli 执行失败:')
-  console.error('  ' + e.message.split('\n')[0])
+  const errMsg = (e.stderr || e.stdout || e.message || '').split('\n').slice(0, 5).join('\n  ')
+  console.error('  ' + errMsg)
   console.error()
   console.error('  请确认:')
   console.error('    1. whisperCliPath 路径正确 (运行 npm run check:whisper 检测)')
@@ -98,79 +102,61 @@ try {
   process.exit(1)
 }
 
-// ─── 解析 whisper.cpp JSON 输出 ───────────────────────────────────────────────
+// ─── 诊断：列出 whisper 实际生成的文件 ───────────────────────────────────────
 
-const whisperJsonPath = outPrefix + '.json'
+console.log()
+console.log('whisper 生成的文件:')
+try {
+  const allFiles = fs.readdirSync(outDir)
+  const myFiles  = allFiles.filter(f => f.startsWith(baseName))
+  if (myFiles.length === 0) {
+    console.log('  (无)')
+  } else {
+    myFiles.forEach(f => {
+      const full = path.join(outDir, f)
+      const size = fs.statSync(full).size
+      console.log(`  ${f}  (${size} bytes)`)
+    })
+  }
+} catch (e) {
+  console.warn('  无法读取目录:', e.message)
+}
+console.log()
+
+// ─── 解析 SRT → segments ─────────────────────────────────────────────────────
+
 let segments = []
 
-if (fs.existsSync(whisperJsonPath)) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(whisperJsonPath, 'utf8'))
-    const items = raw.transcription || raw.segments || []
-    segments = items.map((item, idx) => {
-      // whisper.cpp JSON 格式: { timestamps: { from, to }, offsets: { from, to }, text }
-      // offsets 单位为毫秒
-      let start = null
-      let end   = null
-
-      if (item.offsets) {
-        start = item.offsets.from / 1000
-        end   = item.offsets.to   / 1000
-      } else if (item.timestamps) {
-        start = srtTimeToSec(item.timestamps.from)
-        end   = srtTimeToSec(item.timestamps.to)
-      } else if (item.start != null) {
-        start = item.start
-        end   = item.end
-      }
-
-      return {
-        id:    idx + 1,
-        start: start != null ? Math.round(start * 1000) / 1000 : null,
-        end:   end   != null ? Math.round(end   * 1000) / 1000 : null,
-        text:  (item.text || '').trim(),
-      }
-    }).filter(s => s.text)
-
-    console.log(`✓ 从 JSON 解析 ${segments.length} 条字幕`)
-  } catch (e) {
-    console.warn('⚠  解析 whisper JSON 失败，尝试读取 SRT 文件:', e.message.split('\n')[0])
-  }
-}
-
-// ─── 回退：解析 SRT 文件 ──────────────────────────────────────────────────────
-
-if (segments.length === 0 && fs.existsSync(srtPath)) {
-  try {
-    segments = parseSrt(fs.readFileSync(srtPath, 'utf8'))
+if (!fs.existsSync(srtPath)) {
+  console.warn(`⚠  未找到 SRT 文件: ${path.relative(process.cwd(), srtPath)}`)
+  console.warn('   whisper-cli 可能未正确输出到该路径，请检查命令输出')
+} else {
+  const srtContent = fs.readFileSync(srtPath, 'utf8').replace(/^﻿/, '')  // 去除 BOM
+  segments = parseSrt(srtContent)
+  if (segments.length > 0) {
     console.log(`✓ 从 SRT 解析 ${segments.length} 条字幕`)
-  } catch (e) {
-    console.error('✗ SRT 解析也失败:', e.message)
-    process.exit(1)
+  } else {
+    console.warn('⚠  SRT 文件存在但解析出 0 条字幕（文件可能为空或格式异常）')
+    // 打印文件开头帮助诊断
+    const preview = srtContent.slice(0, 300)
+    if (preview.trim()) {
+      console.log('SRT 文件内容预览:')
+      console.log(preview.split('\n').map(l => '  ' + l).join('\n'))
+    }
   }
-}
-
-if (segments.length === 0) {
-  console.warn('⚠  未识别到任何字幕（音频可能无语音，或模型不匹配语言）')
 }
 
 // ─── 生成统一 subtitles.json ──────────────────────────────────────────────────
 
 const result = {
-  sourceAudio: path.relative(process.cwd(), absInput).replace(/\\/g, '/'),
+  sourceAudio:  path.relative(process.cwd(), absInput).replace(/\\/g, '/'),
   language,
   segmentCount: segments.length,
   segments,
-  createdAt: new Date().toISOString(),
+  createdAt:    new Date().toISOString(),
 }
 
 fs.writeFileSync(jsonOut, JSON.stringify(result, null, 2), 'utf8')
-console.log(`✓ 已保存: ${path.relative(process.cwd(), jsonOut)}`)
-
-// 保留 whisper 生成的 SRT 文件
-if (fs.existsSync(srtPath)) {
-  console.log(`✓ 已保存: ${path.relative(process.cwd(), srtPath)}`)
-}
 
 // ─── 摘要 ─────────────────────────────────────────────────────────────────────
 
@@ -180,18 +166,20 @@ console.log('  字幕识别完成')
 console.log('═══════════════════════════════════════════')
 console.log()
 console.log(`共识别 ${segments.length} 条字幕`)
+
 if (segments.length > 0) {
   console.log()
   console.log('前 5 条预览:')
   segments.slice(0, 5).forEach(s => {
-    const ts = `${secToHms(s.start)} --> ${secToHms(s.end)}`
-    console.log(`  [${s.id}] ${ts}`)
+    console.log(`  [${s.id}] ${secToHms(s.start)} --> ${secToHms(s.end)}`)
     console.log(`       ${s.text}`)
   })
 }
+
 console.log()
 console.log('输出文件:')
 if (fs.existsSync(srtPath)) console.log(`  SRT:  ${path.relative(process.cwd(), srtPath)}`)
+if (fs.existsSync(txtPath)) console.log(`  TXT:  ${path.relative(process.cwd(), txtPath)}`)
 console.log(`  JSON: ${path.relative(process.cwd(), jsonOut)}`)
 
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────
@@ -206,25 +194,31 @@ function srtTimeToSec(str) {
 
 function secToHms(sec) {
   if (sec == null) return '??:??:??.???'
-  const h   = Math.floor(sec / 3600)
-  const m   = Math.floor((sec % 3600) / 60)
-  const s   = Math.floor(sec % 60)
-  const ms  = Math.round((sec - Math.floor(sec)) * 1000)
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`
+  const h  = Math.floor(sec / 3600)
+  const mi = Math.floor((sec % 3600) / 60)
+  const s  = Math.floor(sec % 60)
+  const ms = Math.round((sec - Math.floor(sec)) * 1000)
+  return `${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`
 }
 
 function parseSrt(content) {
-  const blocks = content.trim().split(/\n\s*\n/)
-  const result = []
+  // 统一换行符
+  const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const blocks = normalized.trim().split(/\n{2,}/)
+  const result  = []
+
   for (const block of blocks) {
-    const lines = block.trim().split('\n')
+    const lines    = block.trim().split('\n')
     if (lines.length < 3) continue
+
     const idLine   = lines[0].trim()
     const timeLine = lines[1].trim()
-    const text     = lines.slice(2).join(' ').trim()
-    const id       = parseInt(idLine, 10)
-    const tm       = timeLine.match(/(\d+:\d+:\d+[,.]\d+)\s*-->\s*(\d+:\d+:\d+[,.]\d+)/)
+    const text     = lines.slice(2).map(l => l.trim()).filter(Boolean).join(' ')
+
+    const id = parseInt(idLine, 10)
+    const tm = timeLine.match(/(\d+:\d+:\d+[,.]\d+)\s*-->\s*(\d+:\d+:\d+[,.]\d+)/)
     if (!tm || !text) continue
+
     result.push({
       id:    isNaN(id) ? result.length + 1 : id,
       start: srtTimeToSec(tm[1]),
@@ -235,4 +229,4 @@ function parseSrt(content) {
   return result
 }
 
-module.exports = { segments, jsonOut, srtPath }
+module.exports = { segments, jsonOut, srtPath, txtPath }
