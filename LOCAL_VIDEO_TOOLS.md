@@ -1,4 +1,4 @@
-# 本地视频工具 (v0.3 whisper.cpp 字幕识别)
+# 本地视频工具 (v0.5 批量字幕识别)
 
 这组脚本在本机开发环境中运行，用于通过 Node.js 调用本地 FFmpeg 和 whisper.cpp 完成视频分析、抽音频、截缩略图、字幕识别等操作。
 
@@ -325,7 +325,126 @@ local-tools/
 ├── local-analyze.js      ← 一键综合分析（v0.2）
 ├── check-whisper.js      ← whisper.cpp 环境检测（v0.3）
 ├── transcribe-audio.js   ← 音频字幕识别（v0.3）
-└── local-transcribe.js   ← 一键视频字幕识别（v0.3）
+├── local-transcribe.js   ← 一键视频字幕识别（v0.3）
+└── batch-transcribe.js   ← 批量视频字幕识别（v0.5）
 ```
 
 这些脚本仅依赖 Node.js 内置模块（`child_process`、`fs`、`path`），无需安装额外 npm 包。
+
+---
+
+## v0.5 批量字幕识别
+
+### 目录说明
+
+```
+input-videos/          ← 把待处理视频放这里
+local-output/
+  audio/               ← 抽取的 WAV 音频文件
+  subtitles/           ← 识别输出的 SRT / TXT / subtitles.json
+  analysis/            ← ffprobe 分析结果
+  thumbs/              ← 截取的缩略图
+```
+
+所有 `input-videos/*` 和 `local-output/*` 均被 `.gitignore` 排除，不会提交到 GitHub。
+
+### 第一步：把视频放入 input-videos/
+
+将需要识别字幕的视频文件复制到项目根目录的 `input-videos/` 文件夹中，例如：
+
+```
+input-videos/
+  test.mp4
+  food01.mp4
+  food02.mp4
+```
+
+支持格式：`.mp4` `.mov` `.m4v` `.avi` `.mkv`
+
+### 第二步：运行批量识别
+
+```
+npm run batch:transcribe
+```
+
+脚本会依次处理 `input-videos/` 下的所有视频，控制台显示进度：
+
+```
+[1/3] 正在处理 test.mp4
+  抽取音频 ... ✓ (2.31 MB)
+  字幕识别 (whisper) ... ✓
+  字幕条数: 27
+  JSON: local-output/subtitles/test.subtitles.json
+...
+成功: 3 个  失败: 0 个
+```
+
+### 指定其他目录或单个文件
+
+```bash
+npm run batch:transcribe -- "D:/videos"
+npm run batch:transcribe -- "D:/videos/food01.mp4"
+```
+
+传入目录时，扫描该目录下所有支持格式的视频。传入单个文件时，只处理该文件。
+
+### 输出文件
+
+每个视频生成三个文件（以 `test.mp4` 为例）：
+
+| 文件 | 说明 |
+|------|------|
+| `local-output/audio/test.wav` | 16kHz 单声道 WAV |
+| `local-output/subtitles/test.srt` | SRT 字幕文件 |
+| `local-output/subtitles/test.txt` | 纯文本字幕 |
+| `local-output/subtitles/test.subtitles.json` | 统一 JSON 格式（供前端导入） |
+
+### subtitle-manifest.json
+
+批量识别完成后，在 `local-output/subtitles/subtitle-manifest.json` 生成汇总清单：
+
+```json
+{
+  "createdAt": "2026-05-20T00:00:00.000Z",
+  "sourceDir": "input-videos",
+  "items": [
+    {
+      "videoFilename": "test.mp4",
+      "baseName": "test",
+      "status": "success",
+      "subtitleJson": "local-output/subtitles/test.subtitles.json",
+      "segments": 27
+    }
+  ]
+}
+```
+
+失败的视频会记录 `"status": "failed"` 和错误信息，不影响其他视频继续处理。
+
+### 前端批量导入字幕 JSON
+
+1. 打开前端工具（`npm run dev` 或 GitHub Pages）
+2. 上传素材视频（文件名需与 `input-videos/` 中一致）
+3. 进入 **字幕分段** 步骤
+4. 点击右侧 **批量导入字幕 JSON** 按钮
+5. 选择 `local-output/subtitles/` 目录下所有 `.subtitles.json` 文件
+6. 前端按文件名自动匹配，显示导入结果
+
+**文件名匹配规则：**
+
+- 视频 `test.mp4` ↔ 字幕 `test.subtitles.json` 或 `test.json`
+- 匹配时忽略大小写和视频扩展名
+- 匹配成功后该视频显示"真实字幕 N条"
+- 未匹配的 JSON 会在结果中列出，不会报错
+
+### 助理端使用流程（未来傻瓜包规划）
+
+```
+第一步：把视频放进 input-videos/
+第二步：双击"批量识别字幕.bat"（待制作）
+第三步：打开网页工具
+第四步：上传同名视频文件
+第五步：点击"批量导入字幕 JSON"，选择 local-output/subtitles/ 里的所有 .subtitles.json
+```
+
+> **注意：当前版本不会生成真实 MP4。"模拟导出"和"预览导出"均为前端演示，不调用 FFmpeg 合成。**

@@ -2,11 +2,20 @@ node_modules/
 dist/
 .DS_Store
 
-# 本地视频分析输出（不提交到仓库）
-local-output/audio/*.wav
-local-output/thumbs/*.jpg
-local-output/thumbs/*.jpeg
-local-output/thumbs/*.png
-local-output/analysis/*.json
-local-output/subtitles/*.srt
-local-output/subtitles/*.json
+# 用户输入视频（不提交）
+input-videos/*
+!input-videos/.gitkeep
+
+# 本地工具输出（不提交）
+local-output/audio/*
+!local-output/audio/.gitkeep
+local-output/thumbs/*
+!local-output/thumbs/.gitkeep
+local-output/analysis/*
+!local-output/analysis/.gitkeep
+local-output/subtitles/*
+!local-output/subtitles/.gitkeep
+
+# whisper.cpp 工具和模型（不提交）
+tools/*
+!tools/.gitkeep

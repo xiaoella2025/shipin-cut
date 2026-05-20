@@ -14,7 +14,8 @@
     "local:analyze":  "node local-tools/local-analyze.js",
     "check:whisper":  "node local-tools/check-whisper.js",
     "transcribe:audio": "node local-tools/transcribe-audio.js",
-    "local:transcribe": "node local-tools/local-transcribe.js"
+    "local:transcribe": "node local-tools/local-transcribe.js",
+    "batch:transcribe": "node local-tools/batch-transcribe.js"
   },
   "dependencies": {
     "react": "^18.2.0",

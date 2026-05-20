@@ -7582,6 +7582,10 @@ input[type=range] {
   color: var(--txt-3);
   border: 1px solid var(--bdr);
 }
+.s2-vid-subsrc.none {
+  font-size: 9px;
+  color: var(--txt-3);
+}
 
 /* Right panel header: small "真实" badge */
 .s2-sub-src-head-badge {
@@ -7656,6 +7660,61 @@ input[type=range] {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+.s2-sub-batch-btn {
+  background: var(--bg-lift);
+}
+
+.s2-batch-result {
+  position: relative;
+  margin: 0 12px 8px;
+  padding: 8px 28px 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--bdr);
+  border-radius: var(--r);
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.s2-batch-result-ok {
+  color: #10b981;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.s2-batch-result-warn {
+  color: var(--txt-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.s2-batch-result-err { color: #f87171; }
+
+.s2-batch-match-item, .s2-batch-unmatch-item {
+  background: var(--bg-lift);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.s2-batch-result-close {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--txt-3);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+.s2-batch-result-close:hover { color: var(--txt); }
 
 /* Import guide at bottom of right panel */
 .s2-sub-import-guide {

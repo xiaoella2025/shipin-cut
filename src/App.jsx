@@ -731,6 +731,7 @@ export default function App() {
     bgImage:false, picInPic:false, subDistort:false, endImage:true,
   })
   const [toast, setToast] = useState('')
+  const [batchImportResult, setBatchImportResult] = useState(null)
 
   const timerRef              = useRef(null)
   const fileInputRef          = useRef(null)
@@ -743,6 +744,7 @@ export default function App() {
   const scrubDragRef          = useRef(false)
   const candPreviewRef        = useRef(null)
   const subtitleFileRef       = useRef(null)
+  const batchSubtitleFileRef  = useRef(null)
   const subListRef            = useRef(null)
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
@@ -1016,6 +1018,103 @@ export default function App() {
     reader.readAsText(file, 'utf-8')
   }
 
+  function handleBatchSubtitleImport(e) {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!files.length) return
+
+    const videos = uploadedVideosRef.current
+
+    function getVideoBaseName(vid) {
+      return vid.name.replace(/\.[^.]+$/, '').toLowerCase()
+    }
+
+    function getJsonBaseName(filename) {
+      // test.subtitles.json → test
+      // food01.subtitles.json → food01
+      // food01.json → food01
+      return filename
+        .replace(/\.subtitles\.json$/i, '')
+        .replace(/\.json$/i, '')
+        .toLowerCase()
+    }
+
+    function validateSubtitleData(data) {
+      if (!data || typeof data !== 'object') return 'JSON 格式错误'
+      if (!Array.isArray(data.segments)) return '缺少 segments 数组'
+      if (data.segments.length === 0) return '字幕为空（segments 数组为空）'
+      const bad = data.segments.find(s => typeof s.start !== 'number' || typeof s.end !== 'number' || !s.text?.trim())
+      if (bad) return '字幕格式错误：缺少 start/end/text 字段'
+      return null
+    }
+
+    let updates = {}
+
+    const readers = files.map(file => new Promise(resolve => {
+      const reader = new FileReader()
+      reader.onload = ev => {
+        let data
+        try { data = JSON.parse(ev.target.result) } catch {
+          resolve({ file, error: 'JSON 解析失败' })
+          return
+        }
+        const err = validateSubtitleData(data)
+        if (err) { resolve({ file, error: err }); return }
+
+        const jsonBase = getJsonBaseName(file.name)
+        const vid = videos.find(v => getVideoBaseName(v) === jsonBase)
+
+        if (!vid) {
+          resolve({ file, matched: false })
+          return
+        }
+
+        const convertedSubs = data.segments.map((s, i) => ({
+          id: `${vid.id}-rsub${i}`,
+          startSec: s.start,
+          endSec: s.end,
+          text: s.text.trim(),
+        }))
+        const vidIdx = videos.findIndex(v => v.id === vid.id)
+        const newSegs = generateSegmentsFromSubtitles(vid, vidIdx, data.segments)
+
+        updates[vid.id] = {
+          status: 'done',
+          progress: 100,
+          segments: newSegs,
+          subtitles: convertedSubs,
+          subtitleCount: convertedSubs.length,
+          subtitleSource: 'real',
+        }
+        resolve({ file, matched: true, vidName: vid.name, count: convertedSubs.length })
+      }
+      reader.onerror = () => resolve({ file, error: '文件读取失败' })
+      reader.readAsText(file, 'utf-8')
+    }))
+
+    Promise.all(readers).then(results => {
+      const matchedItems = results.filter(r => r.matched)
+      const unmatchedItems = results.filter(r => !r.matched && !r.error)
+      const errorItems = results.filter(r => r.error)
+
+      if (Object.keys(updates).length > 0) {
+        setVideoAnalysis(prev => {
+          const next = { ...prev }
+          for (const [id, upd] of Object.entries(updates)) {
+            next[id] = { ...(prev[id] || {}), ...upd }
+          }
+          return next
+        })
+      }
+
+      setBatchImportResult({
+        matched: matchedItems.map(r => ({ name: r.vidName, count: r.count })),
+        unmatched: unmatchedItems.map(r => r.file.name),
+        errors: errorItems.map(r => `${r.file.name}: ${r.error}`),
+      })
+    })
+  }
+
   function toggleEditorSeg(segIdx) {
     if (!currentVideoId) return
     saveUndoState()
@@ -1246,6 +1345,7 @@ export default function App() {
 
       <input ref={fileInputRef} type="file" accept="video/*" multiple style={{display:'none'}} onChange={handleFileSelect}/>
       <input ref={subtitleFileRef} type="file" accept=".json" style={{display:'none'}} onChange={handleSubtitleImport}/>
+      <input ref={batchSubtitleFileRef} type="file" accept=".json,application/json" multiple style={{display:'none'}} onChange={handleBatchSubtitleImport}/>
 
       {previewVid && (
         <div className="overlay" onClick={()=>setPreviewVid(null)}>
@@ -1804,10 +1904,10 @@ export default function App() {
                         )}
                         <div className="s2-vid-item-sub-src">
                           {ana?.subtitleSource==='real'
-                            ? <span className="s2-vid-subsrc real">真实字幕</span>
+                            ? <span className="s2-vid-subsrc real">真实字幕 {ana.subtitleCount}条</span>
                             : ana?.subtitleCount>0
                               ? <span className="s2-vid-subsrc sim">模拟字幕</span>
-                              : null
+                              : <span className="s2-vid-subsrc none">未导入字幕</span>
                           }
                         </div>
                       </div>
@@ -2005,8 +2105,41 @@ export default function App() {
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                         导入真实字幕 JSON
                       </button>
+                      <button
+                        className="s2-sub-import-btn s2-sub-batch-btn"
+                        onClick={()=>batchSubtitleFileRef.current?.click()}
+                        title="选择多个 subtitles.json 文件，按视频文件名自动匹配（不上传服务器）"
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8h4M6 11h8"/></svg>
+                        批量导入字幕 JSON
+                      </button>
                     </div>
                   </div>
+                  {batchImportResult&&(
+                    <div className="s2-batch-result">
+                      {batchImportResult.matched.length>0&&(
+                        <div className="s2-batch-result-ok">
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                          成功匹配 {batchImportResult.matched.length} 个视频：
+                          {batchImportResult.matched.map((m,i)=>(
+                            <span key={i} className="s2-batch-match-item">{m.name}（{m.count}条）</span>
+                          ))}
+                        </div>
+                      )}
+                      {batchImportResult.unmatched.length>0&&(
+                        <div className="s2-batch-result-warn">
+                          未匹配 {batchImportResult.unmatched.length} 个：
+                          {batchImportResult.unmatched.map((n,i)=><span key={i} className="s2-batch-unmatch-item">{n}</span>)}
+                        </div>
+                      )}
+                      {batchImportResult.errors.length>0&&(
+                        <div className="s2-batch-result-err">
+                          {batchImportResult.errors.map((e,i)=><div key={i}>{e}</div>)}
+                        </div>
+                      )}
+                      <button className="s2-batch-result-close" onClick={()=>setBatchImportResult(null)}>✕</button>
+                    </div>
+                  )}
 
                   <div className="s2-subtitle-columns" ref={subListRef}>
                     {!editorVid&&<div className="s2-sub-empty" style={{width:'100%'}}>从左侧选择视频</div>}
