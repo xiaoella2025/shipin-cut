@@ -734,6 +734,8 @@ export default function App() {
   })
   const [toast, setToast] = useState('')
   const [batchImportResult, setBatchImportResult] = useState(null)
+  const [batchResultExpanded, setBatchResultExpanded] = useState(false)
+  const [showImportGuide, setShowImportGuide]     = useState(false)
 
   const timerRef              = useRef(null)
   const fileInputRef          = useRef(null)
@@ -1169,6 +1171,7 @@ export default function App() {
         })
       }
 
+      setBatchResultExpanded(false)
       setBatchImportResult({
         matched: matchedItems.map(r => ({ name: r.vidName, count: r.count })),
         unmatched: unmatchedItems.map(r => r.file.name),
@@ -1950,9 +1953,8 @@ export default function App() {
                         <div className="s2-vid-item-name" title={v.name}>{v.name.replace(/\.[^.]+$/,'').slice(0,16)}</div>
                         <div className="s2-vid-item-meta">
                           <span>{v.durStr}</span>
-                          <span className={`s2-vid-item-st ${ana?.status||'waiting'}`}>
-                            {ana?.status==='confirmed'?'✓已确':ana?.status==='done'?'完成':ana?.status==='analyzing'?`${Math.round(ana.progress)}%`:'等待'}
-                          </span>
+                          {segs.length>0&&<><span className="s2-vid-meta-dot">·</span><span>{segs.length} 片段</span></>}
+                          {ana?.status==='analyzing'&&<span className="s2-vid-item-st analyzing">{Math.round(ana.progress)}%</span>}
                         </div>
                         {segs.length>0&&(
                           <div className="s2-vid-item-segs">
@@ -1976,6 +1978,14 @@ export default function App() {
                               : <span className="s2-vid-subsrc none">未导入字幕</span>
                           }
                         </div>
+                        {(ana?.status==='done'||ana?.status==='confirmed')&&(
+                          <div className="s2-vid-confirm-row">
+                            {ana.status==='confirmed'
+                              ? <span className="s2-vid-confirm confirmed">✓ 切片已确认</span>
+                              : <span className="s2-vid-confirm pending">切片未确认</span>
+                            }
+                          </div>
+                        )}
                       </div>
                     </div>
                   )
@@ -2158,66 +2168,54 @@ export default function App() {
                         ))}
                       </div>
                     </div>
-                    <div className="s2-sub-import-bar">
-                      <div className="s2-sub-source-row">
-                        <span className="s2-sub-src-label">字幕来源：</span>
-                        <span className={`s2-sub-source-badge${editorAnalysis?.subtitleSource==='real'?' real':' sim'}`}>
-                          {editorAnalysis?.subtitleSource==='real'
-                            ? `真实字幕（${editorSubtitles.length} 条）`
-                            : editorSubtitles.length>0 ? `模拟（${editorSubtitles.length} 条）` : '未导入'
-                          }
-                        </span>
-                      </div>
-                      <button
-                        className="s2-sub-import-btn"
-                        onClick={()=>subtitleFileRef.current?.click()}
-                        disabled={!editorVid}
-                        title="选择本地生成的 subtitles.json 文件（不上传服务器）"
-                      >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        导入真实字幕 JSON
+                    <div className="s2-sub-toolbar">
+                      <span className={`s2-sub-source-badge${editorAnalysis?.subtitleSource==='real'?' real':' sim'}`}>
+                        {editorAnalysis?.subtitleSource==='real'
+                          ? `真实字幕 ${editorSubtitles.length}条`
+                          : editorSubtitles.length>0 ? `模拟 ${editorSubtitles.length}条` : '未导入'
+                        }
+                      </span>
+                      <button className="s2-sub-tool-btn" onClick={()=>subtitleFileRef.current?.click()} disabled={!editorVid} title="选择本地生成的 subtitles.json（不上传服务器）">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        导入字幕
                       </button>
-                      <button
-                        className="s2-sub-import-btn s2-sub-batch-btn"
-                        onClick={()=>batchSubtitleFileRef.current?.click()}
-                        title="选择多个 subtitles.json 文件，按视频文件名自动匹配（不上传服务器）"
-                      >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8h4M6 11h8"/></svg>
-                        批量导入字幕 JSON
+                      <button className="s2-sub-tool-btn" onClick={()=>batchSubtitleFileRef.current?.click()} title="选多个 subtitles.json，按文件名自动匹配">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                        批量导入
                       </button>
-                      <button
-                        className={`s2-sub-import-btn s2-sub-export-btn${editorAnalysis?.subtitleSource==='real'?'':' disabled'}`}
-                        onClick={handleExportCorrectedSubtitles}
-                        title={editorAnalysis?.subtitleSource==='real'?'导出修正后的字幕 JSON（浏览器下载，不覆盖原文件）':'当前视频没有真实字幕可导出'}
-                      >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        导出修正字幕 JSON
+                      <button className={`s2-sub-tool-btn s2-sub-tool-export${editorAnalysis?.subtitleSource==='real'?'':' disabled'}`} onClick={handleExportCorrectedSubtitles} title={editorAnalysis?.subtitleSource==='real'?'导出修正后的字幕 JSON':'当前视频没有真实字幕可导出'}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        导出修正
                       </button>
+                      {editorVid&&editorAnalysis?.subtitleSource!=='real'&&(
+                        <button className={`s2-sub-tool-btn s2-sub-guide-toggle${showImportGuide?' active':''}`} onClick={()=>setShowImportGuide(p=>!p)} title="查看字幕导入说明">
+                          ? 说明
+                        </button>
+                      )}
                     </div>
                   </div>
                   {batchImportResult&&(
-                    <div className="s2-batch-result">
-                      {batchImportResult.matched.length>0&&(
-                        <div className="s2-batch-result-ok">
-                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                          成功匹配 {batchImportResult.matched.length} 个视频：
+                    <div className="s2-batch-result-bar">
+                      <div className="s2-batch-summary">
+                        {batchImportResult.matched.length>0&&<span className="s2-batch-ok-pill">✓ {batchImportResult.matched.length} 个匹配</span>}
+                        {batchImportResult.unmatched.length>0&&<span className="s2-batch-warn-pill">未匹配 {batchImportResult.unmatched.length} 个</span>}
+                        {batchImportResult.errors.length>0&&<span className="s2-batch-err-pill">错误 {batchImportResult.errors.length} 个</span>}
+                        <button className="s2-batch-detail-toggle" onClick={()=>setBatchResultExpanded(p=>!p)}>{batchResultExpanded?'收起':'查看详情'}</button>
+                        <button className="s2-batch-result-close" onClick={()=>setBatchImportResult(null)}>✕</button>
+                      </div>
+                      {batchResultExpanded&&(
+                        <div className="s2-batch-detail">
                           {batchImportResult.matched.map((m,i)=>(
-                            <span key={i} className="s2-batch-match-item">{m.name}（{m.count}条）</span>
+                            <div key={i} className="s2-batch-detail-row ok">✓ {m.name}（{m.count}条）</div>
+                          ))}
+                          {batchImportResult.unmatched.map((n,i)=>(
+                            <div key={i} className="s2-batch-detail-row warn">未匹配：{n}</div>
+                          ))}
+                          {batchImportResult.errors.map((e,i)=>(
+                            <div key={i} className="s2-batch-detail-row err">{e}</div>
                           ))}
                         </div>
                       )}
-                      {batchImportResult.unmatched.length>0&&(
-                        <div className="s2-batch-result-warn">
-                          未匹配 {batchImportResult.unmatched.length} 个：
-                          {batchImportResult.unmatched.map((n,i)=><span key={i} className="s2-batch-unmatch-item">{n}</span>)}
-                        </div>
-                      )}
-                      {batchImportResult.errors.length>0&&(
-                        <div className="s2-batch-result-err">
-                          {batchImportResult.errors.map((e,i)=><div key={i}>{e}</div>)}
-                        </div>
-                      )}
-                      <button className="s2-batch-result-close" onClick={()=>setBatchImportResult(null)}>✕</button>
                     </div>
                   )}
 
@@ -2291,14 +2289,13 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  {editorVid&&editorAnalysis?.subtitleSource!=='real'&&(
+                  {editorVid&&editorAnalysis?.subtitleSource!=='real'&&showImportGuide&&(
                     <div className="s2-sub-import-guide">
                       <div className="s2-sub-guide-title">真实字幕导入流程</div>
                       <div className="s2-sub-guide-step">① 本地生成字幕：</div>
                       <div className="s2-sub-guide-cmd">npm run local:transcribe -- "video.mp4"</div>
-                      <div className="s2-sub-guide-step">② 点击"导入真实字幕 JSON"</div>
-                      <div className="s2-sub-guide-step">③ 选择 local-output/subtitles/test.subtitles.json</div>
-                      <div className="s2-sub-guide-step">④ 系统自动生成真实字幕分段</div>
+                      <div className="s2-sub-guide-step">② 点击"导入字幕"选择 subtitles.json</div>
+                      <div className="s2-sub-guide-step">③ 或"批量导入"选多个 subtitles.json，按文件名自动匹配</div>
                     </div>
                   )}
                 </div>
