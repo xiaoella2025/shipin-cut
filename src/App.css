@@ -6055,7 +6055,7 @@ input[type=range] {
   min-height: 20px;
 }
 .s2-seg-card-sub {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--txt-2);
   line-height: 1.4;
   word-break: break-all;
@@ -6067,11 +6067,21 @@ input[type=range] {
 
 .s2-seg-card-acts {
   display: flex;
-  gap: 3px;
+  gap: 5px;
   flex-wrap: wrap;
   align-items: center;
-  margin-top: 2px;
+  margin-top: 4px;
 }
+
+.s2-seg-card-acts .s2-seg-act {
+  font-size: 11px;
+  padding: 3px 8px;
+  min-height: 22px;
+  line-height: 1;
+}
+
+/* 拆 button hidden until split-at-subtitle replaces it */
+.s2-seg-card-acts .s2-seg-act-split { display: none; }
 
 /* cut-seg-num-lbl inside CutTimeline blocks */
 .cut-seg-num-lbl {
