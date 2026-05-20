@@ -689,7 +689,9 @@ export default function App() {
   const [selectedSegIdx, setSelectedSegIdx]   = useState(null)
   const [selectedSubIdx, setSelectedSubIdx]  = useState(null)
   const [expandedSegs, setExpandedSegs]       = useState({})
-  const [prevSegmentsForUndo, setPrevSegmentsForUndo] = useState(null) // { videoId, segments }
+  const [prevSegmentsForUndo, setPrevSegmentsForUndo] = useState(null) // { videoId, segments, subtitles }
+  const [editingSubId, setEditingSubId]               = useState(null)
+  const [editingSubText, setEditingSubText]           = useState('')
   const [subStep, setSubStep]                 = useState('cut')
 
   // ── step-3 compositions ──
@@ -780,7 +782,8 @@ export default function App() {
   const editorAnalysis = useMemo(()=>videoAnalysis[currentVideoId]||null, [videoAnalysis, currentVideoId])
   const editorSegs     = editorAnalysis?.segments || []
   const editorVidIdx    = useMemo(()=>uploadedVideos.findIndex(v=>v.id===currentVideoId), [uploadedVideos, currentVideoId])
-  const editorSubtitles = editorAnalysis?.subtitles || []
+  const editorSubtitles  = editorAnalysis?.subtitles || []
+  const correctedSubCount = editorSubtitles.filter(s => s.corrected).length
   const currentSubIdx   = useMemo(()=>{
     if (!editorSubtitles.length) return -1
     return editorSubtitles.findIndex(s=>editorTime>=s.startSec&&editorTime<s.endSec)
@@ -933,19 +936,78 @@ export default function App() {
 
   function saveUndoState() {
     if (!currentVideoId || !editorSegs.length) return
-    setPrevSegmentsForUndo({ videoId: currentVideoId, segments: editorSegs.map(s => ({...s})) })
+    setPrevSegmentsForUndo({
+      videoId:   currentVideoId,
+      segments:  editorSegs.map(s => ({...s})),
+      subtitles: editorSubtitles.map(s => ({...s})),
+    })
   }
 
   function handleUndo() {
     if (!prevSegmentsForUndo || prevSegmentsForUndo.videoId !== currentVideoId) return
     setVideoAnalysis(prev => ({
       ...prev,
-      [currentVideoId]: { ...prev[currentVideoId], segments: prevSegmentsForUndo.segments }
+      [currentVideoId]: {
+        ...prev[currentVideoId],
+        segments: prevSegmentsForUndo.segments,
+        ...(prevSegmentsForUndo.subtitles ? { subtitles: prevSegmentsForUndo.subtitles } : {}),
+      }
     }))
     setPrevSegmentsForUndo(null)
     setSelectedCutIdx(null)
     setSelectedSegIdx(null)
+    setEditingSubId(null)
+    setEditingSubText('')
     showToast('已撤销上一步操作')
+  }
+
+  function handleSaveSubEdit(subId) {
+    const trimmed = editingSubText.trim()
+    if (!trimmed) { showToast('字幕不能为空'); return }
+    saveUndoState()
+    setVideoAnalysis(prev => {
+      const ana = prev[currentVideoId]
+      if (!ana?.subtitles) return prev
+      return {
+        ...prev,
+        [currentVideoId]: {
+          ...ana,
+          subtitles: ana.subtitles.map(s =>
+            s.id === subId ? { ...s, text: trimmed, corrected: true } : s
+          ),
+        }
+      }
+    })
+    setEditingSubId(null)
+    setEditingSubText('')
+  }
+
+  function handleExportCorrectedSubtitles() {
+    if (!currentVideoId) return
+    const ana = videoAnalysis[currentVideoId]
+    if (ana?.subtitleSource !== 'real' || !ana?.subtitles?.length) {
+      showToast('当前视频没有可导出的真实字幕')
+      return
+    }
+    const vid = uploadedVideos.find(v => v.id === currentVideoId)
+    const baseName = vid?.name.replace(/\.[^.]+$/, '') || 'subtitles'
+    const data = {
+      sourceVideo: vid?.name || '',
+      sourceAudio: `local-output/audio/${baseName}.wav`,
+      language: 'zh',
+      segmentCount: ana.subtitles.length,
+      segments: ana.subtitles.map(s => ({
+        id: s.id, start: s.startSec, end: s.endSec, text: s.text,
+      })),
+      createdAt: new Date().toISOString(),
+      correctedAt: new Date().toISOString(),
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `${baseName}.corrected.subtitles.json`
+    a.click(); URL.revokeObjectURL(url)
+    showToast(`✓ 已导出：${baseName}.corrected.subtitles.json`)
   }
 
   function handleImportClick() { fileInputRef.current?.click() }
@@ -1904,7 +1966,11 @@ export default function App() {
                         )}
                         <div className="s2-vid-item-sub-src">
                           {ana?.subtitleSource==='real'
-                            ? <span className="s2-vid-subsrc real">真实字幕 {ana.subtitleCount}条</span>
+                            ? <span className="s2-vid-subsrc real">
+                                真实字幕 {ana.subtitleCount}条
+                                {(ana.subtitles?.filter(s=>s.corrected)?.length||0)>0&&
+                                  <span className="s2-vid-corrected-pill"> · 已校对</span>}
+                              </span>
                             : ana?.subtitleCount>0
                               ? <span className="s2-vid-subsrc sim">模拟字幕</span>
                               : <span className="s2-vid-subsrc none">未导入字幕</span>
@@ -2083,6 +2149,7 @@ export default function App() {
                     <div className="s2-right-head">
                       <span className="s2-right-title">字幕列表</span>
                       {editorSubtitles.length>0&&<span className="s2-right-count">{editorSubtitles.length} 条</span>}
+                      {correctedSubCount>0&&<span className="s2-sub-corrected-badge">✎ 已修改 {correctedSubCount} 条</span>}
                       {editorVidIdx>=0&&<span className="s2-right-vidnum" style={{marginLeft:'auto'}}>V{editorVidIdx+1}</span>}
                       {editorAnalysis?.subtitleSource==='real'&&<span className="s2-sub-src-head-badge">真实</span>}
                     </div>
@@ -2112,6 +2179,14 @@ export default function App() {
                       >
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8h4M6 11h8"/></svg>
                         批量导入字幕 JSON
+                      </button>
+                      <button
+                        className={`s2-sub-import-btn s2-sub-export-btn${editorAnalysis?.subtitleSource==='real'?'':' disabled'}`}
+                        onClick={handleExportCorrectedSubtitles}
+                        title={editorAnalysis?.subtitleSource==='real'?'导出修正后的字幕 JSON（浏览器下载，不覆盖原文件）':'当前视频没有真实字幕可导出'}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        导出修正字幕 JSON
                       </button>
                     </div>
                   </div>
@@ -2153,11 +2228,12 @@ export default function App() {
                           const isSelected = selectedSubIdx === si
                           const segIdx = editorSegs.findIndex(s=>sub.startSec>=s.startSec&&sub.startSec<s.endSec)
                           const segTc = segIdx>=0?(SEG_TYPE_COLORS[editorSegs[segIdx].type]||'#6366f1'):'var(--txt-3)'
+                          const isEditing = editingSubId === sub.id
                           return (
                             <div
                               key={sub.id}
-                              className={`s2-sub-row ${isCurrent?'current':''} ${isSelected?'selected':''}`}
-                              onClick={()=>{ setSelectedSubIdx(si); handleEditorSeek(sub.startSec) }}
+                              className={`s2-sub-row ${isCurrent?'current':''} ${isSelected?'selected':''} ${sub.corrected?'corrected':''}`}
+                              onClick={()=>{ if(!isEditing){ setSelectedSubIdx(si); handleEditorSeek(sub.startSec) } }}
                             >
                               <div className="s2-sub-card-meta">
                                 <span className="s2-sub-num">#{si+1}</span>
@@ -2167,8 +2243,32 @@ export default function App() {
                                     {editorVidIdx>=0?editorVidIdx+1:'?'}-{segIdx+1}
                                   </span>
                                 )}
+                                {sub.corrected&&<span className="s2-sub-corrected-mark" title="已人工校对">✎</span>}
+                                {!isEditing&&editorAnalysis?.subtitleSource==='real'&&(
+                                  <button
+                                    className="s2-sub-edit-btn"
+                                    onClick={e=>{ e.stopPropagation(); setEditingSubId(sub.id); setEditingSubText(sub.text) }}
+                                    title="编辑此条字幕"
+                                  >编辑</button>
+                                )}
                               </div>
-                              <div className="s2-sub-text">{sub.text}</div>
+                              {isEditing ? (
+                                <div className="s2-sub-edit-area" onClick={e=>e.stopPropagation()}>
+                                  <textarea
+                                    className="s2-sub-edit-textarea"
+                                    value={editingSubText}
+                                    onChange={e=>setEditingSubText(e.target.value)}
+                                    autoFocus
+                                    rows={2}
+                                  />
+                                  <div className="s2-sub-edit-actions">
+                                    <button className="s2-sub-edit-save" onClick={()=>handleSaveSubEdit(sub.id)}>保存</button>
+                                    <button className="s2-sub-edit-cancel" onClick={()=>{ setEditingSubId(null); setEditingSubText('') }}>取消</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="s2-sub-text">{sub.text}</div>
+                              )}
                             </div>
                           )
                         })}

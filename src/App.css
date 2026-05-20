@@ -7665,6 +7665,114 @@ input[type=range] {
   background: var(--bg-lift);
 }
 
+/* 导出修正字幕按钮 */
+.s2-sub-export-btn {
+  background: var(--bg-lift);
+  border-color: rgba(16,185,129,0.35);
+  color: #10b981;
+}
+.s2-sub-export-btn:hover:not(.disabled) {
+  background: rgba(16,185,129,0.1);
+  border-color: #10b981;
+  color: #10b981;
+}
+.s2-sub-export-btn.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* 字幕行已校对样式 */
+.s2-sub-row.corrected { border-left: 2px solid rgba(16,185,129,0.5); padding-left: 8px; }
+
+/* 已修改徽章（列表头部） */
+.s2-sub-corrected-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #10b981;
+  background: rgba(16,185,129,0.1);
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+/* 字幕行内校对标记 */
+.s2-sub-corrected-mark {
+  font-size: 10px;
+  color: #10b981;
+  opacity: 0.8;
+}
+
+/* 字幕行编辑按钮 */
+.s2-sub-edit-btn {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  background: none;
+  border: 1px solid var(--bdr);
+  color: var(--txt-3);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s, border-color 0.1s, color 0.1s;
+}
+.s2-sub-row:hover .s2-sub-edit-btn { opacity: 1; }
+.s2-sub-edit-btn:hover { border-color: var(--bdr-hi); color: var(--accent); }
+
+/* 编辑区域 */
+.s2-sub-edit-area {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 2px;
+}
+.s2-sub-edit-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 5px 7px;
+  background: var(--bg-surf);
+  border: 1px solid var(--accent);
+  border-radius: var(--r);
+  color: var(--txt);
+  font-family: inherit;
+  outline: none;
+}
+.s2-sub-edit-textarea:focus { border-color: var(--accent-hi); }
+.s2-sub-edit-actions {
+  display: flex;
+  gap: 5px;
+}
+.s2-sub-edit-save {
+  font-size: 11px;
+  padding: 3px 10px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--r);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+.s2-sub-edit-save:hover { background: var(--accent-hi); }
+.s2-sub-edit-cancel {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: none;
+  border: 1px solid var(--bdr);
+  border-radius: var(--r);
+  color: var(--txt-3);
+  cursor: pointer;
+}
+.s2-sub-edit-cancel:hover { border-color: var(--bdr-hi); color: var(--txt); }
+
+/* 左侧视频卡片已校对徽章 */
+.s2-vid-corrected-pill {
+  font-size: 9px;
+  color: #10b981;
+  opacity: 0.9;
+}
+
 .s2-batch-result {
   position: relative;
   margin: 0 12px 8px;
