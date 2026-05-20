@@ -5650,8 +5650,29 @@ input[type=range] {
   font-weight: 400;
 }
 .s2-left-config .s2-section {
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--bdr);
+}
+
+/* Compact horizontal intensity chips in left config */
+.s2-left-config .intensity-group {
+  flex-direction: row;
+  gap: 4px;
+}
+.s2-left-config .intensity-btn {
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 2px;
+  gap: 3px;
+}
+.s2-left-config .intensity-btn small { display: none; }
+.s2-left-config .ib-left {
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
 }
 .s2-left-config .s2s-result-card {
   margin: 8px;
@@ -5678,10 +5699,10 @@ input[type=range] {
   border-bottom: 1px solid var(--bdr);
 }
 
-/* ── Fixed narrow video preview card ── */
+/* ── Fixed 16:9 video preview card ── */
 .s2-video-card {
-  width: 170px;
-  flex: 0 0 170px;
+  width: 460px;
+  flex: 0 0 460px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--bdr);
@@ -5705,23 +5726,18 @@ input[type=range] {
 }
 
 .s2-vid-card-preview {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-shrink: 0;
   background: #000;
   overflow: hidden;
-  padding: 2px;
 }
 
-/* Portrait 9:16 video – height fills card, width is auto from aspect-ratio */
+/* 16:9 canvas – video fills card width, height follows aspect-ratio */
 .s2-video-card .s2-video-area {
-  height: 100%;
-  width: auto;
-  aspect-ratio: 9/16;
-  max-width: 100%;
-  flex: none;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16/9;
+  border-radius: 0;
+  border: none;
 }
 
 .s2-vid-card-ctrl {
@@ -5855,7 +5871,7 @@ input[type=range] {
   min-width: 28px;
 }
 .s2-sub-num {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--txt-3);
   font-variant-numeric: tabular-nums;
@@ -5863,7 +5879,7 @@ input[type=range] {
 }
 .s2-sub-row.current .s2-sub-num { color: var(--accent); }
 .s2-sub-time {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--txt-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -5879,7 +5895,7 @@ input[type=range] {
   gap: 2px;
 }
 .s2-sub-text {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--txt-2);
   line-height: 1.5;
   word-break: break-word;

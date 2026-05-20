@@ -239,7 +239,7 @@ function getSubtitlesForSeg(seg, subtitles) {
 function splitIntoSubtitleColumns(subtitles) {
   const count = subtitles.length
   let cols = 1
-  if (count > 35) cols = 3
+  if (count > 30) cols = 3
   else if (count > 15) cols = 2
   const perCol = Math.ceil(count / cols)
   return Array.from({ length: cols }, (_, i) => ({
