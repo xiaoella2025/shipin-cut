@@ -236,13 +236,12 @@ function getSubtitlesForSeg(seg, subtitles) {
   return subtitles.filter(s => s.startSec >= seg.startSec && s.startSec < seg.endSec)
 }
 
-function splitIntoSubtitleColumns(subtitles) {
+function splitIntoSubtitleColumns(subtitles, cols = 2) {
   const count = subtitles.length
-  let cols = 1
-  if (count > 30) cols = 3
-  else if (count > 15) cols = 2
-  const perCol = Math.ceil(count / cols)
-  return Array.from({ length: cols }, (_, i) => ({
+  if (!count) return []
+  const actualCols = Math.min(cols, count)
+  const perCol = Math.ceil(count / actualCols)
+  return Array.from({ length: actualCols }, (_, i) => ({
     subs: subtitles.slice(i * perCol, (i + 1) * perCol),
     startIdx: i * perCol,
   }))
@@ -693,6 +692,7 @@ export default function App() {
   const [editingSubId, setEditingSubId]               = useState(null)
   const [editingSubText, setEditingSubText]           = useState('')
   const [subStep, setSubStep]                 = useState('cut')
+  const [subColCount, setSubColCount]         = useState(2)
 
   // ── step-3 compositions ──
   const [compositions, setCompositions]     = useState([])
@@ -2152,6 +2152,11 @@ export default function App() {
                       {correctedSubCount>0&&<span className="s2-sub-corrected-badge">✎ 已修改 {correctedSubCount} 条</span>}
                       {editorVidIdx>=0&&<span className="s2-right-vidnum" style={{marginLeft:'auto'}}>V{editorVidIdx+1}</span>}
                       {editorAnalysis?.subtitleSource==='real'&&<span className="s2-sub-src-head-badge">真实</span>}
+                      <div className="s2-col-switcher">
+                        {[1,2,3].map(n=>(
+                          <button key={n} className={`s2-col-btn${subColCount===n?' active':''}`} onClick={()=>setSubColCount(n)} title={`${n}列显示`}>{n}</button>
+                        ))}
+                      </div>
                     </div>
                     <div className="s2-sub-import-bar">
                       <div className="s2-sub-source-row">
@@ -2220,7 +2225,7 @@ export default function App() {
                     {!editorVid&&<div className="s2-sub-empty" style={{width:'100%'}}>从左侧选择视频</div>}
                     {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-sub-empty" style={{width:'100%'}}><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>等待分析…</div>}
                     {editorVid&&editorAnalysis?.status==='analyzing'&&<div className="s2-sub-empty" style={{width:'100%'}}><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>字幕识别中…</div>}
-                    {splitIntoSubtitleColumns(editorSubtitles).map((col, ci) => (
+                    {splitIntoSubtitleColumns(editorSubtitles, subColCount).map((col, ci) => (
                       <div key={ci} className="s2-subtitle-col">
                         {col.subs.map((sub, localIdx) => {
                           const si = col.startIdx + localIdx
@@ -2302,12 +2307,21 @@ export default function App() {
               {/* BOTTOM: timeline + segment cards */}
               <div className="s2-bottom-tl">
                 <div className="s2-tl-head">
-                  <span className="s2-tl-title">
-                    分段时间轴
-                    {selectedCutIdx!==null&&editorSegs[selectedCutIdx]&&(
-                      <span className="s2-cut-sel-info"> · 切割点 @ {fmt(editorSegs[selectedCutIdx]?.endSec)}</span>
-                    )}
-                  </span>
+                  <button
+                    className="s2-undo-btn"
+                    onClick={handleUndo}
+                    disabled={!prevSegmentsForUndo||prevSegmentsForUndo.videoId!==currentVideoId}
+                    title="撤销上一步操作"
+                  >↩ 撤销</button>
+                  <button
+                    className="s2-add-cut-btn"
+                    onClick={addCutAtCurrentTime}
+                    disabled={!editorVid||!['done','confirmed'].includes(editorAnalysis?.status)}
+                    title={selectedSubIdx>=0&&editorSubtitles[selectedSubIdx]?`按字幕 #${selectedSubIdx+1} 起始时间切割`:'在当前播放时间点新增切割'}
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    {selectedSubIdx>=0&&editorSubtitles[selectedSubIdx]?'按字幕切割':'切割'}
+                  </button>
                   {selectedCutIdx!==null?(
                     <div className="s2-cut-adj">
                       <button className="s2-cut-adj-btn" onClick={()=>adjustCutPoint(selectedCutIdx,-0.5)}>◀ -0.5s</button>
@@ -2323,22 +2337,12 @@ export default function App() {
                       }
                     </span>
                   )}
-                  <button
-                    className="s2-undo-btn"
-                    onClick={handleUndo}
-                    disabled={!prevSegmentsForUndo||prevSegmentsForUndo.videoId!==currentVideoId}
-                    title="撤销上一步操作"
-                  >↩ 撤销</button>
-                  <button
-                    className="s2-add-cut-btn"
-                    style={{marginLeft:'8px',flexShrink:0}}
-                    onClick={addCutAtCurrentTime}
-                    disabled={!editorVid||!['done','confirmed'].includes(editorAnalysis?.status)}
-                    title={selectedSubIdx>=0&&editorSubtitles[selectedSubIdx]?`按字幕 #${selectedSubIdx+1} 起始时间切割`:'在当前播放时间点新增切割'}
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    {selectedSubIdx>=0&&editorSubtitles[selectedSubIdx]?'按字幕切割':'切割'}
-                  </button>
+                  <span className="s2-tl-title" style={{marginLeft:'auto'}}>
+                    分段时间轴
+                    {selectedCutIdx!==null&&editorSegs[selectedCutIdx]&&(
+                      <span className="s2-cut-sel-info"> · 切割点 @ {fmt(editorSegs[selectedCutIdx]?.endSec)}</span>
+                    )}
+                  </span>
                 </div>
                 <CutTimeline
                   segs={editorSegs}
