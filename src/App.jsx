@@ -236,6 +236,18 @@ function getSubtitlesForSeg(seg, subtitles) {
   return subtitles.filter(s => s.startSec >= seg.startSec && s.startSec < seg.endSec)
 }
 
+function splitIntoSubtitleColumns(subtitles) {
+  const count = subtitles.length
+  let cols = 1
+  if (count > 35) cols = 3
+  else if (count > 15) cols = 2
+  const perCol = Math.ceil(count / cols)
+  return Array.from({ length: cols }, (_, i) => ({
+    subs: subtitles.slice(i * perCol, (i + 1) * perCol),
+    startIdx: i * perCol,
+  }))
+}
+
 // ─── sub-components ──────────────────────────────────────────────────────────
 
 function Toggle({ on, onToggle }) {
@@ -1748,7 +1760,7 @@ export default function App() {
           {/* 3-column workspace + bottom timeline (cut sub-step) */}
           {subStep==='cut'&&<><div className="s2-workspace">
 
-            {/* LEFT: video list + config */}
+            {/* LEFT: video list */}
             <div className="s2-left-panel">
               <div className="s2-left-head">
                 <span className="s2-left-title">素材列表</span>
@@ -1861,95 +1873,200 @@ export default function App() {
               )}
             </div>
 
-            {/* CENTER: subtitle work area + timeline */}
-            <div className="s2-main-work">
+            {/* RIGHT: main work area */}
+            <div className="s2-right-work">
 
-              {/* Subtitle list */}
-              <div className="s2-sub-section">
-                <div className="s2-right-head">
-                  <span className="s2-right-title">字幕列表</span>
-                  {editorSubtitles.length>0&&<span className="s2-right-count">{editorSubtitles.length} 条</span>}
-                  {editorVidIdx>=0&&<span className="s2-right-vidnum">V{editorVidIdx+1}</span>}
-                  {editorAnalysis?.subtitleSource==='real'&&<span className="s2-sub-src-head-badge">真实</span>}
-                </div>
+              {/* TOP: fixed-size video card + newspaper subtitle columns */}
+              <div className="s2-top-workspace">
 
-                <div className="s2-sub-import-bar">
-                  <div className="s2-sub-source-row">
-                    <span className="s2-sub-src-label">字幕来源：</span>
-                    <span className={`s2-sub-source-badge${editorAnalysis?.subtitleSource==='real'?' real':' sim'}`}>
-                      {editorAnalysis?.subtitleSource==='real'
-                        ? `真实字幕 JSON（${editorSubtitles.length} 条）`
-                        : editorSubtitles.length>0 ? `模拟字幕（${editorSubtitles.length} 条）` : '未导入'
-                      }
-                    </span>
+                {/* Video preview card – fixed narrow width, fills height at 9:16 */}
+                <div className="s2-video-card">
+                  <div className="s2-vid-card-head">
+                    <span className="s2-vid-card-title">预览</span>
+                    {editorVidIdx>=0&&<span className="s2-right-vidnum">V{editorVidIdx+1}</span>}
+                    {editorAnalysis?.status==='confirmed'&&<span className="s2-vid-confirmed-badge" style={{fontSize:'8px',padding:'1px 4px'}}>✓ 已确</span>}
                   </div>
-                  <button
-                    className="s2-sub-import-btn"
-                    onClick={()=>subtitleFileRef.current?.click()}
-                    disabled={!editorVid}
-                    title="选择本地生成的 subtitles.json 文件（不上传服务器）"
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    导入真实字幕 JSON
-                  </button>
-                </div>
-
-                <div className="s2-sub-list" ref={subListRef}>
-                  {!editorVid&&<div className="s2-sub-empty">从左侧选择视频</div>}
-                  {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-sub-empty"><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>等待分析…</div>}
-                  {editorVid&&editorAnalysis?.status==='analyzing'&&<div className="s2-sub-empty"><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>字幕识别中…</div>}
-                  {editorSubtitles.map((sub,si)=>{
-                    const isCurrent=currentSubIdx===si
-                    const isSelected=selectedSubIdx===si
-                    const segIdx=editorSegs.findIndex(s=>sub.startSec>=s.startSec&&sub.startSec<s.endSec)
-                    const segTc=segIdx>=0?(SEG_TYPE_COLORS[editorSegs[segIdx].type]||'#6366f1'):'var(--txt-3)'
-                    return (
-                      <div
-                        key={sub.id}
-                        className={`s2-sub-row ${isCurrent?'current':''} ${isSelected?'selected':''}`}
-                        onClick={()=>{ setSelectedSubIdx(si); handleEditorSeek(sub.startSec) }}
-                      >
-                        <div className="s2-sub-idx-col">
-                          <span className="s2-sub-num">{si+1}</span>
-                          <span className="s2-sub-time">{fmt(sub.startSec)}</span>
+                  <div className="s2-vid-card-preview">
+                    <div className="s2-video-area">
+                      {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
+                        <video
+                          ref={editorVideoRef} key={currentVideoId}
+                          src={editorVid.url} className="s2-video-el"
+                          preload="auto" playsInline
+                          onTimeUpdate={()=>{
+                            if(editorVideoRef.current){
+                              const t=editorVideoRef.current.currentTime
+                              setEditorTime(t)
+                              if(playingSegEnd!==null && t>=playingSegEnd){ setEditorPlaying(false); setPlayingSegEnd(null) }
+                            }
+                          }}
+                          onEnded={()=>setEditorPlaying(false)}
+                        />
+                      )}
+                      {!editorVid&&(
+                        <div className="s2-vid-empty">
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.2"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+                          <span>选择视频</span>
                         </div>
-                        <div className="s2-sub-body">
-                          <span className="s2-sub-text">{sub.text}</span>
-                          {segIdx>=0&&(
-                            <span className="s2-sub-seg" style={{color:segTc}}>
-                              {editorVidIdx>=0?editorVidIdx+1:'?'}-{segIdx+1}
-                            </span>
-                          )}
+                      )}
+                      {editorVid&&editorAnalysis?.status==='waiting'&&(
+                        <div className="s2-vid-overlay"><span>等待…</span></div>
+                      )}
+                      {editorVid&&editorAnalysis?.status==='analyzing'&&(
+                        <div className="s2-vid-overlay">
+                          <span className="s2-vid-analyzing-pct">{Math.round(editorAnalysis.progress)}%</span>
+                          <div className="s2-vid-ana-bar"><div className="s2-vid-ana-bar-fill" style={{width:`${editorAnalysis.progress}%`}}/></div>
                         </div>
-                      </div>
-                    )
-                  })}
-                </div>
-                {editorSegs.length>0&&(
-                  <div className="s2-right-footer">
+                      )}
+                      {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
+                        <div className="s2-vid-hud">
+                          <span className="s2-vid-timecode">{fmtMs(editorTime)}</span>
+                        </div>
+                      )}
+                      {currentSubIdx>=0&&editorSubtitles[currentSubIdx]&&(
+                        <div className="s2-vid-sub-overlay">{editorSubtitles[currentSubIdx].text}</div>
+                      )}
+                      {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
+                        <button
+                          className={`s2-vid-big-play${editorPlaying?' playing':''}`}
+                          onClick={()=>{ setEditorPlaying(p=>{ if(p) setPlayingSegEnd(null); return !p }) }}
+                          title={editorPlaying?'暂停':'播放'}
+                        >
+                          {editorPlaying
+                            ? <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                            : <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                          }
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="s2-player-ctrl s2-vid-card-ctrl">
                     <button
-                      className={`s2-confirm-vid-btn ${editorAnalysis?.status==='confirmed'?'confirmed':''}`}
-                      onClick={()=>handleConfirmVideo(currentVideoId)}
+                      className="s2-play-btn"
+                      onClick={()=>{ setEditorPlaying(p=>{ if(p) setPlayingSegEnd(null); return !p }) }}
+                      disabled={!editorVid||!['done','confirmed'].includes(editorAnalysis?.status)}
                     >
-                      {editorAnalysis?.status==='confirmed'?'✓ 已确认此视频分段':'确认此视频分段'}
+                      {editorPlaying
+                        ? <svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                        : <svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      }
                     </button>
+                    <div
+                      ref={scrubberRef}
+                      className="s2-scrubber"
+                      onMouseDown={e=>{
+                        e.preventDefault()
+                        const r=e.currentTarget.getBoundingClientRect()
+                        handleEditorSeek(((e.clientX-r.left)/r.width)*(editorVid?.dur||0))
+                        scrubDragRef.current=true
+                        document.body.style.userSelect='none'
+                      }}
+                    >
+                      <div className="s2-scrub-fill" style={{width:editorVid?.dur>0?pctOf(editorTime,editorVid.dur):'0%'}}/>
+                      <div className="s2-scrub-thumb" style={{left:editorVid?.dur>0?pctOf(editorTime,editorVid.dur):'0%'}}/>
+                    </div>
+                    <span className="s2-time-disp" style={{fontSize:'9px'}}>{fmt(editorTime)}</span>
                   </div>
-                )}
+                  <div className="s2-vid-info s2-vid-card-info">
+                    {editorVid?(
+                      <>
+                        <span className="s2-vid-info-name" title={editorVid.name} style={{maxWidth:'120px',fontSize:'10px'}}>{editorVid.name.replace(/\.[^.]+$/,'').slice(0,14)}</span>
+                        <span className="s2-vid-info-tag">{editorVid.durStr}</span>
+                      </>
+                    ):<span className="s2-vid-info-none">未选择</span>}
+                  </div>
+                </div>
 
-                {editorVid&&editorAnalysis?.subtitleSource!=='real'&&(
-                  <div className="s2-sub-import-guide">
-                    <div className="s2-sub-guide-title">真实字幕导入流程</div>
-                    <div className="s2-sub-guide-step">① 本地生成字幕：</div>
-                    <div className="s2-sub-guide-cmd">npm run local:transcribe -- "video.mp4"</div>
-                    <div className="s2-sub-guide-step">② 点击上方"导入真实字幕 JSON"</div>
-                    <div className="s2-sub-guide-step">③ 选择生成的字幕文件：</div>
-                    <div className="s2-sub-guide-cmd">local-output/subtitles/test.subtitles.json</div>
-                    <div className="s2-sub-guide-step">④ 系统自动生成真实字幕分段</div>
+                {/* Subtitle newspaper columns */}
+                <div className="s2-subtitle-workspace">
+                  <div className="s2-sub-workspace-head">
+                    <div className="s2-right-head">
+                      <span className="s2-right-title">字幕列表</span>
+                      {editorSubtitles.length>0&&<span className="s2-right-count">{editorSubtitles.length} 条</span>}
+                      {editorVidIdx>=0&&<span className="s2-right-vidnum" style={{marginLeft:'auto'}}>V{editorVidIdx+1}</span>}
+                      {editorAnalysis?.subtitleSource==='real'&&<span className="s2-sub-src-head-badge">真实</span>}
+                    </div>
+                    <div className="s2-sub-import-bar">
+                      <div className="s2-sub-source-row">
+                        <span className="s2-sub-src-label">字幕来源：</span>
+                        <span className={`s2-sub-source-badge${editorAnalysis?.subtitleSource==='real'?' real':' sim'}`}>
+                          {editorAnalysis?.subtitleSource==='real'
+                            ? `真实字幕（${editorSubtitles.length} 条）`
+                            : editorSubtitles.length>0 ? `模拟（${editorSubtitles.length} 条）` : '未导入'
+                          }
+                        </span>
+                      </div>
+                      <button
+                        className="s2-sub-import-btn"
+                        onClick={()=>subtitleFileRef.current?.click()}
+                        disabled={!editorVid}
+                        title="选择本地生成的 subtitles.json 文件（不上传服务器）"
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        导入真实字幕 JSON
+                      </button>
+                    </div>
                   </div>
-                )}
+
+                  <div className="s2-subtitle-columns" ref={subListRef}>
+                    {!editorVid&&<div className="s2-sub-empty" style={{width:'100%'}}>从左侧选择视频</div>}
+                    {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-sub-empty" style={{width:'100%'}}><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>等待分析…</div>}
+                    {editorVid&&editorAnalysis?.status==='analyzing'&&<div className="s2-sub-empty" style={{width:'100%'}}><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>字幕识别中…</div>}
+                    {splitIntoSubtitleColumns(editorSubtitles).map((col, ci) => (
+                      <div key={ci} className="s2-subtitle-col">
+                        {col.subs.map((sub, localIdx) => {
+                          const si = col.startIdx + localIdx
+                          const isCurrent = currentSubIdx === si
+                          const isSelected = selectedSubIdx === si
+                          const segIdx = editorSegs.findIndex(s=>sub.startSec>=s.startSec&&sub.startSec<s.endSec)
+                          const segTc = segIdx>=0?(SEG_TYPE_COLORS[editorSegs[segIdx].type]||'#6366f1'):'var(--txt-3)'
+                          return (
+                            <div
+                              key={sub.id}
+                              className={`s2-sub-row ${isCurrent?'current':''} ${isSelected?'selected':''}`}
+                              onClick={()=>{ setSelectedSubIdx(si); handleEditorSeek(sub.startSec) }}
+                            >
+                              <div className="s2-sub-card-meta">
+                                <span className="s2-sub-num">#{si+1}</span>
+                                <span className="s2-sub-time">{fmt(sub.startSec)}</span>
+                                {segIdx>=0&&(
+                                  <span className="s2-sub-seg" style={{color:segTc}}>
+                                    {editorVidIdx>=0?editorVidIdx+1:'?'}-{segIdx+1}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="s2-sub-text">{sub.text}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ))}
+                  </div>
+
+                  {editorSegs.length>0&&(
+                    <div className="s2-right-footer">
+                      <button
+                        className={`s2-confirm-vid-btn ${editorAnalysis?.status==='confirmed'?'confirmed':''}`}
+                        onClick={()=>handleConfirmVideo(currentVideoId)}
+                      >
+                        {editorAnalysis?.status==='confirmed'?'✓ 已确认此视频分段':'确认此视频分段'}
+                      </button>
+                    </div>
+                  )}
+                  {editorVid&&editorAnalysis?.subtitleSource!=='real'&&(
+                    <div className="s2-sub-import-guide">
+                      <div className="s2-sub-guide-title">真实字幕导入流程</div>
+                      <div className="s2-sub-guide-step">① 本地生成字幕：</div>
+                      <div className="s2-sub-guide-cmd">npm run local:transcribe -- "video.mp4"</div>
+                      <div className="s2-sub-guide-step">② 点击"导入真实字幕 JSON"</div>
+                      <div className="s2-sub-guide-step">③ 选择 local-output/subtitles/test.subtitles.json</div>
+                      <div className="s2-sub-guide-step">④ 系统自动生成真实字幕分段</div>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Timeline + segment cards */}
+              {/* BOTTOM: timeline + segment cards */}
               <div className="s2-bottom-tl">
                 <div className="s2-tl-head">
                   <span className="s2-tl-title">
@@ -1969,7 +2086,7 @@ export default function App() {
                     <span className="s2-tl-hint">
                       {selectedSubIdx>=0&&editorSubtitles[selectedSubIdx]
                         ? `切割点：字幕 #${selectedSubIdx+1} 起始 ${fmt(editorSubtitles[selectedSubIdx].startSec)}`
-                        : '建议先点击字幕列表，再切割 · 点击切割线选中'
+                        : '建议先点击字幕，再切割 · 点击切割线选中'
                       }
                     </span>
                   )}
@@ -2063,111 +2180,6 @@ export default function App() {
                     )
                   })}
                 </div>
-              </div>
-            </div>
-
-            {/* RIGHT: vertical video preview */}
-            <div className="s2-vid-panel">
-              <div className="s2-vid-panel-head">
-                <span className="s2-vid-panel-title">竖屏预览</span>
-                {editorVidIdx>=0&&<span className="s2-right-vidnum">V{editorVidIdx+1}</span>}
-                {editorAnalysis?.status==='confirmed'&&<span className="s2-vid-confirmed-badge" style={{fontSize:'9px',padding:'1px 5px'}}>✓ 已确认</span>}
-              </div>
-              <div className="s2-vid-panel-body">
-                <div className="s2-video-area">
-                  {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
-                    <video
-                      ref={editorVideoRef} key={currentVideoId}
-                      src={editorVid.url} className="s2-video-el"
-                      preload="auto" playsInline
-                      onTimeUpdate={()=>{
-                        if(editorVideoRef.current){
-                          const t=editorVideoRef.current.currentTime
-                          setEditorTime(t)
-                          if(playingSegEnd!==null && t>=playingSegEnd){ setEditorPlaying(false); setPlayingSegEnd(null) }
-                        }
-                      }}
-                      onEnded={()=>setEditorPlaying(false)}
-                    />
-                  )}
-                  {!editorVid&&(
-                    <div className="s2-vid-empty">
-                      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.2"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
-                      <span>从左侧选择视频</span>
-                    </div>
-                  )}
-                  {editorVid&&editorAnalysis?.status==='waiting'&&(
-                    <div className="s2-vid-overlay">
-                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                      <span>等待分析中…</span>
-                    </div>
-                  )}
-                  {editorVid&&editorAnalysis?.status==='analyzing'&&(
-                    <div className="s2-vid-overlay">
-                      <span className="s2-vid-analyzing-pct">{Math.round(editorAnalysis.progress)}%</span>
-                      <span>正在识别字幕与分段…</span>
-                      <div className="s2-vid-ana-bar"><div className="s2-vid-ana-bar-fill" style={{width:`${editorAnalysis.progress}%`}}/></div>
-                    </div>
-                  )}
-                  {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
-                    <div className="s2-vid-hud">
-                      <span className="s2-vid-timecode">{fmtMs(editorTime)}</span>
-                    </div>
-                  )}
-                  {currentSubIdx>=0&&editorSubtitles[currentSubIdx]&&(
-                    <div className="s2-vid-sub-overlay">{editorSubtitles[currentSubIdx].text}</div>
-                  )}
-                  {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
-                    <button
-                      className={`s2-vid-big-play${editorPlaying?' playing':''}`}
-                      onClick={()=>{ setEditorPlaying(p=>{ if(p) setPlayingSegEnd(null); return !p }) }}
-                      title={editorPlaying?'暂停':'播放'}
-                    >
-                      {editorPlaying
-                        ? <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                        : <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-                      }
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="s2-player-ctrl s2-vid-panel-ctrl">
-                <button
-                  className="s2-play-btn"
-                  onClick={()=>{ setEditorPlaying(p=>{ if(p) setPlayingSegEnd(null); return !p }) }}
-                  disabled={!editorVid||!['done','confirmed'].includes(editorAnalysis?.status)}
-                >
-                  {editorPlaying
-                    ? <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                    : <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  }
-                </button>
-                <div
-                  ref={scrubberRef}
-                  className="s2-scrubber"
-                  onMouseDown={e=>{
-                    e.preventDefault()
-                    const r=e.currentTarget.getBoundingClientRect()
-                    handleEditorSeek(((e.clientX-r.left)/r.width)*(editorVid?.dur||0))
-                    scrubDragRef.current=true
-                    document.body.style.userSelect='none'
-                  }}
-                >
-                  <div className="s2-scrub-fill" style={{width:editorVid?.dur>0?pctOf(editorTime,editorVid.dur):'0%'}}/>
-                  <div className="s2-scrub-thumb" style={{left:editorVid?.dur>0?pctOf(editorTime,editorVid.dur):'0%'}}/>
-                </div>
-                <span className="s2-time-disp">{fmtMs(editorTime)} / {editorVid?fmt(editorVid.dur):'--:--'}</span>
-              </div>
-              <div className="s2-vid-info">
-                {editorVid?(
-                  <>
-                    <span className="s2-vid-info-num">V{editorVidIdx+1}</span>
-                    <span className="s2-vid-info-name" title={editorVid.name}>{editorVid.name}</span>
-                    {editorVid.res!=='—'&&<span className="s2-vid-info-tag">{editorVid.res}</span>}
-                    <span className="s2-vid-info-tag">{editorVid.durStr}</span>
-                    <span className="s2-vid-info-tag">{editorVid.sizeStr}</span>
-                  </>
-                ):<span className="s2-vid-info-none">未选择视频</span>}
               </div>
             </div>
           </div></>}

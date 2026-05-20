@@ -5658,83 +5658,127 @@ input[type=range] {
   border-radius: var(--r);
 }
 
-/* ── Center panel: big video player ── */
-/* ── Center: subtitle work area + timeline ── */
-.s2-main-work {
+/* ── Right main work area ── */
+.s2-right-work {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
   overflow: hidden;
 }
 
-/* Subtitle list section (fills upper part of main-work) */
-.s2-sub-section {
+/* ── Top: video card + subtitle columns (side by side) ── */
+.s2-top-workspace {
   flex: 1;
   min-height: 0;
+  max-height: 420px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   overflow: hidden;
   border-bottom: 1px solid var(--bdr);
 }
 
-/* ── Right: vertical video preview panel ── */
-.s2-vid-panel {
-  width: 320px;
-  flex-shrink: 0;
+/* ── Fixed narrow video preview card ── */
+.s2-video-card {
+  width: 170px;
+  flex: 0 0 170px;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--bdr);
+  border-right: 1px solid var(--bdr);
   background: var(--bg-panel);
   overflow: hidden;
 }
 
-.s2-vid-panel-head {
+.s2-vid-card-head {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: 5px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--bdr);
-  flex-shrink: 0;
   background: var(--bg-card);
 }
-.s2-vid-panel-title {
-  font-size: 11px;
+.s2-vid-card-title {
+  font-size: 10px;
   font-weight: 700;
   color: var(--txt);
 }
 
-.s2-vid-panel-body {
+.s2-vid-card-preview {
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding: 10px;
-  background: #060608;
+  justify-content: center;
+  background: #000;
   overflow: hidden;
+  padding: 2px;
 }
 
-/* Portrait 9:16 video inside the panel */
-.s2-vid-panel .s2-video-area {
-  flex: 1;
+/* Portrait 9:16 video – height fills card, width is auto from aspect-ratio */
+.s2-video-card .s2-video-area {
+  height: 100%;
   width: auto;
   aspect-ratio: 9/16;
   max-width: 100%;
-  min-height: 0;
+  flex: none;
 }
 
-.s2-vid-panel-ctrl {
-  padding: 8px 10px;
+.s2-vid-card-ctrl {
+  padding: 5px 8px;
   border-top: 1px solid var(--bdr);
   background: var(--bg-card);
   flex-shrink: 0;
+  gap: 6px;
 }
 
-.s2-vid-panel .s2-vid-info {
-  margin: 0 10px 8px;
+.s2-vid-card-info {
+  margin: 3px 8px 5px;
   flex-shrink: 0;
+}
+
+/* ── Subtitle newspaper columns ── */
+.s2-subtitle-workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.s2-sub-workspace-head {
+  flex-shrink: 0;
+}
+.s2-sub-workspace-head .s2-right-head {
+  border-bottom: none;
+}
+
+.s2-subtitle-columns {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.s2-subtitle-col {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--bdr);
+}
+.s2-subtitle-col:last-child { border-right: none; }
+.s2-subtitle-col::-webkit-scrollbar { width: 3px; }
+.s2-subtitle-col::-webkit-scrollbar-thumb { background: var(--bdr-hi); border-radius: 2px; }
+
+/* Subtitle card: stacked vertically (meta row + text) */
+.s2-sub-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
 }
 
 .s2-right-head {
@@ -5789,8 +5833,9 @@ input[type=range] {
 
 .s2-sub-row {
   display: flex;
-  gap: 8px;
-  padding: 7px 12px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--bdr);
   cursor: pointer;
   transition: background 0.1s;
