@@ -118,6 +118,16 @@ function getUsageLabel(usage) {
   return `${labels[usage.mode] || usage.mode} ${usage.secs || 3}s`
 }
 
+function findSegAtPos(comp, posSec) {
+  let acc = 0
+  for (let i = 0; i < comp.segments.length; i++) {
+    const dur = comp.segments[i].endSec - comp.segments[i].startSec
+    if (posSec < acc + dur) return i
+    acc += dur
+  }
+  return comp.segments.length - 1
+}
+
 function readVideoMeta(url) {
   return new Promise(resolve => {
     const v = document.createElement('video')
@@ -713,8 +723,10 @@ export default function App() {
   // ── step-3 composition editing ──
   const [editingSeg, setEditingSeg]         = useState(null)   // {compId, segIdx}
   const [lockedSegs, setLockedSegs]         = useState({})     // {compId: {segIdx: true}}
-  const [compSegUsage, setCompSegUsage]     = useState({})     // {compId_segIdx: {mode, secs}}
-  const [compManualEdited, setCompManualEdited] = useState({}) // {compId: true}
+  const [compSegUsage, setCompSegUsage]         = useState({})   // {compId_segIdx: {mode, secs}}
+  const [compManualEdited, setCompManualEdited] = useState({})  // {compId: true}
+  const [compUndoSnap, setCompUndoSnap]         = useState(null) // {compositions, lockedSegs, compManualEdited}
+  const [compPreviewPos, setCompPreviewPos]     = useState({})  // {compId: posSec}
   const [showAllCands, setShowAllCands] = useState({})     // {'compId_segIdx': true}
   const [pendingCand, setPendingCand]       = useState(null)   // {cand, compId, segIdx}
   const [candPreviewPlaying, setCandPrevPlay] = useState(false)
@@ -758,15 +770,18 @@ export default function App() {
   const currentlyAnalyzingRef = useRef(null)
   const uploadedVideosRef     = useRef([])
   const videoAnalysisRef      = useRef({})
+  const compositionsRef       = useRef([])
   const scrubberRef           = useRef(null)
   const scrubDragRef          = useRef(false)
   const candPreviewRef        = useRef(null)
   const subtitleFileRef       = useRef(null)
   const batchSubtitleFileRef  = useRef(null)
   const subListRef            = useRef(null)
+  const compTlDragRef         = useRef(null) // {compId, rect, totalDur}
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
+  useEffect(() => { compositionsRef.current  = compositions   }, [compositions])
 
   // ── derived ──
   const enabledDedupKeys = Object.entries(dedup).filter(([,v])=>v).map(([k])=>k)
@@ -835,6 +850,24 @@ export default function App() {
   const totalSegCount  = uploadedVideos.reduce((s,v)=>s+(videoAnalysis[v.id]?.segments?.length||0), 0)
 
   // ── effects ──
+
+  // comp timeline drag
+  useEffect(()=>{
+    function onMove(e) {
+      if (!compTlDragRef.current) return
+      const {compId,rect,totalDur}=compTlDragRef.current
+      const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width))
+      const posSec=ratio*totalDur
+      const comp=compositionsRef.current.find(c=>c.id===compId)
+      if (!comp) return
+      setCompPreviewPos(prev=>({...prev,[compId]:posSec}))
+      setEditingSeg({compId,segIdx:findSegAtPos(comp,posSec)})
+    }
+    function onUp() { compTlDragRef.current=null }
+    document.addEventListener('mousemove',onMove)
+    document.addEventListener('mouseup',onUp)
+    return ()=>{ document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp) }
+  },[]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     if (!isGenerated) return
@@ -1356,7 +1389,21 @@ export default function App() {
 
   function toggleDedup(k) { setDedup(d=>({...d,[k]:!d[k]})) }
 
+  function saveCompUndo() {
+    setCompUndoSnap({ compositions, lockedSegs, compManualEdited })
+  }
+  function handleCompUndo() {
+    if (!compUndoSnap) return
+    setCompositions(compUndoSnap.compositions)
+    setLockedSegs(compUndoSnap.lockedSegs)
+    setCompManualEdited(compUndoSnap.compManualEdited)
+    setCompUndoSnap(null)
+    setEditingSeg(null)
+    showToast('已撤销')
+  }
+
   function replaceCompSeg(compId, segIdx, newSeg) {
+    saveCompUndo()
     setCompositions(prev=>prev.map(c=>{
       if (c.id!==compId) return c
       const newSegs=c.segments.map((s,i)=>i===segIdx?newSeg:s)
@@ -1374,6 +1421,7 @@ export default function App() {
   }
 
   function regenCompRow(compId) {
+    saveCompUndo()
     const comp=compositions.find(c=>c.id===compId)
     if (!comp) return
     const cl=lockedSegs[compId]||{}
@@ -1394,6 +1442,7 @@ export default function App() {
   }
 
   function moveSegInComp(compId, segIdx, dir) {
+    saveCompUndo()
     const comp=compositions.find(c=>c.id===compId)
     if (!comp) return
     const ti=segIdx+dir
@@ -1796,82 +1845,43 @@ export default function App() {
                     return (
                       <>
                         <div className="r3-edit-header">
-                          <button className="r3-back-btn" onClick={()=>setEditingSeg(null)}>
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-                            返回
-                          </button>
-                          <span className="r3-edit-title">片段编辑</span>
-                          {editComp&&<span className="r3-edit-comp">{editComp.name}</span>}
+                          <span className="r3-edit-title">片段详情</span>
+                          <button className="r3-back-btn r3-desel-btn" onClick={()=>setEditingSeg(null)}>取消选择</button>
                         </div>
                         {editSeg&&(
-                          <div className="r3-current">
-                            <div className="r3-cur-head">当前片段</div>
-                            <div className="r3-cur-card">
-                              <div className="r3-cur-top">
-                                <span className="r3-cur-label" style={{color:tc}}>{editSeg.label}</span>
-                                <span className="r3-cur-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg.type}</span>
-                                <span className="r3-cur-src">V{editSeg.videoIndex+1}</span>
+                          <>
+                            <div className="r3-pos-info">
+                              <span className="r3-pos-comp">{editComp?.name}</span>
+                              <span className="r3-pos-dot">·</span>
+                              <span className="r3-pos-idx">第 {editingSeg.segIdx+1} 段 / 共 {editComp?.segments.length} 段</span>
+                            </div>
+                            <div className="r3-current">
+                              <div className="r3-cur-card">
+                                <div className="r3-cur-top">
+                                  <span className="r3-cur-label" style={{color:tc}}>{editSeg.label}</span>
+                                  <span className="r3-cur-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg.type}</span>
+                                  <span className="r3-cur-src">V{editSeg.videoIndex+1}</span>
+                                </div>
+                                <div className="r3-cur-time">{editSeg.startStr} – {editSeg.endStr} · {fmt(editSeg.endSec-editSeg.startSec)}</div>
+                                {editSeg.subtitle&&<div className="r3-cur-sub">{editSeg.subtitle}</div>}
                               </div>
-                              <div className="r3-cur-time">{editSeg.startStr} – {editSeg.endStr}</div>
-                              {editSeg.subtitle&&<div className="r3-cur-sub">{editSeg.subtitle}</div>}
                             </div>
-                          </div>
-                        )}
-                        {editSeg&&(
-                          <div className="r3-usage-section">
-                            <div className="r3-sec-head">
-                              <span className="r3-sec-title">使用长度</span>
-                              <span className="r3-sec-hint">原始 {fmt(editSeg.endSec-editSeg.startSec)}</span>
+                            <div className="r3-ops-row">
+                              <button className="r3-op-btn" disabled={editingSeg.segIdx===0}
+                                onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,-1)}>← 前移</button>
+                              <button className="r3-op-btn" disabled={editingSeg.segIdx>=(editComp?.segments.length||0)-1}
+                                onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,+1)}>后移 →</button>
+                              <button className={`comp-seg-lock${(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?' on':''}`}
+                                style={{position:'static',opacity:1,fontSize:'12px',padding:'4px 8px'}}
+                                onClick={()=>toggleLockSeg(editingSeg.compId,editingSeg.segIdx)}>
+                                {(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?'🔒 已锁':'🔓 锁定'}
+                              </button>
                             </div>
-                            <div className="r3-usage-modes">
-                              {[['full','全段'],['head','片头'],['mid','中间'],['tail','片尾'],['custom','自定义']].map(([mode,label])=>{
-                                const curUsage=compSegUsage[allCandsKey]
-                                const isActiveMode=(curUsage?.mode||'full')===mode
-                                return (
-                                  <button key={mode}
-                                    className={`r3-usage-mode-btn${isActiveMode?' active':''}`}
-                                    onClick={()=>{
-                                      if (mode==='full') setSegUsage(editingSeg.compId,editingSeg.segIdx,{mode:'full'})
-                                      else setSegUsage(editingSeg.compId,editingSeg.segIdx,{mode,secs:curUsage?.secs||Math.min(3,editSeg.endSec-editSeg.startSec)})
-                                    }}
-                                  >{label}</button>
-                                )
-                              })}
-                            </div>
-                            {compSegUsage[allCandsKey]?.mode&&compSegUsage[allCandsKey].mode!=='full'&&(
-                              <div className="r3-usage-secs-row">
-                                <span className="r3-usage-secs-label">秒数</span>
-                                <input
-                                  className="r3-usage-secs-input"
-                                  type="number"
-                                  min="0.5"
-                                  max={editSeg.endSec-editSeg.startSec}
-                                  step="0.5"
-                                  value={compSegUsage[allCandsKey].secs||3}
-                                  onChange={e=>setSegUsage(editingSeg.compId,editingSeg.segIdx,{...compSegUsage[allCandsKey],secs:Math.max(0.5,Math.min(parseFloat(e.target.value)||3,editSeg.endSec-editSeg.startSec))})}
-                                />
-                                <span className="r3-usage-secs-unit">s</span>
-                                <span className="r3-usage-eff">→ {fmt(Math.min(compSegUsage[allCandsKey].secs||3,editSeg.endSec-editSeg.startSec))}</span>
-                              </div>
-                            )}
-                            <div className="r3-usage-move-row">
-                              <span className="r3-usage-move-label">顺序</span>
-                              <button
-                                className="r3-move-btn"
-                                disabled={editingSeg.segIdx===0}
-                                onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,-1)}
-                              >← 前移</button>
-                              <button
-                                className="r3-move-btn"
-                                disabled={editingSeg.segIdx>=(editComp?.segments.length||0)-1}
-                                onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,+1)}
-                              >后移 →</button>
-                            </div>
-                          </div>
+                          </>
                         )}
                         <div className="r3-rec-section">
                           <div className="r3-sec-head">
-                            <span className="r3-sec-title">推荐替换</span>
+                            <span className="r3-sec-title">替换候选</span>
                             {editSeg&&<span className="r3-sec-hint">{editSeg.type}优先</span>}
                           </div>
                           {recs.length>0?recs.map(cand=>{
@@ -1948,7 +1958,7 @@ export default function App() {
                       </>
                     )
                   })() : (
-                    <div className="r3-hint-text">点击下方成品视频行中的片段块，即可在此替换编辑</div>
+                    <div className="r3-hint-text">点击下方预览条中的片段，可在此查看详情、调整顺序、替换片段</div>
                   )}
                 </aside>
               </div>
@@ -1960,7 +1970,10 @@ export default function App() {
                     <span>成品视频方案</span>
                     {compositions.length>0&&<span className="s3-comp-badge">{compositions.length} 个方案 · {totalSelectedSegs} 个片段</span>}
                   </div>
-                  <div className="s3-comp-head-r"/>
+                  <div className="s3-comp-head-r">
+                    <span className="s3-comp-preview-hint">当前为组合方案预览，尚未生成真实视频</span>
+                    <button className="comp-undo-btn" disabled={!compUndoSnap} onClick={handleCompUndo}>↩ 撤销</button>
+                  </div>
                 </div>
                 {compositions.length===0&&(
                   <div className="s3-comp-empty"><p>未找到可组合的片段，请返回字幕切片步骤勾选更多片段</p></div>
@@ -1969,74 +1982,76 @@ export default function App() {
                   {compositions.map(comp=>{
                     const isActive = comp.id === selectedCompId
                     const isManualEdited = !!compManualEdited[comp.id]
-                    const effectiveTotalDur = comp.segments.reduce((a,seg,si)=>a+getEffectiveDur(seg,compSegUsage[`${comp.id}_${si}`]),0)
+                    const previewPos = compPreviewPos[comp.id]
+                    const playheadPct = comp.totalDur>0&&previewPos!=null
+                      ? Math.min(100,(previewPos/comp.totalDur)*100) : -1
                     return (
                       <div
                         key={comp.id}
                         className={`comp-row ${isActive?'active':''}`}
-                        onClick={()=>{ setSelectedCompId(comp.id) }}
+                        onClick={()=>setSelectedCompId(comp.id)}
                       >
-                        <div className="comp-row-head">
+                        {/* Recipe bar – one line */}
+                        <div className="comp-recipe-bar">
                           <span className={`comp-radio ${isActive?'on':''}`}/>
-                          <span className="comp-name">{comp.name}</span>
-                          <span className="comp-meta">{fmt(effectiveTotalDur)}</span>
-                          {effectiveTotalDur!==comp.totalDur&&<span className="comp-meta comp-meta-nat">原{fmt(comp.totalDur)}</span>}
-                          <span className="comp-meta">{comp.segments.length} 片段</span>
-                          {isManualEdited&&<span className="comp-manual-badge">已手动调整</span>}
-                          <span className="comp-meta-segs">{comp.segments.map(s=>s.label).join(' → ')}</span>
-                          <button className="comp-regen-btn" onClick={e=>{e.stopPropagation();regenCompRow(comp.id)}}>↻ 重新生成此行</button>
+                          <span className="comp-recipe-name">{comp.name}</span>
+                          <span className="comp-recipe-sep">｜</span>
+                          <span className="comp-recipe-dur">预计 {fmt(comp.totalDur)}</span>
+                          <span className="comp-recipe-sep">｜</span>
+                          <span className="comp-recipe-cnt">{comp.segments.length} 片段</span>
+                          {isManualEdited&&<><span className="comp-recipe-sep">｜</span><span className="comp-manual-badge">已手动调整</span></>}
+                          <span className="comp-recipe-sep">｜</span>
+                          <span className="comp-recipe-order" title={comp.segments.map(s=>s.label).join(' → ')}>
+                            {comp.segments.map(s=>s.label).join(' → ')}
+                          </span>
+                          <button className="comp-regen-btn" onClick={e=>{e.stopPropagation();regenCompRow(comp.id)}}>↻ 重新生成</button>
                         </div>
-                        <div className="comp-row-body">
-                          <div className="comp-row-tl">
-                            {comp.segments.map((seg,si)=>{
-                              const usage = compSegUsage[`${comp.id}_${si}`]
-                              const effDur = getEffectiveDur(seg, usage)
-                              const w = `${effectiveTotalDur>0?(effDur/effectiveTotalDur)*100:(100/comp.segments.length)}%`
-                              const tc  = SEG_TYPE_COLORS[seg.type] || '#6366f1'
-                              const isEditingSeg = editingSeg?.compId===comp.id && editingSeg?.segIdx===si
-                              const isLocked = (lockedSegs[comp.id]||{})[si]
-                              const hasUsage = usage && usage.mode !== 'full'
-                              return (
-                                <div
-                                  key={seg.id+'_'+si}
-                                  className={`comp-seg-blk${isEditingSeg?' editing':''}${isLocked?' locked':''}`}
-                                  style={{ width:w, background:tc+'cc', borderTop:`2px solid ${tc}` }}
-                                  title={`${seg.label} ${seg.type}\n${seg.startStr}–${seg.endStr}\n${seg.subtitle||''}`}
-                                  onClick={e=>{e.stopPropagation();setEditingSeg({compId:comp.id,segIdx:si});setSelectedCompId(comp.id)}}
-                                >
-                                  <span className="comp-seg-label">{seg.label}</span>
-                                  <span className="comp-seg-src">V{seg.videoIndex+1}</span>
-                                  <span className="comp-seg-type">{seg.type}</span>
-                                  <span className="comp-seg-dur">{fmt(effDur)}</span>
-                                  {hasUsage&&<span className="comp-seg-usage">{getUsageLabel(usage)}</span>}
-                                  <div className="comp-seg-move-btns" onClick={e=>e.stopPropagation()}>
-                                    {si>0&&<button className="comp-seg-mv" title="前移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,-1)}}>←</button>}
-                                    {si<comp.segments.length-1&&<button className="comp-seg-mv" title="后移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,+1)}}>→</button>}
-                                  </div>
-                                  <button
-                                    className={`comp-seg-lock${isLocked?' on':''}`}
-                                    title={isLocked?'解锁此片段':'锁定此片段'}
-                                    onClick={e=>{e.stopPropagation();toggleLockSeg(comp.id,si)}}
-                                  >{isLocked?'🔒':'🔓'}</button>
+                        {/* Preview timeline bar */}
+                        <div className="comp-preview-bar"
+                          onMouseDown={e=>{
+                            e.stopPropagation()
+                            const rect=e.currentTarget.getBoundingClientRect()
+                            compTlDragRef.current={compId:comp.id,rect,totalDur:comp.totalDur}
+                            const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width))
+                            const posSec=ratio*comp.totalDur
+                            setCompPreviewPos(prev=>({...prev,[comp.id]:posSec}))
+                            setEditingSeg({compId:comp.id,segIdx:findSegAtPos(comp,posSec)})
+                            setSelectedCompId(comp.id)
+                          }}
+                        >
+                          {comp.segments.map((seg,si)=>{
+                            const dur=seg.endSec-seg.startSec
+                            const w=`${comp.totalDur>0?(dur/comp.totalDur)*100:(100/comp.segments.length)}%`
+                            const tc=SEG_TYPE_COLORS[seg.type]||'#6366f1'
+                            const isSelected=editingSeg?.compId===comp.id&&editingSeg?.segIdx===si
+                            const isLocked=(lockedSegs[comp.id]||{})[si]
+                            return (
+                              <div
+                                key={seg.id+'_'+si}
+                                className={`comp-seg-blk${isSelected?' editing':''}${isLocked?' locked':''}`}
+                                style={{width:w,background:tc+'cc',borderTop:`3px solid ${tc}`}}
+                                title={`${seg.label} · ${seg.type} · V${seg.videoIndex+1}\n${seg.startStr}–${seg.endStr} · ${fmt(dur)}\n${seg.subtitle||''}`}
+                                onClick={e=>{e.stopPropagation();setEditingSeg({compId:comp.id,segIdx:si});setSelectedCompId(comp.id);setCompPreviewPos(prev=>({...prev,[comp.id]:seg.startSec}))}}
+                              >
+                                <span className="comp-seg-label">{seg.label}</span>
+                                <span className="comp-seg-src">V{seg.videoIndex+1}</span>
+                                <span className="comp-seg-type">{seg.type}</span>
+                                <span className="comp-seg-dur">{fmt(dur)}</span>
+                                <div className="comp-seg-move-btns" onClick={e=>e.stopPropagation()}>
+                                  {si>0&&<button className="comp-seg-mv" title="前移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,-1)}}>←</button>}
+                                  {si<comp.segments.length-1&&<button className="comp-seg-mv" title="后移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,+1)}}>→</button>}
                                 </div>
-                              )
-                            })}
-                          </div>
-                          <div className="comp-row-seq">
-                            <div className="comp-seq-title">组合顺序</div>
-                            {comp.segments.map((seg,si)=>{
-                              const tc = SEG_TYPE_COLORS[seg.type] || '#6366f1'
-                              const usage = compSegUsage[`${comp.id}_${si}`]
-                              return (
-                                <div key={seg.id+'seq'+si} className="comp-seq-item">
-                                  <span className="comp-seq-lbl" style={{color:tc}}>{seg.label}</span>
-                                  <span className="comp-seq-type">{seg.type}</span>
-                                  <span className="comp-seq-time">{fmt(getEffectiveDur(seg,usage))}</span>
-                                  {usage&&usage.mode!=='full'&&<span className="comp-seq-usage">{getUsageLabel(usage)}</span>}
-                                </div>
-                              )
-                            })}
-                          </div>
+                                <button
+                                  className={`comp-seg-lock${isLocked?' on':''}`}
+                                  title={isLocked?'解锁此片段':'锁定此片段'}
+                                  onClick={e=>{e.stopPropagation();toggleLockSeg(comp.id,si)}}
+                                >{isLocked?'🔒':'🔓'}</button>
+                              </div>
+                            )
+                          })}
+                          {playheadPct>=0&&isActive&&(
+                            <div className="comp-preview-playhead" style={{left:`${playheadPct}%`}}/>
+                          )}
                         </div>
                       </div>
                     )
