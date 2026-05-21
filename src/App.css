@@ -5245,6 +5245,10 @@ input[type=range] {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
 }
 .s3-comp-list::-webkit-scrollbar { width: 4px; }
 .s3-comp-list::-webkit-scrollbar-thumb { background: var(--bdr-hi); border-radius: 2px; }
@@ -6133,10 +6137,14 @@ input[type=range] {
   overflow: hidden;
   border: 1px solid rgba(255,255,255,.07);
   transition: border-color .15s;
+  background: transparent;
 }
 .comp-row.active {
-  border-color: rgba(99,102,241,.4);
+  border: 1px solid rgba(99,102,241,.45);
+  background: rgba(99,102,241,.04);
 }
+.comp-row:hover { background: rgba(255,255,255,.025); }
+.comp-row.active:hover { background: rgba(99,102,241,.07); }
 
 /* recipe bar – one-line summary */
 .comp-recipe-bar {
@@ -6219,6 +6227,10 @@ input[type=range] {
   position: relative;
   cursor: crosshair;
   user-select: none;
+  padding: 6px 14px;
+  gap: 3px;
+  background: rgba(0,0,0,.18);
+  align-items: stretch;
 }
 
 /* segment blocks inside preview bar */
@@ -6230,8 +6242,9 @@ input[type=range] {
   flex-direction: column;
   padding: 5px 6px 4px;
   gap: 1px;
-  min-width: 0;
+  min-width: 28px;
   flex-shrink: 0;
+  border-radius: 4px;
   transition: filter .12s;
 }
 .comp-seg-blk:hover {
@@ -6337,13 +6350,25 @@ input[type=range] {
 /* playhead */
 .comp-preview-playhead {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 6px;
+  bottom: 6px;
   width: 2px;
-  background: #fff;
+  background: rgba(255,255,255,.9);
   pointer-events: none;
   z-index: 10;
-  box-shadow: 0 0 4px rgba(255,255,255,.6);
+  transform: translateX(-50%);
+  box-shadow: 0 0 6px rgba(255,255,255,.4);
+}
+.comp-preview-playhead-dot {
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(99,102,241,.9), 0 1px 4px rgba(0,0,0,.5);
 }
 
 /* undo + hint in comp-head-r */
@@ -6690,7 +6715,7 @@ input[type=range] {
 }
 .s2-compose-cols {
   display: flex;
-  height: 240px;
+  height: 360px;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(255,255,255,.06);
   overflow: hidden;
@@ -6712,8 +6737,87 @@ input[type=range] {
 }
 .s2-compose-right {
   flex: 1;
-  overflow-y: auto;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* comp preview window (fixed at top of right panel) */
+.comp-prev-window {
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  background: rgba(0,0,0,.25);
+  padding: 8px 10px 7px;
+}
+.comp-prev-video-wrap {
+  width: 100%;
+  height: 148px;
+  background: #000;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.comp-prev-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.comp-prev-no-vid {
+  font-size: 11px;
+  color: #475569;
+}
+.comp-prev-info-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.comp-prev-lbl {
+  font-size: 13px;
+  font-weight: 700;
+}
+.comp-prev-vsrc {
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+}
+.comp-prev-type-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid;
+}
+.comp-prev-time-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 3px;
+}
+.comp-prev-sep { color: #334155; }
+.comp-prev-sub-text {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+.comp-prev-sim-hint {
+  font-size: 9px;
+  color: #334155;
+}
+
+/* scrollable detail body */
+.comp-right-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 /* ── big play overlay button in main video area ── */

@@ -778,6 +778,8 @@ export default function App() {
   const batchSubtitleFileRef  = useRef(null)
   const subListRef            = useRef(null)
   const compTlDragRef         = useRef(null) // {compId, rect, totalDur}
+  const compPrevRef           = useRef(null) // video element for comp preview
+  const compPrevSeekRef       = useRef(null) // desired seek time after src load
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -868,6 +870,23 @@ export default function App() {
     document.addEventListener('mouseup',onUp)
     return ()=>{ document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp) }
   },[]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // seek comp preview video when selection or position changes
+  useEffect(()=>{
+    const vid=compPrevRef.current
+    if (!vid||!editingSeg) return
+    const comp=compositionsRef.current.find(c=>c.id===editingSeg.compId)
+    if (!comp) return
+    const seg=comp.segments[editingSeg.segIdx]
+    if (!seg) return
+    let acc=0
+    for (let i=0;i<editingSeg.segIdx;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec
+    const pos=compPreviewPos[comp.id]??acc
+    const off=Math.min(Math.max(0,pos-acc),seg.endSec-seg.startSec)
+    const t=seg.startSec+off
+    compPrevSeekRef.current=t
+    if (vid.readyState>=2) vid.currentTime=t
+  },[editingSeg?.segIdx,editingSeg?.compId,compPreviewPos]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     if (!isGenerated) return
@@ -1839,126 +1858,170 @@ export default function App() {
                     ].slice(0,5):[]
                     const allCands=editSeg?allSelectedSegs.filter(c=>c.id!==editSeg.id&&!compSegIds.has(c.id)):[]
                     const candsByType=allCands.reduce((g,c)=>{(g[c.type]=g[c.type]||[]).push(c);return g},{})
-                    // fallback recs: adjacent segs from same video
                     const adjFallback=editSeg&&recs.length===0?allSelectedSegs.filter(c=>c.videoIndex===editSeg.videoIndex&&c.id!==editSeg.id&&!compSegIds.has(c.id)).slice(0,3):[]
+                    // preview computation
+                    const previewPos=compPreviewPos[editingSeg.compId]??0
+                    let accDurBefore=0
+                    for (let i=0;i<editingSeg.segIdx;i++) {
+                      const s=editComp?.segments[i]; if(s) accDurBefore+=s.endSec-s.startSec
+                    }
+                    const segDur=editSeg?(editSeg.endSec-editSeg.startSec):0
+                    const segOffset=Math.min(Math.max(0,previewPos-accDurBefore),segDur)
+                    const previewSrcVid=editSeg?uploadedVideos[editSeg.videoIndex]:null
 
                     return (
                       <>
-                        <div className="r3-edit-header">
-                          <span className="r3-edit-title">片段详情</span>
-                          <button className="r3-back-btn r3-desel-btn" onClick={()=>setEditingSeg(null)}>取消选择</button>
-                        </div>
-                        {editSeg&&(
-                          <>
-                            <div className="r3-pos-info">
-                              <span className="r3-pos-comp">{editComp?.name}</span>
-                              <span className="r3-pos-dot">·</span>
-                              <span className="r3-pos-idx">第 {editingSeg.segIdx+1} 段 / 共 {editComp?.segments.length} 段</span>
-                            </div>
-                            <div className="r3-current">
-                              <div className="r3-cur-card">
-                                <div className="r3-cur-top">
-                                  <span className="r3-cur-label" style={{color:tc}}>{editSeg.label}</span>
-                                  <span className="r3-cur-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg.type}</span>
-                                  <span className="r3-cur-src">V{editSeg.videoIndex+1}</span>
-                                </div>
-                                <div className="r3-cur-time">{editSeg.startStr} – {editSeg.endStr} · {fmt(editSeg.endSec-editSeg.startSec)}</div>
-                                {editSeg.subtitle&&<div className="r3-cur-sub">{editSeg.subtitle}</div>}
-                              </div>
-                            </div>
-                            <div className="r3-ops-row">
-                              <button className="r3-op-btn" disabled={editingSeg.segIdx===0}
-                                onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,-1)}>← 前移</button>
-                              <button className="r3-op-btn" disabled={editingSeg.segIdx>=(editComp?.segments.length||0)-1}
-                                onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,+1)}>后移 →</button>
-                              <button className={`comp-seg-lock${(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?' on':''}`}
-                                style={{position:'static',opacity:1,fontSize:'12px',padding:'4px 8px'}}
-                                onClick={()=>toggleLockSeg(editingSeg.compId,editingSeg.segIdx)}>
-                                {(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?'🔒 已锁':'🔓 锁定'}
-                              </button>
-                            </div>
-                          </>
-                        )}
-                        <div className="r3-rec-section">
-                          <div className="r3-sec-head">
-                            <span className="r3-sec-title">替换候选</span>
-                            {editSeg&&<span className="r3-sec-hint">{editSeg.type}优先</span>}
+                        {/* ── Composition preview window ── */}
+                        <div className="comp-prev-window">
+                          <div className="comp-prev-video-wrap">
+                            {previewSrcVid?(
+                              <video
+                                ref={compPrevRef}
+                                key={previewSrcVid.id}
+                                src={previewSrcVid.url}
+                                preload="auto"
+                                playsInline
+                                muted
+                                className="comp-prev-video"
+                                onLoadedMetadata={()=>{ if(compPrevRef.current) compPrevRef.current.currentTime=compPrevSeekRef.current??0 }}
+                              />
+                            ):(
+                              <div className="comp-prev-no-vid">无法加载视频</div>
+                            )}
                           </div>
-                          {recs.length>0?recs.map(cand=>{
-                            const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
-                            return (
-                              <div key={cand.id} className="r3-cand-item"
-                                onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
-                                <div className="r3-cand-top">
-                                  <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
-                                  <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
-                                  <span className="r3-cand-src">V{cand.videoIndex+1}</span>
-                                </div>
-                                <div className="r3-cand-time">{cand.startStr} – {cand.endStr}</div>
-                                {cand.subtitle&&<div className="r3-cand-sub">{cand.subtitle.slice(0,34)}{cand.subtitle.length>34?'…':''}</div>}
-                              </div>
-                            )
-                          }):(
-                            <div className="r3-no-recs">
-                              <div>暂无同类型推荐</div>
-                              <div className="r3-no-recs-hint">可从下方展开全部候选中选择</div>
-                              {adjFallback.length>0&&(
-                                <>
-                                  <div className="r3-no-recs-sub">同视频相邻片段：</div>
-                                  {adjFallback.map(cand=>{
-                                    const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
-                                    return (
-                                      <div key={cand.id} className="r3-cand-item"
-                                        onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
-                                        <div className="r3-cand-top">
-                                          <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
-                                          <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
-                                        </div>
-                                        <div className="r3-cand-time">{cand.startStr} – {cand.endStr}</div>
-                                      </div>
-                                    )
-                                  })}
-                                </>
-                              )}
-                            </div>
-                          )}
+                          <div className="comp-prev-info-row">
+                            <span className="comp-prev-lbl" style={{color:tc}}>{editSeg?.label??'--'}</span>
+                            <span className="comp-prev-vsrc">V{(editSeg?.videoIndex??0)+1}</span>
+                            <span className="comp-prev-type-tag" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg?.type??''}</span>
+                          </div>
+                          <div className="comp-prev-time-row">
+                            <span>成品 {fmt(previewPos)} / {fmt(editComp?.totalDur??0)}</span>
+                            <span className="comp-prev-sep">·</span>
+                            <span>片段内 {fmt(segOffset)} / {fmt(segDur)}</span>
+                          </div>
+                          {editSeg?.subtitle&&<div className="comp-prev-sub-text">{editSeg.subtitle}</div>}
+                          <div className="comp-prev-sim-hint">模拟预览 · 非真实成品视频</div>
                         </div>
-                        <div className="r3-all-section">
-                          <button className="r3-all-toggle" onClick={()=>setShowAllCands(p=>({...p,[allCandsKey]:!p[allCandsKey]}))}>
-                            {showAllCands[allCandsKey]?'▲ 收起候选':'▼ 展开全部候选'}
-                            <span className="r3-all-count">{allCands.length}</span>
-                          </button>
-                          {showAllCands[allCandsKey]&&(
-                            <div className="r3-all-list">
-                              {Object.entries(candsByType).map(([type,cands])=>{
-                                const ttc=SEG_TYPE_COLORS[type]||'#6366f1'
-                                return (
-                                  <div key={type} className="r3-type-group">
-                                    <div className="r3-type-group-head" style={{color:ttc}}>{type}<span className="r3-type-cnt">({cands.length})</span></div>
-                                    {cands.map(cand=>{
+                        {/* ── Scrollable detail body ── */}
+                        <div className="comp-right-body">
+                          <div className="r3-edit-header">
+                            <span className="r3-edit-title">片段详情</span>
+                            <button className="r3-back-btn r3-desel-btn" onClick={()=>setEditingSeg(null)}>取消选择</button>
+                          </div>
+                          {editSeg&&(
+                            <>
+                              <div className="r3-pos-info">
+                                <span className="r3-pos-comp">{editComp?.name}</span>
+                                <span className="r3-pos-dot">·</span>
+                                <span className="r3-pos-idx">第 {editingSeg.segIdx+1} 段 / 共 {editComp?.segments.length} 段</span>
+                              </div>
+                              <div className="r3-current">
+                                <div className="r3-cur-card">
+                                  <div className="r3-cur-top">
+                                    <span className="r3-cur-label" style={{color:tc}}>{editSeg.label}</span>
+                                    <span className="r3-cur-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg.type}</span>
+                                    <span className="r3-cur-src">V{editSeg.videoIndex+1}</span>
+                                  </div>
+                                  <div className="r3-cur-time">{editSeg.startStr} – {editSeg.endStr} · {fmt(editSeg.endSec-editSeg.startSec)}</div>
+                                  {editSeg.subtitle&&<div className="r3-cur-sub">{editSeg.subtitle}</div>}
+                                </div>
+                              </div>
+                              <div className="r3-ops-row">
+                                <button className="r3-op-btn" disabled={editingSeg.segIdx===0}
+                                  onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,-1)}>← 前移</button>
+                                <button className="r3-op-btn" disabled={editingSeg.segIdx>=(editComp?.segments.length||0)-1}
+                                  onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,+1)}>后移 →</button>
+                                <button className={`comp-seg-lock${(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?' on':''}`}
+                                  style={{position:'static',opacity:1,fontSize:'12px',padding:'4px 8px'}}
+                                  onClick={()=>toggleLockSeg(editingSeg.compId,editingSeg.segIdx)}>
+                                  {(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?'🔒 已锁':'🔓 锁定'}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                          <div className="r3-rec-section">
+                            <div className="r3-sec-head">
+                              <span className="r3-sec-title">替换候选</span>
+                              {editSeg&&<span className="r3-sec-hint">{editSeg.type}优先</span>}
+                            </div>
+                            {recs.length>0?recs.map(cand=>{
+                              const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
+                              return (
+                                <div key={cand.id} className="r3-cand-item"
+                                  onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
+                                  <div className="r3-cand-top">
+                                    <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
+                                    <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
+                                    <span className="r3-cand-src">V{cand.videoIndex+1}</span>
+                                  </div>
+                                  <div className="r3-cand-time">{cand.startStr} – {cand.endStr}</div>
+                                  {cand.subtitle&&<div className="r3-cand-sub">{cand.subtitle.slice(0,34)}{cand.subtitle.length>34?'…':''}</div>}
+                                </div>
+                              )
+                            }):(
+                              <div className="r3-no-recs">
+                                <div>暂无同类型推荐</div>
+                                <div className="r3-no-recs-hint">可从下方展开全部候选中选择</div>
+                                {adjFallback.length>0&&(
+                                  <>
+                                    <div className="r3-no-recs-sub">同视频相邻片段：</div>
+                                    {adjFallback.map(cand=>{
                                       const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
                                       return (
-                                        <div key={cand.id} className="r3-cand-item r3-cand-sm"
+                                        <div key={cand.id} className="r3-cand-item"
                                           onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
                                           <div className="r3-cand-top">
                                             <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
-                                            <span className="r3-cand-src">V{cand.videoIndex+1}</span>
-                                            <span className="r3-cand-time">{cand.startStr}–{cand.endStr}</span>
+                                            <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
                                           </div>
-                                          {cand.subtitle&&<div className="r3-cand-sub r3-cand-sm-sub">{cand.subtitle.slice(0,28)}{cand.subtitle.length>28?'…':''}</div>}
+                                          <div className="r3-cand-time">{cand.startStr} – {cand.endStr}</div>
                                         </div>
                                       )
                                     })}
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="r3-all-section">
+                            <button className="r3-all-toggle" onClick={()=>setShowAllCands(p=>({...p,[allCandsKey]:!p[allCandsKey]}))}>
+                              {showAllCands[allCandsKey]?'▲ 收起候选':'▼ 展开全部候选'}
+                              <span className="r3-all-count">{allCands.length}</span>
+                            </button>
+                            {showAllCands[allCandsKey]&&(
+                              <div className="r3-all-list">
+                                {Object.entries(candsByType).map(([type,cands])=>{
+                                  const ttc=SEG_TYPE_COLORS[type]||'#6366f1'
+                                  return (
+                                    <div key={type} className="r3-type-group">
+                                      <div className="r3-type-group-head" style={{color:ttc}}>{type}<span className="r3-type-cnt">({cands.length})</span></div>
+                                      {cands.map(cand=>{
+                                        const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
+                                        return (
+                                          <div key={cand.id} className="r3-cand-item r3-cand-sm"
+                                            onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
+                                            <div className="r3-cand-top">
+                                              <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
+                                              <span className="r3-cand-src">V{cand.videoIndex+1}</span>
+                                              <span className="r3-cand-time">{cand.startStr}–{cand.endStr}</span>
+                                            </div>
+                                            {cand.subtitle&&<div className="r3-cand-sub r3-cand-sm-sub">{cand.subtitle.slice(0,28)}{cand.subtitle.length>28?'…':''}</div>}
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </>
                     )
                   })() : (
-                    <div className="r3-hint-text">点击下方预览条中的片段，可在此查看详情、调整顺序、替换片段</div>
+                    <div className="comp-right-body">
+                      <div className="r3-hint-text">点击下方预览条中的片段，可在此查看详情、调整顺序、替换片段</div>
+                    </div>
                   )}
                 </aside>
               </div>
@@ -2049,8 +2112,10 @@ export default function App() {
                               </div>
                             )
                           })}
-                          {playheadPct>=0&&isActive&&(
-                            <div className="comp-preview-playhead" style={{left:`${playheadPct}%`}}/>
+                          {playheadPct>=0&&(
+                            <div className="comp-preview-playhead" style={{left:`${playheadPct}%`}}>
+                              <div className="comp-preview-playhead-dot"/>
+                            </div>
                           )}
                         </div>
                       </div>
