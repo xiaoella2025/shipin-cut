@@ -1560,18 +1560,37 @@ export default function App() {
     const comp=compositions.find(c=>c.id===compId)
     if (!comp||!comp.segments.length) return
     setCandidatePreview(null)
+
+    // Resume from current playhead position; restart from 0 if at end or not yet set
+    const currentPos = compPreviewPos[compId] ?? 0
+    const resumeFromStart = currentPos <= 0 || currentPos >= comp.totalDur - 0.2
+
+    let startSegIdx = 0
+    let seekTime = comp.segments[0].startSec
+    if (!resumeFromStart) {
+      let acc = 0
+      for (let i = 0; i < comp.segments.length; i++) {
+        const dur = comp.segments[i].endSec - comp.segments[i].startSec
+        if (currentPos < acc + dur || i === comp.segments.length - 1) {
+          startSegIdx = i
+          const localOff = Math.min(Math.max(0, currentPos - acc), dur - 0.01)
+          seekTime = comp.segments[i].startSec + localOff
+          break
+        }
+        acc += dur
+      }
+    }
+
     setCompIsPlaying(true); compIsPlayingRef.current=true
     setCompPlayCompId(compId); compPlayCompIdRef.current=compId
-    setCompPlaySegIdx(0); compPlaySegIdxRef.current=0
+    setCompPlaySegIdx(startSegIdx); compPlaySegIdxRef.current=startSegIdx
     setSelectedCompId(compId)
-    setEditingSeg({compId,segIdx:0})
-    const seg0=comp.segments[0]
-    compPrevSeekRef.current=seg0.startSec
-    setCompPreviewPos(prev=>({...prev,[compId]:0}))
-    // Directly trigger play — handles case where compPlaySegIdx doesn't change
+    setEditingSeg({compId,segIdx:startSegIdx})
+    compPrevSeekRef.current=seekTime
+    if (resumeFromStart) setCompPreviewPos(prev=>({...prev,[compId]:0}))
     const vid=compPrevRef.current
     if (vid) {
-      vid.currentTime=seg0.startSec
+      vid.currentTime=seekTime
       vid.play().catch(()=>{})
     }
   }
@@ -2014,7 +2033,9 @@ export default function App() {
               <div className="s2-prev-video-wrap" onClick={()=>{
                 const vid=compPrevRef.current; if(!vid||!prevVid) return
                 if(compIsPlayingRef.current){ stopCompPlay() }
+                else if(candidatePreview){ prevVidPlaying?vid.pause():vid.play().catch(()=>{}) }
                 else if(prevVidPlaying){ vid.pause() }
+                else if(editingSeg?.compId){ startCompPlay(editingSeg.compId) }
                 else { vid.play().catch(()=>{}) }
               }}>
                 {prevVid?(
