@@ -836,11 +836,10 @@ export default function App() {
   const [compUndoSnap, setCompUndoSnap]         = useState(null) // {compositions, lockedSegs, compManualEdited}
   const [compPreviewPos, setCompPreviewPos]     = useState({})  // {compId: posSec}
   const [showAllCands, setShowAllCands] = useState({})     // {'compId_segIdx': true}
-  const [pendingCand, setPendingCand]       = useState(null)   // {cand, compId, segIdx}
-  const [candPreviewPlaying, setCandPrevPlay] = useState(false)
-  const [candPreviewTime, setCandPrevTime]    = useState(0)
-  const [poolSelectedSeg, setPoolSelectedSeg] = useState(null) // seg clicked in raw pool
-  const [compPrevPlaying, setCompPrevPlaying] = useState(false)
+  const [compIsPlaying, setCompIsPlaying]   = useState(false)
+  const [compPlayCompId, setCompPlayCompId] = useState(null)
+  const [compPlaySegIdx, setCompPlaySegIdx] = useState(0)
+  const [candidatePreview, setCandidatePreview] = useState(null) // {cand, compId, segIdx}
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -883,17 +882,22 @@ export default function App() {
   const compositionsRef       = useRef([])
   const scrubberRef           = useRef(null)
   const scrubDragRef          = useRef(false)
-  const candPreviewRef        = useRef(null)
   const subtitleFileRef       = useRef(null)
   const batchSubtitleFileRef  = useRef(null)
   const subListRef            = useRef(null)
   const compTlDragRef         = useRef(null) // {compId, rect, totalDur}
   const compPrevRef           = useRef(null) // video element for comp preview
   const compPrevSeekRef       = useRef(null) // desired seek time after src load
+  const compIsPlayingRef   = useRef(false)
+  const compPlayCompIdRef  = useRef(null)
+  const compPlaySegIdxRef  = useRef(0)
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
   useEffect(() => { compositionsRef.current  = compositions   }, [compositions])
+  useEffect(()=>{ compIsPlayingRef.current=compIsPlaying },[compIsPlaying])
+  useEffect(()=>{ compPlayCompIdRef.current=compPlayCompId },[compPlayCompId])
+  useEffect(()=>{ compPlaySegIdxRef.current=compPlaySegIdx },[compPlaySegIdx])
 
   // ── derived ──
   const enabledDedupKeys = Object.entries(dedup).filter(([,v])=>v).map(([k])=>k)
@@ -988,11 +992,15 @@ export default function App() {
     return ()=>{ document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp) }
   },[]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // seek comp preview video when selection or position changes
+  // seek comp preview video when active selection/position changes (not during playback)
   useEffect(()=>{
     const vid=compPrevRef.current
-    if (!vid) return
-    if (editingSeg) {
+    if (!vid || compIsPlayingRef.current) return
+    if (candidatePreview) {
+      const t=candidatePreview.cand.startSec
+      compPrevSeekRef.current=t
+      if (vid.readyState>=2) vid.currentTime=t
+    } else if (editingSeg) {
       const comp=compositionsRef.current.find(c=>c.id===editingSeg.compId)
       if (!comp) return
       const seg=comp.segments[editingSeg.segIdx]
@@ -1004,12 +1012,24 @@ export default function App() {
       const t=seg.startSec+off
       compPrevSeekRef.current=t
       if (vid.readyState>=2) vid.currentTime=t
-    } else if (poolSelectedSeg) {
-      const t=poolSelectedSeg.startSec
-      compPrevSeekRef.current=t
-      if (vid.readyState>=2) vid.currentTime=t
     }
-  },[editingSeg?.segIdx,editingSeg?.compId,compPreviewPos,poolSelectedSeg?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  },[editingSeg?.segIdx,editingSeg?.compId,compPreviewPos,candidatePreview?.cand?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // when compPlaySegIdx advances during playback, seek (handles same-video segment switches)
+  useEffect(()=>{
+    if (!compIsPlaying) return
+    const comp=compositions.find(c=>c.id===compPlayCompId)
+    if (!comp) return
+    const seg=comp.segments[compPlaySegIdx]
+    if (!seg) return
+    const vid=compPrevRef.current
+    if (!vid) return
+    compPrevSeekRef.current=seg.startSec
+    if (vid.readyState>=2){
+      vid.currentTime=seg.startSec
+      vid.play().catch(()=>{})
+    }
+  },[compPlaySegIdx]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     if (!isGenerated) return
@@ -1039,18 +1059,6 @@ export default function App() {
     setEditorTime(0); setEditorPlaying(false); setSelectedCutIdx(null); setSelectedSegIdx(null); setSelectedSubIdx(null)
     setPrevSegmentsForUndo(null)
   }, [currentVideoId])
-
-  // seek candidate preview when selection changes, reset play state
-  useEffect(()=>{
-    setCandPrevPlay(false)
-    setCandPrevTime(0)
-    if (!candPreviewRef.current || !pendingCand) return
-    const vid = candPreviewRef.current
-    vid.pause()
-    const t = pendingCand.cand.startSec || 0
-    vid.currentTime = t
-    setCandPrevTime(t)
-  }, [pendingCand])
 
   // auto-scroll subtitle list to current subtitle
   useEffect(()=>{
@@ -1530,6 +1538,23 @@ export default function App() {
   }
 
   function toggleDedup(k) { setDedup(d=>({...d,[k]:!d[k]})) }
+
+  function startCompPlay(compId) {
+    const comp=compositions.find(c=>c.id===compId)
+    if (!comp||!comp.segments.length) return
+    setCandidatePreview(null)
+    setCompIsPlaying(true); compIsPlayingRef.current=true
+    setCompPlayCompId(compId); compPlayCompIdRef.current=compId
+    setCompPlaySegIdx(0); compPlaySegIdxRef.current=0
+    setSelectedCompId(compId)
+    setEditingSeg({compId,segIdx:0})
+    compPrevSeekRef.current=comp.segments[0].startSec
+    setCompPreviewPos(prev=>({...prev,[compId]:0}))
+  }
+  function stopCompPlay() {
+    const vid=compPrevRef.current; if(vid) vid.pause()
+    setCompIsPlaying(false); compIsPlayingRef.current=false
+  }
 
   function saveCompUndo() {
     setCompUndoSnap({ compositions, lockedSegs, compManualEdited })
