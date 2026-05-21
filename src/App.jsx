@@ -222,36 +222,97 @@ function generateSubtitles(video, vidIndex) {
   return subs
 }
 
-// Build composition plans from selected segments (with labels like "1-1")
+// Build composition plans from selected segments with type-aware, diversified generation
+const NARRATIVE_TYPES = ['开场','食材准备','制作步骤','成品展示','结尾','其他']
+function typeOrder(type) { const i=NARRATIVE_TYPES.indexOf(type); return i===-1?5:i }
+
 function buildCompositions(segs) {
   if (!segs.length) return []
-  const byVid = {}
-  segs.forEach(s => { (byVid[s.videoIndex] = byVid[s.videoIndex] || []).push(s) })
-  const vidKeys = Object.keys(byVid).map(Number).sort()
-  const nVids   = vidKeys.length
   const N = Math.min(5, Math.max(2, Math.ceil(segs.length / 3)))
 
-  return Array.from({ length: N }, (_, ci) => {
-    const picked = []
-    let step = 0
+  // Group by type in narrative order
+  const byType = {}
+  segs.forEach(s => { (byType[s.type] = byType[s.type] || []).push(s) })
+  const availTypes = NARRATIVE_TYPES.filter(t => byType[t]?.length > 0)
+
+  const comps = []
+
+  for (let ci = 0; ci < N; ci++) {
     const maxPicks = Math.min(7, segs.length)
-    while (picked.length < maxPicks && step < 80) {
-      const vi   = vidKeys[(step * 2 + ci * 3) % nVids]
-      const vSegs = byVid[vi] || []
-      if (vSegs.length > 0) {
-        const seg = vSegs[(step + ci * 2) % vSegs.length]
-        if (seg && !picked.find(p => p.id === seg.id)) picked.push(seg)
-      }
-      step++
+
+    // Build slot list: 制作步骤 can take 1-2 slots, others 1
+    const slots = []
+    for (const t of availTypes) {
+      const cnt = t === '制作步骤' && byType[t].length > 1 ? 2 : 1
+      for (let k = 0; k < cnt && slots.length < maxPicks; k++) slots.push(t)
     }
-    if (picked.length < 2) {
-      segs.slice(0, Math.min(4, segs.length)).forEach(s => {
-        if (!picked.find(p => p.id === s.id)) picked.push(s)
+
+    const usedIds = new Set()
+    const picked = []
+
+    for (let si = 0; si < slots.length && picked.length < maxPicks; si++) {
+      const type = slots[si]
+      const pool = (byType[type] || []).filter(s => !usedIds.has(s.id))
+      if (!pool.length) continue
+
+      const lastVidIdx = picked.length > 0 ? picked[picked.length - 1].videoIndex : -1
+
+      // Score: lower = better candidate
+      const scored = pool.map(s => {
+        let score = 0
+        if (s.videoIndex === lastVidIdx) score += 8   // penalize same-video consecutive
+        // penalize segments used at same position in earlier comps
+        comps.forEach(prev => { if (prev.segments[si]?.id === s.id) score += 6 })
+        // penalize segments used anywhere in earlier comps
+        comps.forEach(prev => { if (prev.segments.some(ps => ps.id === s.id)) score += 2 })
+        // add deterministic variation per ci
+        score += ((s.id.charCodeAt(s.id.length - 1) * 3 + ci * 7 + si) % 5)
+        return { s, score }
       })
+      scored.sort((a, b) => a.score - b.score)
+
+      // Rotate among top-3 based on ci
+      const topN = Math.min(3, scored.length)
+      const pick = scored[ci % topN].s
+      picked.push(pick)
+      usedIds.add(pick.id)
     }
-    const totalDur = picked.reduce((acc, sg) => acc + (sg.endSec - sg.startSec), 0)
-    return { id: `comp${ci}`, idx: ci, name: `成品视频 ${ci + 1}`, segments: picked, totalDur }
-  })
+
+    // Fallback: fill if too few
+    if (picked.length < 2) {
+      segs.forEach(s => { if (!usedIds.has(s.id) && picked.length < 4) { picked.push(s); usedIds.add(s.id) } })
+    }
+
+    // Similarity guard: if this comp is >70% same as any existing, swap the highest-overlap segs
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const tooSimilar = comps.some(prev => {
+        const prevIds = new Set(prev.segments.map(s => s.id))
+        const overlap = picked.filter(s => prevIds.has(s.id)).length
+        return overlap / Math.max(prev.segments.length, picked.length) > 0.7
+      })
+      if (!tooSimilar) break
+      // Swap one non-locked seg: find the first segment that has an alternative
+      for (let si = 0; si < picked.length; si++) {
+        const type = picked[si].type
+        const alts = (byType[type] || []).filter(s =>
+          !usedIds.has(s.id) &&
+          s.videoIndex !== picked[si].videoIndex &&
+          !comps.some(prev => prev.segments[si]?.id === s.id)
+        )
+        if (alts.length > 0) {
+          usedIds.delete(picked[si].id)
+          picked[si] = alts[(ci + attempt) % alts.length]
+          usedIds.add(picked[si].id)
+          break
+        }
+      }
+    }
+
+    const totalDur = picked.reduce((a, s) => a + (s.endSec - s.startSec), 0)
+    comps.push({ id: `comp${ci}`, idx: ci, name: `成品视频 ${ci + 1}`, segments: picked, totalDur })
+  }
+
+  return comps
 }
 
 function getSubtitlesForSeg(seg, subtitles) {
@@ -831,6 +892,13 @@ export default function App() {
         .filter(s=>s.selected)
     }),
     [uploadedVideos, videoAnalysis]
+  )
+  const allSegsAll = useMemo(()=>
+    uploadedVideos.flatMap((v,vi)=>{
+      const segs = videoAnalysis[v.id]?.segments || []
+      return segs.map((s,si)=>({...s,videoIndex:vi,segInVid:si,label:`${vi+1}-${si+1}`,videoName:v.name}))
+    }),
+    [uploadedVideos,videoAnalysis]
   )
   const usedVideos = useMemo(()=>
     uploadedVideos.filter(v=>(videoAnalysis[v.id]?.segments||[]).some(s=>s.selected)),
@@ -1853,12 +1921,12 @@ export default function App() {
                     const allCandsKey=`${editingSeg.compId}_${editingSeg.segIdx}`
                     const compSegIds=new Set((editComp?.segments||[]).filter((_,i)=>i!==editingSeg.segIdx).map(s=>s.id))
                     const recs=editSeg?[
-                      ...allSelectedSegs.filter(c=>c.type===editSeg.type&&c.id!==editSeg.id&&!compSegIds.has(c.id)&&c.videoIndex!==editSeg.videoIndex),
-                      ...allSelectedSegs.filter(c=>c.type===editSeg.type&&c.id!==editSeg.id&&!compSegIds.has(c.id)&&c.videoIndex===editSeg.videoIndex),
+                      ...allSegsAll.filter(c=>c.type===editSeg.type&&c.id!==editSeg.id&&!compSegIds.has(c.id)&&c.videoIndex!==editSeg.videoIndex),
+                      ...allSegsAll.filter(c=>c.type===editSeg.type&&c.id!==editSeg.id&&!compSegIds.has(c.id)&&c.videoIndex===editSeg.videoIndex),
                     ].slice(0,5):[]
-                    const allCands=editSeg?allSelectedSegs.filter(c=>c.id!==editSeg.id&&!compSegIds.has(c.id)):[]
+                    const allCands=editSeg?allSegsAll.filter(c=>c.id!==editSeg.id):[]
                     const candsByType=allCands.reduce((g,c)=>{(g[c.type]=g[c.type]||[]).push(c);return g},{})
-                    const adjFallback=editSeg&&recs.length===0?allSelectedSegs.filter(c=>c.videoIndex===editSeg.videoIndex&&c.id!==editSeg.id&&!compSegIds.has(c.id)).slice(0,3):[]
+                    const adjFallback=editSeg&&recs.length===0?allSegsAll.filter(c=>c.videoIndex===editSeg.videoIndex&&c.id!==editSeg.id&&!compSegIds.has(c.id)).slice(0,3):[]
                     // preview computation
                     const previewPos=compPreviewPos[editingSeg.compId]??0
                     let accDurBefore=0
@@ -1873,34 +1941,37 @@ export default function App() {
                       <>
                         {/* ── Composition preview window ── */}
                         <div className="comp-prev-window">
-                          <div className="comp-prev-video-wrap">
-                            {previewSrcVid?(
-                              <video
-                                ref={compPrevRef}
-                                key={previewSrcVid.id}
-                                src={previewSrcVid.url}
-                                preload="auto"
-                                playsInline
-                                muted
-                                className="comp-prev-video"
-                                onLoadedMetadata={()=>{ if(compPrevRef.current) compPrevRef.current.currentTime=compPrevSeekRef.current??0 }}
-                              />
-                            ):(
-                              <div className="comp-prev-no-vid">无法加载视频</div>
-                            )}
+                          <div className="comp-prev-cols">
+                            <div className="comp-prev-video-wrap">
+                              {previewSrcVid?(
+                                <video
+                                  ref={compPrevRef}
+                                  key={previewSrcVid.id}
+                                  src={previewSrcVid.url}
+                                  preload="auto"
+                                  playsInline
+                                  muted
+                                  className="comp-prev-video"
+                                  onLoadedMetadata={()=>{ if(compPrevRef.current) compPrevRef.current.currentTime=compPrevSeekRef.current??0 }}
+                                />
+                              ):(
+                                <div className="comp-prev-no-vid">无法加载视频</div>
+                              )}
+                            </div>
+                            <div className="comp-prev-info">
+                              <div className="comp-prev-info-row">
+                                <span className="comp-prev-lbl" style={{color:tc}}>{editSeg?.label??'--'}</span>
+                                <span className="comp-prev-vsrc">V{(editSeg?.videoIndex??0)+1}</span>
+                                <span className="comp-prev-type-tag" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg?.type??''}</span>
+                              </div>
+                              <div className="comp-prev-time-row">
+                                <div>成品 {fmt(previewPos)} / {fmt(editComp?.totalDur??0)}</div>
+                                <div>片段内 {fmt(segOffset)} / {fmt(segDur)}</div>
+                              </div>
+                              {editSeg?.subtitle&&<div className="comp-prev-sub-text">{editSeg.subtitle}</div>}
+                              <div className="comp-prev-sim-hint">模拟预览 · 非真实成品视频</div>
+                            </div>
                           </div>
-                          <div className="comp-prev-info-row">
-                            <span className="comp-prev-lbl" style={{color:tc}}>{editSeg?.label??'--'}</span>
-                            <span className="comp-prev-vsrc">V{(editSeg?.videoIndex??0)+1}</span>
-                            <span className="comp-prev-type-tag" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg?.type??''}</span>
-                          </div>
-                          <div className="comp-prev-time-row">
-                            <span>成品 {fmt(previewPos)} / {fmt(editComp?.totalDur??0)}</span>
-                            <span className="comp-prev-sep">·</span>
-                            <span>片段内 {fmt(segOffset)} / {fmt(segDur)}</span>
-                          </div>
-                          {editSeg?.subtitle&&<div className="comp-prev-sub-text">{editSeg.subtitle}</div>}
-                          <div className="comp-prev-sim-hint">模拟预览 · 非真实成品视频</div>
                         </div>
                         {/* ── Scrollable detail body ── */}
                         <div className="comp-right-body">
