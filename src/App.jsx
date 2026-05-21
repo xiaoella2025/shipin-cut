@@ -226,64 +226,110 @@ function generateSubtitles(video, vidIndex) {
 const NARRATIVE_TYPES = ['开场','食材准备','制作步骤','成品展示','结尾','其他']
 function typeOrder(type) { const i=NARRATIVE_TYPES.indexOf(type); return i===-1?5:i }
 
+// Get best subtitle text for a segment: real subtitles > seg.subtitle field
+function getSegSubtitleFromAna(seg, vidId, videoAnalysis) {
+  if (!seg) return ''
+  const ana = videoAnalysis?.[vidId]
+  if (ana?.subtitles?.length) {
+    const matching = ana.subtitles.filter(s => s.startSec < seg.endSec && s.endSec > seg.startSec)
+    if (matching.length) return matching.map(s => s.text).join(' ')
+  }
+  return seg.subtitle || ''
+}
+
 function buildCompositions(segs) {
   if (!segs.length) return []
-  const N = Math.min(5, Math.max(2, Math.ceil(segs.length / 3)))
 
-  // Group by type in narrative order
+  const videoIdxSet = new Set(segs.map(s => s.videoIndex))
+  const numVideos = videoIdxSet.size
+  const videoIdxs = [...videoIdxSet].sort((a, b) => a - b)
+
+  const N = Math.min(5, Math.max(2, Math.ceil(segs.length / 4)))
+
   const byType = {}
   segs.forEach(s => { (byType[s.type] = byType[s.type] || []).push(s) })
   const availTypes = NARRATIVE_TYPES.filter(t => byType[t]?.length > 0)
 
+  function buildSlots() {
+    const slots = []
+    const TARGET_MAX = 8
+    for (const t of availTypes) {
+      if (t === '制作步骤') {
+        const cnt = Math.min(3, byType[t].length, TARGET_MAX - slots.length)
+        for (let k = 0; k < cnt; k++) slots.push(t)
+      } else {
+        if (slots.length < TARGET_MAX) slots.push(t)
+      }
+    }
+    // Pad to at least 5 if we have enough segments
+    while (slots.length < Math.min(5, segs.length)) {
+      const best = availTypes.reduce((a, b) => (byType[a]?.length||0)>=(byType[b]?.length||0)?a:b, availTypes[0])
+      slots.push(best)
+    }
+    return slots
+  }
+
   const comps = []
 
   for (let ci = 0; ci < N; ci++) {
-    const maxPicks = Math.min(7, segs.length)
-
-    // Build slot list: 制作步骤 can take 1-2 slots, others 1
-    const slots = []
-    for (const t of availTypes) {
-      const cnt = t === '制作步骤' && byType[t].length > 1 ? 2 : 1
-      for (let k = 0; k < cnt && slots.length < maxPicks; k++) slots.push(t)
-    }
-
+    const slots = buildSlots()
     const usedIds = new Set()
     const picked = []
+    let lastVidIdx = -1
+    let consecutiveSame = 0
 
-    for (let si = 0; si < slots.length && picked.length < maxPicks; si++) {
+    for (let si = 0; si < slots.length; si++) {
       const type = slots[si]
-      const pool = (byType[type] || []).filter(s => !usedIds.has(s.id))
+      let pool = (byType[type] || []).filter(s => !usedIds.has(s.id))
+      if (!pool.length) pool = segs.filter(s => !usedIds.has(s.id))
       if (!pool.length) continue
 
-      const lastVidIdx = picked.length > 0 ? picked[picked.length - 1].videoIndex : -1
-
-      // Score: lower = better candidate
       const scored = pool.map(s => {
         let score = 0
-        if (s.videoIndex === lastVidIdx) score += 8   // penalize same-video consecutive
-        // penalize segments used at same position in earlier comps
+        if (s.videoIndex === lastVidIdx) score += (consecutiveSame >= 2 ? 50 : 10)
+        const vidUseCount = picked.filter(p => p.videoIndex === s.videoIndex).length
+        score += vidUseCount * 4
         comps.forEach(prev => { if (prev.segments[si]?.id === s.id) score += 6 })
-        // penalize segments used anywhere in earlier comps
         comps.forEach(prev => { if (prev.segments.some(ps => ps.id === s.id)) score += 2 })
-        // add deterministic variation per ci
-        score += ((s.id.charCodeAt(s.id.length - 1) * 3 + ci * 7 + si) % 5)
+        score += ((s.id.charCodeAt(s.id.length-1) * 3 + ci * 7 + si) % 5)
         return { s, score }
       })
       scored.sort((a, b) => a.score - b.score)
+      const pick = scored[0].s
 
-      // Rotate among top-3 based on ci
-      const topN = Math.min(3, scored.length)
-      const pick = scored[ci % topN].s
+      if (pick.videoIndex === lastVidIdx) consecutiveSame++
+      else { lastVidIdx = pick.videoIndex; consecutiveSame = 1 }
       picked.push(pick)
       usedIds.add(pick.id)
     }
 
-    // Fallback: fill if too few
-    if (picked.length < 2) {
-      segs.forEach(s => { if (!usedIds.has(s.id) && picked.length < 4) { picked.push(s); usedIds.add(s.id) } })
+    // Fallback: fill to at least 5
+    if (picked.length < Math.min(5, segs.length)) {
+      for (const s of segs) {
+        if (!usedIds.has(s.id)) { picked.push(s); usedIds.add(s.id) }
+        if (picked.length >= Math.min(8, segs.length)) break
+      }
     }
 
-    // Similarity guard: if this comp is >70% same as any existing, swap the highest-overlap segs
+    // Hard rule: ensure >= 2 source videos when multiple videos exist
+    if (numVideos >= 2) {
+      const pickedVids = new Set(picked.map(s => s.videoIndex))
+      if (pickedVids.size < 2) {
+        for (let si = picked.length - 1; si >= 0; si--) {
+          const otherVid = videoIdxs.find(vi => vi !== picked[si].videoIndex)
+          if (otherVid === undefined) break
+          const alts = segs.filter(s => s.videoIndex === otherVid && !usedIds.has(s.id))
+          if (alts.length) {
+            usedIds.delete(picked[si].id)
+            picked[si] = alts[0]
+            usedIds.add(picked[si].id)
+            break
+          }
+        }
+      }
+    }
+
+    // Similarity guard: if >70% overlap with any existing comp, try to swap
     for (let attempt = 0; attempt < 4; attempt++) {
       const tooSimilar = comps.some(prev => {
         const prevIds = new Set(prev.segments.map(s => s.id))
@@ -291,15 +337,13 @@ function buildCompositions(segs) {
         return overlap / Math.max(prev.segments.length, picked.length) > 0.7
       })
       if (!tooSimilar) break
-      // Swap one non-locked seg: find the first segment that has an alternative
       for (let si = 0; si < picked.length; si++) {
         const type = picked[si].type
         const alts = (byType[type] || []).filter(s =>
           !usedIds.has(s.id) &&
-          s.videoIndex !== picked[si].videoIndex &&
           !comps.some(prev => prev.segments[si]?.id === s.id)
         )
-        if (alts.length > 0) {
+        if (alts.length) {
           usedIds.delete(picked[si].id)
           picked[si] = alts[(ci + attempt) % alts.length]
           usedIds.add(picked[si].id)
@@ -312,6 +356,9 @@ function buildCompositions(segs) {
     comps.push({ id: `comp${ci}`, idx: ci, name: `成品视频 ${ci + 1}`, segments: picked, totalDur })
   }
 
+  if (segs.length < 5) {
+    console.warn('[buildCompositions] 可用片段较少（', segs.length, '），方案可能相似')
+  }
   return comps
 }
 
@@ -792,6 +839,8 @@ export default function App() {
   const [pendingCand, setPendingCand]       = useState(null)   // {cand, compId, segIdx}
   const [candPreviewPlaying, setCandPrevPlay] = useState(false)
   const [candPreviewTime, setCandPrevTime]    = useState(0)
+  const [poolSelectedSeg, setPoolSelectedSeg] = useState(null) // seg clicked in raw pool
+  const [compPrevPlaying, setCompPrevPlaying] = useState(false)
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -942,19 +991,25 @@ export default function App() {
   // seek comp preview video when selection or position changes
   useEffect(()=>{
     const vid=compPrevRef.current
-    if (!vid||!editingSeg) return
-    const comp=compositionsRef.current.find(c=>c.id===editingSeg.compId)
-    if (!comp) return
-    const seg=comp.segments[editingSeg.segIdx]
-    if (!seg) return
-    let acc=0
-    for (let i=0;i<editingSeg.segIdx;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec
-    const pos=compPreviewPos[comp.id]??acc
-    const off=Math.min(Math.max(0,pos-acc),seg.endSec-seg.startSec)
-    const t=seg.startSec+off
-    compPrevSeekRef.current=t
-    if (vid.readyState>=2) vid.currentTime=t
-  },[editingSeg?.segIdx,editingSeg?.compId,compPreviewPos]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!vid) return
+    if (editingSeg) {
+      const comp=compositionsRef.current.find(c=>c.id===editingSeg.compId)
+      if (!comp) return
+      const seg=comp.segments[editingSeg.segIdx]
+      if (!seg) return
+      let acc=0
+      for (let i=0;i<editingSeg.segIdx;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec
+      const pos=compPreviewPos[comp.id]??acc
+      const off=Math.min(Math.max(0,pos-acc),seg.endSec-seg.startSec)
+      const t=seg.startSec+off
+      compPrevSeekRef.current=t
+      if (vid.readyState>=2) vid.currentTime=t
+    } else if (poolSelectedSeg) {
+      const t=poolSelectedSeg.startSec
+      compPrevSeekRef.current=t
+      if (vid.readyState>=2) vid.currentTime=t
+    }
+  },[editingSeg?.segIdx,editingSeg?.compId,compPreviewPos,poolSelectedSeg?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     if (!isGenerated) return
@@ -1500,6 +1555,21 @@ export default function App() {
     setCompManualEdited(prev=>({...prev,[compId]:true}))
   }
 
+  function insertSegInComp(compId, atIdx, newSeg, where) {
+    saveCompUndo()
+    setCompositions(prev=>prev.map(c=>{
+      if (c.id!==compId) return c
+      const ins = where==='before' ? atIdx : atIdx+1
+      const newSegs=[...c.segments.slice(0,ins), newSeg, ...c.segments.slice(ins)]
+      return {...c,segments:newSegs,totalDur:newSegs.reduce((a,s)=>a+(s.endSec-s.startSec),0)}
+    }))
+    setCompManualEdited(prev=>({...prev,[compId]:true}))
+    if (editingSeg?.compId===compId) {
+      const ins = where==='before' ? atIdx : atIdx+1
+      if (editingSeg.segIdx>=ins) setEditingSeg({compId,segIdx:editingSeg.segIdx+1})
+    }
+  }
+
   function toggleLockSeg(compId, segIdx) {
     setLockedSegs(prev=>{
       const cl=prev[compId]||{}
@@ -1898,26 +1968,204 @@ export default function App() {
               )
             })() : (
             <div className="s2-compose-view">
-              <div className="s2-compose-cols">
-                {/* LEFT: simplified material list */}
-                <aside className="s2-compose-left">
-                  <div className="s2-compose-left-head">参与混剪素材</div>
-                  {(usedVideos.length>0?usedVideos:uploadedVideos).map((v,vi)=>(
-                    <div key={v.id} className="s3-mat-item" onClick={()=>setPreviewVid(v)}>
-                      <div className="s3-mat-thumb"><video src={v.url} preload="metadata" muted playsInline/></div>
-                      <div className="s3-mat-info">
-                        <div className="s3-mat-name">V{vi+1} · {v.name.replace(/\.[^.]+$/,'').slice(0,16)}</div>
-                        <div className="s3-mat-meta">{v.durStr}{videoAnalysis[v.id]?.segments&&<span> · {videoAnalysis[v.id].segments.filter(s=>s.selected).length}片</span>}</div>
+              <div className="s2-compose-workbench">
+                {/* COL 1: Raw segment pool */}
+                <div className="s2-pool-col">
+                  <div className="s2-pool-head">
+                    原始切片池
+                    {poolSelectedSeg&&<span className="s2-pool-sel-tag">已选 {poolSelectedSeg.label}</span>}
+                  </div>
+                  <div className="s2-pool-scroll">
+                  {uploadedVideos.map((v,vi)=>{
+                    const vSegs=(videoAnalysis[v.id]?.segments||[]).map((s,si)=>({
+                      ...s,videoIndex:vi,segInVid:si,label:`${vi+1}-${si+1}`,videoName:v.name
+                    }))
+                    if (!vSegs.length) return null
+                    return (
+                      <div key={v.id} className="s2-pool-group">
+                        <div className="s2-pool-group-head">V{vi+1} <span className="s2-pool-group-name">{v.name.replace(/\.[^.]+$/,'').slice(0,14)}</span></div>
+                        {vSegs.map(seg=>{
+                          const tc=SEG_TYPE_COLORS[seg.type]||'#6366f1'
+                          const isPoolSel=poolSelectedSeg?.id===seg.id
+                          const subText=getSegSubtitleFromAna(seg,v.id,videoAnalysis)
+                          return (
+                            <div key={seg.id}
+                              className={`s2-pool-seg${isPoolSel?' selected':''}${!seg.selected?' unsel':''}`}
+                              style={{borderLeft:`3px solid ${tc}`}}
+                              onClick={()=>{
+                                setPoolSelectedSeg(p=>p?.id===seg.id?null:seg)
+                                compPrevSeekRef.current=seg.startSec
+                              }}>
+                              <div className="s2-pool-seg-top">
+                                <span className="s2-pool-seg-lbl" style={{color:tc}}>{seg.label}</span>
+                                <span className="s2-pool-seg-type">{seg.type}</span>
+                                <span className="s2-pool-seg-dur">{fmt(seg.endSec-seg.startSec)}</span>
+                              </div>
+                              {subText&&<div className="s2-pool-seg-sub">{subText.slice(0,30)}{subText.length>30?'…':''}</div>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )
+                  })}
+                  </div>
+                </div>
+
+                {/* COL 2: 16:9 video preview */}
+                {(()=>{
+                  const prevSeg=editingSeg
+                    ?(compositions.find(c=>c.id===editingSeg.compId)?.segments[editingSeg.segIdx]??null)
+                    :poolSelectedSeg
+                  const prevVid=prevSeg?uploadedVideos[prevSeg.videoIndex]:null
+                  const tc=prevSeg?(SEG_TYPE_COLORS[prevSeg.type]||'#6366f1'):'#6366f1'
+                  let accBefore=0
+                  if (editingSeg) {
+                    const ec=compositions.find(c=>c.id===editingSeg.compId)
+                    for (let i=0;i<editingSeg.segIdx;i++){const s=ec?.segments[i];if(s)accBefore+=s.endSec-s.startSec}
+                  }
+                  const segDur=prevSeg?(prevSeg.endSec-prevSeg.startSec):0
+                  const previewPos=editingSeg?(compPreviewPos[editingSeg.compId]??0):null
+                  const segOffset=editingSeg?Math.min(Math.max(0,(previewPos??0)-accBefore),segDur):0
+                  const editComp=editingSeg?compositions.find(c=>c.id===editingSeg.compId):null
+                  const subText=prevSeg?getSegSubtitleFromAna(prevSeg,prevVid?.id,videoAnalysis):''
+                  return (
+                    <div className="s2-preview-col">
+                      <div className="s2-prev-video-wrap" onClick={()=>{
+                        const vid=compPrevRef.current; if(!vid||!prevVid) return
+                        if (compPrevPlaying){vid.pause();setCompPrevPlaying(false)}
+                        else{vid.play().then(()=>setCompPrevPlaying(true)).catch(()=>{})}
+                      }}>
+                        {prevVid?(
+                          <video
+                            ref={compPrevRef}
+                            key={prevVid.id}
+                            src={prevVid.url}
+                            preload="auto"
+                            playsInline
+                            muted
+                            className="s2-prev-video"
+                            onLoadedMetadata={()=>{ if(compPrevRef.current) compPrevRef.current.currentTime=compPrevSeekRef.current??0 }}
+                            onTimeUpdate={()=>{
+                              const vid=compPrevRef.current; if(!vid||!prevSeg) return
+                              if(vid.currentTime>=prevSeg.endSec){vid.pause();vid.currentTime=prevSeg.startSec;setCompPrevPlaying(false)}
+                            }}
+                            onEnded={()=>setCompPrevPlaying(false)}
+                          />
+                        ):(
+                          <div className="s2-prev-no-vid">{editingSeg||poolSelectedSeg?'无法加载视频':'点击下方片段以预览'}</div>
+                        )}
+                        <div className={`s2-prev-play-btn${compPrevPlaying?' playing':''}`}>
+                          {compPrevPlaying
+                            ?<svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                            :<svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>}
+                        </div>
+                      </div>
+                      <div className="s2-prev-info">
+                        {prevSeg?(
+                          <>
+                            <div className="s2-prev-info-row">
+                              <span className="s2-prev-lbl" style={{color:tc}}>{prevSeg.label}</span>
+                              <span className="s2-prev-vsrc">V{prevSeg.videoIndex+1}</span>
+                              <span className="s2-prev-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{prevSeg.type}</span>
+                            </div>
+                            {editingSeg&&<div className="s2-prev-time">成品 {fmt(previewPos??0)}/{fmt(editComp?.totalDur??0)} · 片段 {fmt(segOffset)}/{fmt(segDur)}</div>}
+                            {!editingSeg&&<div className="s2-prev-time">{prevSeg.startStr} – {prevSeg.endStr} · {fmt(segDur)}</div>}
+                            {subText&&<div className="s2-prev-sub">{subText}</div>}
+                            <div className="s2-prev-hint">模拟预览 · 非真实成品视频</div>
+                          </>
+                        ):(
+                          <div className="s2-prev-hint">点击成品预览条或切片池中的片段以预览</div>
+                        )}
                       </div>
                     </div>
-                  ))}
-                </aside>
-                {/* RIGHT: segment edit panel */}
-                <aside className="panel-r s2-compose-right">
-                  {editingSeg ? (()=>{
+                  )
+                })()}
+
+                {/* COL 3: Current segment detail + pool insert/replace ops */}
+                <div className="s2-detail-col">
+                  {poolSelectedSeg&&(
+                    <div className="s2-pool-ops">
+                      <div className="s2-pool-ops-head">
+                        <span className="s2-pool-ops-lbl" style={{color:SEG_TYPE_COLORS[poolSelectedSeg.type]||'#6366f1'}}>{poolSelectedSeg.label}</span>
+                        <span className="s2-pool-ops-type">{poolSelectedSeg.type}</span>
+                        <span className="s2-pool-ops-dur">{fmt(poolSelectedSeg.endSec-poolSelectedSeg.startSec)}</span>
+                        <button className="s2-pool-desel" onClick={()=>setPoolSelectedSeg(null)}>×</button>
+                      </div>
+                      {editingSeg?(
+                        <div className="s2-pool-ops-btns">
+                          <button className="s2-pool-op" onClick={()=>{
+                            replaceCompSeg(editingSeg.compId,editingSeg.segIdx,poolSelectedSeg)
+                            showToast(`已替换为 ${poolSelectedSeg.label}`)
+                            setPoolSelectedSeg(null)
+                          }}>替换当前片段</button>
+                          <button className="s2-pool-op" onClick={()=>{
+                            insertSegInComp(editingSeg.compId,editingSeg.segIdx,poolSelectedSeg,'before')
+                            showToast(`已插入到第 ${editingSeg.segIdx+1} 段前`)
+                          }}>插入到前面</button>
+                          <button className="s2-pool-op" onClick={()=>{
+                            insertSegInComp(editingSeg.compId,editingSeg.segIdx,poolSelectedSeg,'after')
+                            showToast(`已插入到第 ${editingSeg.segIdx+1} 段后`)
+                          }}>插入到后面</button>
+                        </div>
+                      ):(
+                        <div className="s2-pool-ops-hint">→ 点击下方成品方案中的片段，选择插入/替换位置</div>
+                      )}
+                    </div>
+                  )}
+                  {editingSeg?(()=>{
                     const editComp=compositions.find(c=>c.id===editingSeg.compId)
                     const editSeg=editComp?.segments[editingSeg.segIdx]
                     const tc=editSeg?(SEG_TYPE_COLORS[editSeg.type]||'#6366f1'):'#6366f1'
+                    const subText=editSeg?getSegSubtitleFromAna(editSeg,uploadedVideos[editSeg.videoIndex]?.id,videoAnalysis):''
+                    return (
+                      <div className="s2-detail-body">
+                        <div className="s2-detail-head">
+                          <span className="s2-detail-title">当前片段</span>
+                          <button className="r3-back-btn r3-desel-btn" onClick={()=>setEditingSeg(null)}>取消</button>
+                        </div>
+                        {editSeg&&(
+                          <>
+                            <div className="r3-pos-info">
+                              <span className="r3-pos-comp">{editComp?.name}</span>
+                              <span className="r3-pos-dot">·</span>
+                              <span className="r3-pos-idx">第 {editingSeg.segIdx+1} 段 / 共 {editComp?.segments.length} 段</span>
+                            </div>
+                            <div className="r3-current">
+                              <div className="r3-cur-card">
+                                <div className="r3-cur-top">
+                                  <span className="r3-cur-label" style={{color:tc}}>{editSeg.label}</span>
+                                  <span className="r3-cur-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg.type}</span>
+                                  <span className="r3-cur-src">V{editSeg.videoIndex+1}</span>
+                                </div>
+                                <div className="r3-cur-time">{editSeg.startStr} – {editSeg.endStr} · {fmt(editSeg.endSec-editSeg.startSec)}</div>
+                                {subText&&<div className="r3-cur-sub">{subText}</div>}
+                              </div>
+                            </div>
+                            <div className="r3-ops-row">
+                              <button className="r3-op-btn" disabled={editingSeg.segIdx===0}
+                                onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,-1)}>← 前移</button>
+                              <button className="r3-op-btn" disabled={editingSeg.segIdx>=(editComp?.segments.length||0)-1}
+                                onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,+1)}>后移 →</button>
+                              <button className={`comp-seg-lock${(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?' on':''}`}
+                                style={{position:'static',opacity:1,fontSize:'12px',padding:'4px 8px'}}
+                                onClick={()=>toggleLockSeg(editingSeg.compId,editingSeg.segIdx)}>
+                                {(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?'🔒 已锁':'🔓 锁定'}
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })():(
+                    <div className="s2-detail-hint">{poolSelectedSeg?'':'点击下方成品预览条中的片段，可在此查看详情'}</div>
+                  )}
+                </div>
+
+                {/* COL 4: Candidates */}
+                <div className="s2-cands-col">
+                  {editingSeg?(()=>{
+                    const editComp=compositions.find(c=>c.id===editingSeg.compId)
+                    const editSeg=editComp?.segments[editingSeg.segIdx]
                     const allCandsKey=`${editingSeg.compId}_${editingSeg.segIdx}`
                     const compSegIds=new Set((editComp?.segments||[]).filter((_,i)=>i!==editingSeg.segIdx).map(s=>s.id))
                     const recs=editSeg?[
@@ -1926,137 +2174,36 @@ export default function App() {
                     ].slice(0,5):[]
                     const allCands=editSeg?allSegsAll.filter(c=>c.id!==editSeg.id):[]
                     const candsByType=allCands.reduce((g,c)=>{(g[c.type]=g[c.type]||[]).push(c);return g},{})
-                    const adjFallback=editSeg&&recs.length===0?allSegsAll.filter(c=>c.videoIndex===editSeg.videoIndex&&c.id!==editSeg.id&&!compSegIds.has(c.id)).slice(0,3):[]
-                    // preview computation
-                    const previewPos=compPreviewPos[editingSeg.compId]??0
-                    let accDurBefore=0
-                    for (let i=0;i<editingSeg.segIdx;i++) {
-                      const s=editComp?.segments[i]; if(s) accDurBefore+=s.endSec-s.startSec
-                    }
-                    const segDur=editSeg?(editSeg.endSec-editSeg.startSec):0
-                    const segOffset=Math.min(Math.max(0,previewPos-accDurBefore),segDur)
-                    const previewSrcVid=editSeg?uploadedVideos[editSeg.videoIndex]:null
-
                     return (
                       <>
-                        {/* ── Composition preview window ── */}
-                        <div className="comp-prev-window">
-                          <div className="comp-prev-cols">
-                            <div className="comp-prev-video-wrap">
-                              {previewSrcVid?(
-                                <video
-                                  ref={compPrevRef}
-                                  key={previewSrcVid.id}
-                                  src={previewSrcVid.url}
-                                  preload="auto"
-                                  playsInline
-                                  muted
-                                  className="comp-prev-video"
-                                  onLoadedMetadata={()=>{ if(compPrevRef.current) compPrevRef.current.currentTime=compPrevSeekRef.current??0 }}
-                                />
-                              ):(
-                                <div className="comp-prev-no-vid">无法加载视频</div>
-                              )}
-                            </div>
-                            <div className="comp-prev-info">
-                              <div className="comp-prev-info-row">
-                                <span className="comp-prev-lbl" style={{color:tc}}>{editSeg?.label??'--'}</span>
-                                <span className="comp-prev-vsrc">V{(editSeg?.videoIndex??0)+1}</span>
-                                <span className="comp-prev-type-tag" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg?.type??''}</span>
-                              </div>
-                              <div className="comp-prev-time-row">
-                                <div>成品 {fmt(previewPos)} / {fmt(editComp?.totalDur??0)}</div>
-                                <div>片段内 {fmt(segOffset)} / {fmt(segDur)}</div>
-                              </div>
-                              {editSeg?.subtitle&&<div className="comp-prev-sub-text">{editSeg.subtitle}</div>}
-                              <div className="comp-prev-sim-hint">模拟预览 · 非真实成品视频</div>
-                            </div>
-                          </div>
+                        <div className="s2-cands-head">
+                          替换候选
+                          {editSeg&&<span className="r3-sec-hint">{editSeg.type}优先</span>}
                         </div>
-                        {/* ── Scrollable detail body ── */}
-                        <div className="comp-right-body">
-                          <div className="r3-edit-header">
-                            <span className="r3-edit-title">片段详情</span>
-                            <button className="r3-back-btn r3-desel-btn" onClick={()=>setEditingSeg(null)}>取消选择</button>
-                          </div>
-                          {editSeg&&(
-                            <>
-                              <div className="r3-pos-info">
-                                <span className="r3-pos-comp">{editComp?.name}</span>
-                                <span className="r3-pos-dot">·</span>
-                                <span className="r3-pos-idx">第 {editingSeg.segIdx+1} 段 / 共 {editComp?.segments.length} 段</span>
-                              </div>
-                              <div className="r3-current">
-                                <div className="r3-cur-card">
-                                  <div className="r3-cur-top">
-                                    <span className="r3-cur-label" style={{color:tc}}>{editSeg.label}</span>
-                                    <span className="r3-cur-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{editSeg.type}</span>
-                                    <span className="r3-cur-src">V{editSeg.videoIndex+1}</span>
-                                  </div>
-                                  <div className="r3-cur-time">{editSeg.startStr} – {editSeg.endStr} · {fmt(editSeg.endSec-editSeg.startSec)}</div>
-                                  {editSeg.subtitle&&<div className="r3-cur-sub">{editSeg.subtitle}</div>}
+                        <div className="s2-cands-body">
+                          {recs.length>0?recs.map(cand=>{
+                            const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
+                            return (
+                              <div key={cand.id} className="r3-cand-item"
+                                onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
+                                <div className="r3-cand-top">
+                                  <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
+                                  <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
+                                  <span className="r3-cand-src">V{cand.videoIndex+1}</span>
                                 </div>
+                                <div className="r3-cand-time">{cand.startStr} – {cand.endStr}</div>
+                                {cand.subtitle&&<div className="r3-cand-sub">{cand.subtitle.slice(0,34)}{cand.subtitle.length>34?'…':''}</div>}
                               </div>
-                              <div className="r3-ops-row">
-                                <button className="r3-op-btn" disabled={editingSeg.segIdx===0}
-                                  onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,-1)}>← 前移</button>
-                                <button className="r3-op-btn" disabled={editingSeg.segIdx>=(editComp?.segments.length||0)-1}
-                                  onClick={()=>moveSegInComp(editingSeg.compId,editingSeg.segIdx,+1)}>后移 →</button>
-                                <button className={`comp-seg-lock${(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?' on':''}`}
-                                  style={{position:'static',opacity:1,fontSize:'12px',padding:'4px 8px'}}
-                                  onClick={()=>toggleLockSeg(editingSeg.compId,editingSeg.segIdx)}>
-                                  {(lockedSegs[editingSeg.compId]||{})[editingSeg.segIdx]?'🔒 已锁':'🔓 锁定'}
-                                </button>
-                              </div>
-                            </>
-                          )}
-                          <div className="r3-rec-section">
-                            <div className="r3-sec-head">
-                              <span className="r3-sec-title">替换候选</span>
-                              {editSeg&&<span className="r3-sec-hint">{editSeg.type}优先</span>}
+                            )
+                          }):(
+                            <div className="r3-no-recs">
+                              <div>暂无同类型推荐</div>
+                              <div className="r3-no-recs-hint">可从左侧切片池选择替换</div>
                             </div>
-                            {recs.length>0?recs.map(cand=>{
-                              const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
-                              return (
-                                <div key={cand.id} className="r3-cand-item"
-                                  onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
-                                  <div className="r3-cand-top">
-                                    <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
-                                    <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
-                                    <span className="r3-cand-src">V{cand.videoIndex+1}</span>
-                                  </div>
-                                  <div className="r3-cand-time">{cand.startStr} – {cand.endStr}</div>
-                                  {cand.subtitle&&<div className="r3-cand-sub">{cand.subtitle.slice(0,34)}{cand.subtitle.length>34?'…':''}</div>}
-                                </div>
-                              )
-                            }):(
-                              <div className="r3-no-recs">
-                                <div>暂无同类型推荐</div>
-                                <div className="r3-no-recs-hint">可从下方展开全部候选中选择</div>
-                                {adjFallback.length>0&&(
-                                  <>
-                                    <div className="r3-no-recs-sub">同视频相邻片段：</div>
-                                    {adjFallback.map(cand=>{
-                                      const ctc=SEG_TYPE_COLORS[cand.type]||'#6366f1'
-                                      return (
-                                        <div key={cand.id} className="r3-cand-item"
-                                          onClick={()=>setPendingCand({cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})}>
-                                          <div className="r3-cand-top">
-                                            <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
-                                            <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
-                                          </div>
-                                          <div className="r3-cand-time">{cand.startStr} – {cand.endStr}</div>
-                                        </div>
-                                      )
-                                    })}
-                                  </>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                          )}
                           <div className="r3-all-section">
                             <button className="r3-all-toggle" onClick={()=>setShowAllCands(p=>({...p,[allCandsKey]:!p[allCandsKey]}))}>
-                              {showAllCands[allCandsKey]?'▲ 收起候选':'▼ 展开全部候选'}
+                              {showAllCands[allCandsKey]?'▲ 收起':'▼ 全部候选'}
                               <span className="r3-all-count">{allCands.length}</span>
                             </button>
                             {showAllCands[allCandsKey]&&(
@@ -2089,12 +2236,10 @@ export default function App() {
                         </div>
                       </>
                     )
-                  })() : (
-                    <div className="comp-right-body">
-                      <div className="r3-hint-text">点击下方预览条中的片段，可在此查看详情、调整顺序、替换片段</div>
-                    </div>
+                  })():(
+                    <div className="s2-cands-hint">选中片段后查看替换候选</div>
                   )}
-                </aside>
+                </div>
               </div>
               {/* BOTTOM: composition rows */}
               <div className={`s3-comp-section ${tlFlash?'tl-flash':''}`}>
