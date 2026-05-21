@@ -6221,8 +6221,8 @@ input[type=range] {
   position: relative;
   cursor: crosshair;
   user-select: none;
-  padding: 6px 14px;
-  gap: 3px;
+  padding: 4px 0;
+  gap: 1px;
   background: rgba(0,0,0,.18);
   align-items: stretch;
 }
@@ -6324,7 +6324,7 @@ input[type=range] {
 /* move buttons */
 .comp-seg-move-btns {
   position: absolute;
-  bottom: 3px;
+  top: 3px;
   right: 24px;
   display: flex;
   gap: 2px;
