@@ -128,6 +128,21 @@ function findSegAtPos(comp, posSec) {
   return comp.segments.length - 1
 }
 
+function snapToSegBoundary(comp, posSec) {
+  if (!comp) return posSec
+  const SNAP_SEC = 0.4
+  let acc = 0
+  const boundaries = [0]
+  for (const seg of comp.segments) {
+    acc += seg.endSec - seg.startSec
+    boundaries.push(acc)
+  }
+  for (const b of boundaries) {
+    if (Math.abs(posSec - b) < SNAP_SEC) return b
+  }
+  return posSec
+}
+
 function readVideoMeta(url) {
   return new Promise(resolve => {
     const v = document.createElement('video')
@@ -980,9 +995,10 @@ export default function App() {
       if (!compTlDragRef.current) return
       const {compId,rect,totalDur}=compTlDragRef.current
       const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width))
-      const posSec=ratio*totalDur
+      const rawPos=ratio*totalDur
       const comp=compositionsRef.current.find(c=>c.id===compId)
       if (!comp) return
+      const posSec=snapToSegBoundary(comp,rawPos)
       setCompPreviewPos(prev=>({...prev,[compId]:posSec}))
       setEditingSeg({compId,segIdx:findSegAtPos(comp,posSec)})
     }
@@ -1548,8 +1564,15 @@ export default function App() {
     setCompPlaySegIdx(0); compPlaySegIdxRef.current=0
     setSelectedCompId(compId)
     setEditingSeg({compId,segIdx:0})
-    compPrevSeekRef.current=comp.segments[0].startSec
+    const seg0=comp.segments[0]
+    compPrevSeekRef.current=seg0.startSec
     setCompPreviewPos(prev=>({...prev,[compId]:0}))
+    // Directly trigger play — handles case where compPlaySegIdx doesn't change
+    const vid=compPrevRef.current
+    if (vid) {
+      vid.currentTime=seg0.startSec
+      vid.play().catch(()=>{})
+    }
   }
   function stopCompPlay() {
     const vid=compPrevRef.current; if(vid) vid.pause()
@@ -1607,12 +1630,44 @@ export default function App() {
     const comp=compositions.find(c=>c.id===compId)
     if (!comp) return
     const cl=lockedSegs[compId]||{}
+    // seed usedIds with locked segments to prevent conflicts
+    const usedIds=new Set()
+    comp.segments.forEach((seg,i)=>{ if(cl[i]) usedIds.add(seg.id) })
     const newSegs=comp.segments.map((seg,i)=>{
       if (cl[i]) return seg
-      const otherIds=new Set(comp.segments.filter((_,j)=>j!==i).map(s=>s.id))
-      const cands=allSelectedSegs.filter(c=>c.type===seg.type&&c.id!==seg.id&&!otherIds.has(c.id))
-      return cands.length>0?cands[Math.floor(Math.random()*cands.length)]:seg
+      // try: same type + different video, then same type any, then any type
+      const tryPools=[
+        allSelectedSegs.filter(c=>c.type===seg.type&&c.id!==seg.id&&!usedIds.has(c.id)&&c.videoIndex!==seg.videoIndex),
+        allSelectedSegs.filter(c=>c.type===seg.type&&c.id!==seg.id&&!usedIds.has(c.id)),
+        allSelectedSegs.filter(c=>c.id!==seg.id&&!usedIds.has(c.id)),
+      ]
+      for (const pool of tryPools) {
+        if (pool.length>0) {
+          const pick=pool[Math.floor(Math.random()*pool.length)]
+          usedIds.add(pick.id)
+          return pick
+        }
+      }
+      // absolute fallback: keep original
+      if (allSelectedSegs.length<5) console.warn('[regenCompRow] 可用片段较少（',allSelectedSegs.length,'），方案可能相似')
+      usedIds.add(seg.id)
+      return seg
     })
+    // ensure >=2 source videos when multiple exist
+    const vidSet=new Set(newSegs.map(s=>s.videoIndex))
+    if (vidSet.size<2&&allSelectedSegs.length>=2) {
+      const otherVidSegs=allSelectedSegs.filter(s=>!vidSet.has(s.videoIndex)&&!usedIds.has(s.id))
+      if (otherVidSegs.length>0) {
+        for (let i=newSegs.length-1;i>=0;i--) {
+          if (!cl[i]) {
+            usedIds.delete(newSegs[i].id)
+            newSegs[i]=otherVidSegs[0]
+            usedIds.add(otherVidSegs[0].id)
+            break
+          }
+        }
+      }
+    }
     setCompositions(prev=>prev.map(c=>c.id===compId?{...c,segments:newSegs,totalDur:newSegs.reduce((a,s)=>a+(s.endSec-s.startSec),0)}:c))
     setCompSegUsage(prev=>{
       const next={...prev}
@@ -1956,8 +2011,9 @@ export default function App() {
               {previewLabel&&<div className={`s2-prev-label s2-prev-label-${previewMode}`}>{previewLabel}</div>}
               <div className="s2-prev-video-wrap" onClick={()=>{
                 const vid=compPrevRef.current; if(!vid||!prevVid) return
-                if (previewMode==='playing'||vid.paused===false){vid.pause();if(previewMode==='playing')stopCompPlay()}
-                else vid.play().catch(()=>{})
+                if(compIsPlayingRef.current){ stopCompPlay() }
+                else if(!vid.paused){ vid.pause() }
+                else { vid.play().catch(()=>{}) }
               }}>
                 {prevVid?(
                   <video
@@ -1966,7 +2022,6 @@ export default function App() {
                     src={prevVid.url}
                     preload="auto"
                     playsInline
-                    muted
                     className="s2-prev-video"
                     onLoadedMetadata={()=>{
                       const vid=compPrevRef.current; if(!vid) return
@@ -2243,7 +2298,7 @@ export default function App() {
                   const rect=e.currentTarget.getBoundingClientRect()
                   compTlDragRef.current={compId:comp.id,rect,totalDur:comp.totalDur}
                   const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width))
-                  const posSec=ratio*comp.totalDur
+                  const posSec=snapToSegBoundary(comp,ratio*comp.totalDur)
                   setCompPreviewPos(prev=>({...prev,[comp.id]:posSec}))
                   setEditingSeg({compId:comp.id,segIdx:findSegAtPos(comp,posSec)})
                   setSelectedCompId(comp.id)
@@ -2271,7 +2326,6 @@ export default function App() {
                       }}>
                       <span className="comp-seg-label">{seg.label}</span>
                       <span className="comp-seg-src">V{seg.videoIndex+1}</span>
-                      <span className="comp-seg-type">{seg.type}</span>
                       <span className="comp-seg-dur">{fmt(dur)}</span>
                       <div className="comp-seg-move-btns" onClick={e=>e.stopPropagation()}>
                         {si>0&&<button className="comp-seg-mv" title="前移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,-1)}}>←</button>}

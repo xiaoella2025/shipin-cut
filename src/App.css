@@ -5364,13 +5364,7 @@ input[type=range] {
 }
 
 .comp-seg-type {
-  font-size: 8px;
-  color: rgba(255,255,255,0.7);
-  line-height: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  width: 100%;
+  display: none;
 }
 
 .comp-seg-dur {
@@ -6282,13 +6276,7 @@ input[type=range] {
   line-height: 1.2;
 }
 .comp-seg-type {
-  font-size: 11px;
-  color: rgba(255,255,255,.75);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.2;
-  flex: 1;
+  display: none;
 }
 .comp-seg-dur {
   font-size: 11px;
@@ -6717,7 +6705,7 @@ input[type=range] {
 /* four-column → five-column workbench */
 .s2-compose-workbench {
   display: flex;
-  height: 400px;
+  height: 420px;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(255,255,255,.06);
   overflow: hidden;
