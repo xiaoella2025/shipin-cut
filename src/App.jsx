@@ -130,7 +130,7 @@ function findSegAtPos(comp, posSec) {
 
 function snapToSegBoundary(comp, posSec) {
   if (!comp) return posSec
-  const SNAP_SEC = 0.5
+  const SNAP_SEC = 1.0
   let acc = 0
   const boundaries = [0]
   for (const seg of comp.segments) {
@@ -855,6 +855,7 @@ export default function App() {
   const [compPlayCompId, setCompPlayCompId] = useState(null)
   const [compPlaySegIdx, setCompPlaySegIdx] = useState(0)
   const [candidatePreview, setCandidatePreview] = useState(null) // {cand, compId, segIdx}
+  const [prevVidPlaying, setPrevVidPlaying] = useState(false) // tracks actual video element play state
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1577,6 +1578,7 @@ export default function App() {
   function stopCompPlay() {
     const vid=compPrevRef.current; if(vid) vid.pause()
     setCompIsPlaying(false); compIsPlayingRef.current=false
+    setPrevVidPlaying(false)
   }
 
   function saveCompUndo() {
@@ -2012,7 +2014,7 @@ export default function App() {
               <div className="s2-prev-video-wrap" onClick={()=>{
                 const vid=compPrevRef.current; if(!vid||!prevVid) return
                 if(compIsPlayingRef.current){ stopCompPlay() }
-                else if(!vid.paused){ vid.pause() }
+                else if(prevVidPlaying){ vid.pause() }
                 else { vid.play().catch(()=>{}) }
               }}>
                 {prevVid?(
@@ -2023,6 +2025,8 @@ export default function App() {
                     preload="auto"
                     playsInline
                     className="s2-prev-video"
+                    onPlay={()=>setPrevVidPlaying(true)}
+                    onPause={()=>setPrevVidPlaying(false)}
                     onLoadedMetadata={()=>{
                       const vid=compPrevRef.current; if(!vid) return
                       vid.currentTime=compPrevSeekRef.current??0
@@ -2074,8 +2078,8 @@ export default function App() {
                 ):(
                   <div className="s2-prev-no-vid">{editingSeg||candidatePreview?'无法加载视频':'点击下方片段块或播放按钮'}</div>
                 )}
-                <div className={`s2-prev-play-btn${compIsPlaying&&!candidatePreview?' playing':''}`}>
-                  {compIsPlaying&&!candidatePreview
+                <div className={`s2-prev-play-btn${prevVidPlaying?' playing':''}`}>
+                  {prevVidPlaying
                     ?<svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                     :<svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>}
                 </div>
@@ -2086,13 +2090,17 @@ export default function App() {
                   <span className="s2-prev-info-vsrc">V{prevSeg.videoIndex+1}</span>
                   <span className="s2-prev-info-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{prevSeg.type}</span>
                   <span className="s2-prev-info-time">{prevSeg.startStr}–{prevSeg.endStr}</span>
-                  {(()=>{
-                    const subT=getSegSubtitleFromAna(prevSeg,prevVid?.id,videoAnalysis)
-                    return subT?<span className="s2-prev-info-sub">{subT.slice(0,40)}{subT.length>40?'…':''}</span>:null
-                  })()}
                 </div>
               )}
               {!prevSeg&&<div className="s2-prev-hint-bar">模拟组合预览 · 非真实成品视频</div>}
+              <div className="s2-prev-sub-area">
+                <span className="s2-prev-sub-label">片段字幕</span>
+                <div className="s2-prev-sub-text">
+                  {prevSeg
+                    ?(getSegSubtitleFromAna(prevSeg,prevVid?.id,videoAnalysis)||'暂无字幕')
+                    :'—'}
+                </div>
+              </div>
             </div>
 
             {/* COL 3: current segment detail / candidate confirm */}
