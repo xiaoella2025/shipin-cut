@@ -130,7 +130,7 @@ function findSegAtPos(comp, posSec) {
 
 function snapToSegBoundary(comp, posSec) {
   if (!comp) return posSec
-  const SNAP_SEC = 0.4
+  const SNAP_SEC = 0.5
   let acc = 0
   const boundaries = [0]
   for (const seg of comp.segments) {
@@ -2074,8 +2074,8 @@ export default function App() {
                 ):(
                   <div className="s2-prev-no-vid">{editingSeg||candidatePreview?'无法加载视频':'点击下方片段块或播放按钮'}</div>
                 )}
-                <div className={`s2-prev-play-btn${(previewMode==='playing'&&!compPrevRef.current?.paused)?' playing':''}`}>
-                  {(previewMode==='playing'&&compIsPlaying)
+                <div className={`s2-prev-play-btn${compIsPlaying&&!candidatePreview?' playing':''}`}>
+                  {compIsPlaying&&!candidatePreview
                     ?<svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                     :<svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>}
                 </div>
@@ -2192,7 +2192,11 @@ export default function App() {
                   return (
                     <div key={cand.id}
                       className={`r3-cand-item${isPreview?' previewing':''}`}
-                      onClick={()=>setCandidatePreview(isPreview?null:{cand,compId:editingSeg?.compId??col3Comp?.id??'',segIdx:editingSeg?.segIdx??0})}>
+                      onClick={()=>{
+                        const next=isPreview?null:{cand,compId:editingSeg?.compId??col3Comp?.id??'',segIdx:editingSeg?.segIdx??0}
+                        if(next) stopCompPlay()
+                        setCandidatePreview(next)
+                      }}>
                       <div className="r3-cand-top">
                         <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
                         <span className="r3-cand-type" style={{color:ctc,borderColor:ctc+'44',background:ctc+'18'}}>{cand.type}</span>
@@ -2221,7 +2225,9 @@ export default function App() {
                       className={`r3-cand-item r3-cand-sm${isPreview?' previewing':''}${!canReplace?' no-target':''}`}
                       onClick={()=>{
                         if(!canReplace) return
-                        setCandidatePreview(isPreview?null:{cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx})
+                        const next=isPreview?null:{cand,compId:editingSeg.compId,segIdx:editingSeg.segIdx}
+                        if(next) stopCompPlay()
+                        setCandidatePreview(next)
                       }}>
                       <div className="r3-cand-top">
                         <span className="r3-cand-label" style={{color:ctc}}>{cand.label}</span>
@@ -2324,9 +2330,7 @@ export default function App() {
                           let acc=0; for(let i=0;i<si;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec; return acc
                         })()}))
                       }}>
-                      <span className="comp-seg-label">{seg.label}</span>
-                      <span className="comp-seg-src">V{seg.videoIndex+1}</span>
-                      <span className="comp-seg-dur">{fmt(dur)}</span>
+                      <span className="comp-seg-inline">{seg.label} · V{seg.videoIndex+1} · {fmt(dur)}</span>
                       <div className="comp-seg-move-btns" onClick={e=>e.stopPropagation()}>
                         {si>0&&<button className="comp-seg-mv" title="前移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,-1)}}>←</button>}
                         {si<comp.segments.length-1&&<button className="comp-seg-mv" title="后移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,+1)}}>→</button>}

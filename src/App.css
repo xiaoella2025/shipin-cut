@@ -6233,10 +6233,11 @@ input[type=range] {
   position: relative;
   overflow: hidden;
   display: flex;
-  flex-direction: column;
-  padding: 5px 6px 4px;
-  gap: 1px;
+  flex-direction: row;
+  align-items: center;
+  padding: 0 8px;
   min-width: 28px;
+  min-height: 48px;
   flex-shrink: 0;
   border-radius: 4px;
   transition: filter .12s;
@@ -6274,6 +6275,17 @@ input[type=range] {
   color: rgba(255,255,255,.8);
   white-space: nowrap;
   line-height: 1.2;
+}
+.comp-seg-inline {
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1;
+  flex: 1;
+  min-width: 0;
 }
 .comp-seg-type {
   display: none;
@@ -6763,12 +6775,15 @@ input[type=range] {
 .s2-prev-label-candidate { color: #fbbf24; background: rgba(251,191,36,.08); }
 .s2-prev-label-idle { color: #475569; }
 .s2-prev-video-wrap {
-  position: relative; flex-shrink: 0;
-  width: 100%; aspect-ratio: 16/9;
-  background: #000; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: #000;
+  cursor: pointer;
+  overflow: hidden;
 }
-.s2-prev-video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.s2-prev-video { width: 100%; height: 100%; object-fit: contain; object-position: center center; display: block; background: #000; }
 .s2-prev-no-vid { font-size: 11px; color: #334155; text-align: center; padding: 0 12px; line-height: 1.5; }
 .s2-prev-play-btn {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
