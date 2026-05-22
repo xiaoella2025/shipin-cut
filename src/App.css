@@ -9503,3 +9503,214 @@ input[type=range] {
 }
 .refine-action-row:hover .refine-action-del { opacity: 1; }
 .refine-action-del:hover { background: rgba(239,68,68,.2); color: #fca5a5; }
+
+/* ===== v0.7.2 layout ===== */
+
+.refine-body {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.refine-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* override v0.7.1 refine-top to 4 cols */
+.refine-top {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  padding: 8px 10px;
+  min-height: 260px;
+  max-height: 380px;
+  flex-shrink: 0;
+}
+
+/* Col 1: comp list */
+.refine-cl {
+  flex: 0 0 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--bdr);
+  border-radius: 8px;
+  padding: 8px;
+  overflow-y: auto;
+}
+.refine-cl-item {
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.refine-cl-item:hover { background: rgba(255,255,255,.06); border-color: var(--bdr); }
+.refine-cl-item.active { background: rgba(99,102,241,.12); border-color: rgba(99,102,241,.4); }
+.refine-cl-num { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing:.04em; }
+.refine-cl-name { font-size: 11px; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refine-cl-status {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  width: fit-content;
+}
+.refine-cl-status.dirty { background: rgba(245,158,11,.18); color: #fcd34d; border: 1px solid rgba(245,158,11,.3); }
+.refine-cl-status.saved { background: rgba(34,197,94,.15); color: #86efac; border: 1px solid rgba(34,197,94,.3); }
+
+.refine-cl-plan-note {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--bdr);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.refine-cl-plan-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+}
+.refine-cl-plan-lbl { color: var(--text-muted); }
+.refine-cl-plan-val { font-weight: 600; color: var(--text); font-family: var(--font-mono, monospace); }
+.refine-cl-plan-status {
+  font-size: 9px;
+  color: rgba(255,255,255,.3);
+  margin-top: 2px;
+  text-align: center;
+}
+.refine-cl-plan-status.ok { color: #86efac; }
+
+/* Video col: slightly narrower than script/copy */
+.refine-vc { flex: 1.1; }
+.refine-sc, .refine-cc { flex: 1.3; }
+
+/* Banner extras */
+.refine-banner-dur {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  margin-left: 4px;
+}
+
+/* Save status badges in col headers */
+.refine-save-status {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-weight: 500;
+  background: rgba(255,255,255,.05);
+  color: rgba(255,255,255,.3);
+  border: 1px solid var(--bdr);
+}
+.refine-save-status.dirty { background: rgba(245,158,11,.15); color: #fcd34d; border-color: rgba(245,158,11,.3); }
+.refine-save-status.saved { background: rgba(34,197,94,.12); color: #86efac; border-color: rgba(34,197,94,.3); }
+
+/* Copy task dropdown */
+.refine-copy-task-select {
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--bdr);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 10px;
+  font-family: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color .15s;
+}
+.refine-copy-task-select:focus { outline: none; border-color: rgba(99,102,241,.6); }
+.refine-copy-task-select option { background: #1a1a2e; color: var(--text); }
+
+/* Reference hint for non-prompt tasks */
+.refine-copy-ref-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: 10px;
+  color: rgba(255,255,255,.35);
+  line-height: 1.6;
+  padding: 6px 8px;
+  background: rgba(255,255,255,.03);
+  border-radius: 5px;
+  border: 1px solid var(--bdr);
+}
+
+/* Video meta extra badges */
+.refine-vm-del {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(239,68,68,.2);
+  color: #fca5a5;
+  margin-left: 2px;
+}
+.refine-vm-spd {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(245,158,11,.2);
+  color: #fcd34d;
+  margin-left: 2px;
+}
+
+/* Ops section (below timeline) */
+.refine-ops-section {
+  flex-shrink: 0;
+  padding: 4px 10px 10px;
+  border-top: 1px solid var(--bdr);
+  overflow-y: auto;
+  max-height: 220px;
+}
+.refine-ops-inner {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.refine-ops-inner .refine-seg-card { flex: 1; min-width: 200px; }
+.refine-ops-inner .refine-ops-row { flex-shrink: 0; align-self: center; }
+.refine-ops-inner .refine-speed-section { flex: 2; min-width: 260px; }
+.refine-ops-inner .refine-actions-summary { width: 100%; }
+
+/* Segment card meta extras */
+.refine-seg-del-meta { color: #fca5a5; }
+
+/* Right sidebar: subtitle list */
+.refine-sub-sidebar {
+  flex: 0 0 200px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--bdr);
+  background: rgba(0,0,0,.15);
+  overflow: hidden;
+}
+.refine-sub-sidebar .refine-sub-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--bdr);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  background: rgba(255,255,255,.03);
+}
+.refine-sub-sidebar .refine-sub-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
