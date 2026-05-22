@@ -105,13 +105,23 @@ const SUBTITLE_PROMPTS = [
   { key:'voiceover', label:'生成配音稿',  text:'请根据以下字幕生成适合文字转语音（TTS）的配音稿，要求：\n1. 语句流畅，适合朗读\n2. 避免特殊符号，每句控制在 15–20 字以内\n3. 适合标准普通话朗读\n\n字幕内容如下：\n' },
 ]
 
-const COPY_PROMPTS = [
-  { key:'gen_title',    label:'生成标题',      text:'请根据以下短视频字幕内容生成 5 个发布标题，要求：\n1. 标题有吸引力，引发点击\n2. 15 字以内，不夸张虚假\n3. 适合短视频平台\n\n字幕内容如下：\n' },
-  { key:'gen_body',     label:'生成正文文案',   text:'请根据以下字幕内容生成一段视频发布正文文案，要求：\n1. 200 字以内，介绍视频核心内容\n2. 结尾加互动引导（如"你觉得呢？"）\n3. 适合短视频平台发布\n\n字幕内容如下：\n' },
-  { key:'xiaohongshu',  label:'小红书风格',     text:'请帮我把以下字幕改写成小红书风格文案，要求：\n1. 活泼可爱语气，多用 emoji\n2. 分段清晰\n3. 结尾加话题标签建议\n\n字幕内容如下：\n' },
-  { key:'wechat',       label:'公众号文章',     text:'请根据以下字幕内容生成一篇公众号文章，要求：\n1. 有标题、导语、正文、结尾\n2. 语言专业但不失亲切\n3. 500–800 字，适合图文排版\n\n字幕内容如下：\n' },
-  { key:'douyin',       label:'短视频发布文案',  text:'请根据以下字幕内容生成适合抖音/快手/视频号发布的文案，要求：\n1. 简洁有力，100 字以内\n2. 突出核心看点\n3. 附 2–3 个话题标签建议\n\n字幕内容如下：\n' },
+const COPY_TASKS = [
+  { key:'referenceTitle',      label:'对标标题',       placeholder:'粘贴对标视频的标题，供 AI 参考改写...' },
+  { key:'finalTitle',          label:'我的标题',        placeholder:'粘贴 AI 改写好的标题，或直接填写...' },
+  { key:'referenceWechatBody', label:'对标公众号正文',   placeholder:'粘贴对标公众号文章正文，供 AI 参考改写...' },
+  { key:'finalWechatBody',     label:'我的公众号正文',   placeholder:'粘贴 AI 改写好的公众号正文...' },
+  { key:'referenceXhs',        label:'对标小红书正文',   placeholder:'粘贴对标小红书笔记正文，供 AI 参考...' },
+  { key:'finalXhs',            label:'我的小红书正文',   placeholder:'粘贴 AI 改写好的小红书正文...' },
 ]
+
+const COPY_PROMPT_MAP = {
+  finalTitle: '请参考下方【对标标题】，结合【我的字幕】，生成 5 个适合短视频平台的标题，要求：\n1. 有吸引力，能引发点击\n2. 15 字以内，不夸张不虚假\n3. 保留对标标题的情绪和结构，但替换成我的内容\n\n【对标标题】\n（请在此处粘贴对标标题）\n\n【我的字幕】\n',
+  finalWechatBody: '请参考下方【对标公众号正文】的结构和风格，结合【我的字幕】，生成一篇公众号文章，要求：\n1. 保留对标文章的情绪和卖点，但替换成我的视频内容，不要照抄\n2. 有标题、导语、正文、结尾\n3. 500–800 字，适合图文排版\n\n【对标公众号正文】\n（请在此处粘贴对标正文）\n\n【我的字幕】\n',
+  finalXhs: '请参考下方【对标小红书正文】的风格，结合【我的字幕】，生成一篇小红书笔记，要求：\n1. 保留对标文案的情绪和卖点，但替换成我的内容，不要照抄\n2. 语气活泼，适合小红书\n3. 多用分段，加入合适 emoji\n4. 结尾加话题标签建议（3–5 个）\n\n【对标小红书正文】\n（请在此处粘贴对标正文）\n\n【我的字幕】\n',
+  referenceTitle: null,
+  referenceWechatBody: null,
+  referenceXhs: null,
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -312,6 +322,20 @@ function buildSummaryScript(comp, videoAnalysis, uploadedVideos) {
     const texts = bySegment[si] || (seg.subtitle ? [seg.subtitle] : [])
     return texts.join(' ')
   }).filter(t => t.trim()).join('\n\n')
+}
+
+function buildDerivedTimeline(comp, deletedSegIdxs, speedMap) {
+  let acc = 0
+  const segments = []
+  ;(comp.segments||[]).forEach((seg, si) => {
+    if ((deletedSegIdxs||[]).includes(si)) return
+    const rawDur = seg.endSec - seg.startSec
+    const spd = (speedMap||{})[si] ?? 1
+    const actualDur = rawDur / Math.max(0.1, spd)
+    segments.push({ segIdx: si, seg, compStart: acc, compEnd: acc + actualDur, actualDur, speed: spd })
+    acc += actualDur
+  })
+  return { segments, totalDuration: acc }
 }
 
 function downloadTextFile(text, filename) {
@@ -949,8 +973,8 @@ export default function App() {
   // ── step-2 refined compositions (v0.7.1) ──
   // {compId: {summaryScript, scriptModified, copyTitle, copyBody, copyModified, editActions}}
   const [refinedComps, setRefinedComps]         = useState({})
-  const [refineSubPromptKey, setRefineSubPromptKey] = useState(null)  // selected subtitle prompt key
-  const [refineCopyPromptKey, setRefineCopyPromptKey] = useState(null)
+  const [refineSubPromptKey, setRefineSubPromptKey] = useState(null)
+  const [refineCopyTask, setRefineCopyTask]     = useState('referenceTitle')
 
   // ── step-2 refine (v0.7) ──
   const [refineCompId, setRefineCompId]         = useState(null)
@@ -1752,19 +1776,23 @@ export default function App() {
 
   function startRefinePlay(comp) {
     if (!comp||!comp.segments.length) return
+    const rc=refinedComps[comp.id]||{}
+    const deletedSegIdxs=rc.deletedSegIdxs||[]
+    const activeIdxs=comp.segments.map((_,i)=>i).filter(i=>!deletedSegIdxs.includes(i))
+    if (!activeIdxs.length) { showToast('所有片段已标删，无法播放'); return }
     const currentPos=refinePrevPos
-    const atEnd=currentPos>=comp.totalDur-0.2
-    let startSegIdx=0, seekTime=comp.segments[0].startSec
+    // find start segment in derived timeline
+    let startSegIdx=activeIdxs[0], seekTime=comp.segments[activeIdxs[0]].startSec
+    const {segments:derivedSegs,totalDuration:derivedDur}=buildDerivedTimeline(comp,deletedSegIdxs,rc.speedMap||{})
+    const atEnd=currentPos>=derivedDur-0.2
     if (!atEnd&&currentPos>0) {
-      let acc=0
-      for (let i=0;i<comp.segments.length;i++) {
-        const dur=comp.segments[i].endSec-comp.segments[i].startSec
-        if (currentPos<acc+dur||i===comp.segments.length-1) {
-          startSegIdx=i
-          seekTime=comp.segments[i].startSec+Math.min(Math.max(0,currentPos-acc),dur-0.01)
+      for (const ds of derivedSegs) {
+        if (currentPos<=ds.compEnd||ds===derivedSegs[derivedSegs.length-1]) {
+          startSegIdx=ds.segIdx
+          const offsetInSeg=Math.max(0,currentPos-ds.compStart)*ds.speed
+          seekTime=ds.seg.startSec+Math.min(offsetInSeg,ds.seg.endSec-ds.seg.startSec-0.01)
           break
         }
-        acc+=dur
       }
     } else if (atEnd) {
       setRefinePrevPos(0)
@@ -1802,32 +1830,55 @@ export default function App() {
     setRefineMarkUndo(null)
   }
 
+  function defaultRcFor(existing) {
+    return {
+      summaryScript:'', scriptModified:false, scriptSavedAt:null,
+      copywriting:{ referenceTitle:'', finalTitle:'', referenceWechatBody:'', finalWechatBody:'', referenceXhs:'', finalXhs:'' },
+      copyModified:false, copySavedAt:null,
+      deletedSegIdxs:[], speedMap:{},
+      savedAt:null,
+      ...(existing||{}),
+    }
+  }
   function updateRefinedComp(compId, updates) {
-    setRefinedComps(prev=>({
-      ...prev,
-      [compId]: {summaryScript:'',scriptModified:false,copyTitle:'',copyBody:'',copyModified:false,editActions:[],...prev[compId],...updates}
-    }))
+    setRefinedComps(prev=>({...prev,[compId]:defaultRcFor({...prev[compId],...updates})}))
   }
-
   function toggleDeleteSeg(compId, segIdx) {
-    const rc=refinedComps[compId]||{editActions:[]}
-    const exists=rc.editActions.find(a=>a.type==='delete'&&a.segIdx===segIdx)
-    const newActions=exists
-      ?rc.editActions.filter(a=>!(a.type==='delete'&&a.segIdx===segIdx))
-      :[...rc.editActions,{id:`ea-${Date.now()}`,type:'delete',segIdx}]
-    updateRefinedComp(compId,{editActions:newActions})
+    setRefinedComps(prev=>{
+      const rc=defaultRcFor(prev[compId])
+      const cur=rc.deletedSegIdxs
+      const deletedSegIdxs=cur.includes(segIdx)?cur.filter(i=>i!==segIdx):[...cur,segIdx]
+      return {...prev,[compId]:{...rc,deletedSegIdxs}}
+    })
   }
-
   function setSegSpeed(compId, segIdx, speed) {
-    const rc=refinedComps[compId]||{editActions:[]}
-    const without=rc.editActions.filter(a=>!(a.type==='speed'&&a.segIdx===segIdx))
-    const newActions=speed===1?without:[...without,{id:`ea-${Date.now()}`,type:'speed',segIdx,speed}]
-    updateRefinedComp(compId,{editActions:newActions})
+    setRefinedComps(prev=>{
+      const rc=defaultRcFor(prev[compId])
+      const speedMap={...rc.speedMap}
+      if(speed===1) delete speedMap[segIdx]
+      else speedMap[segIdx]=speed
+      return {...prev,[compId]:{...rc,speedMap}}
+    })
   }
-
+  function saveScript(compId) {
+    setRefinedComps(prev=>({...prev,[compId]:{...defaultRcFor(prev[compId]),scriptModified:false,scriptSavedAt:new Date().toISOString()}}))
+    showToast('口播稿已保存')
+  }
+  function saveCopywriting(compId) {
+    setRefinedComps(prev=>({...prev,[compId]:{...defaultRcFor(prev[compId]),copyModified:false,copySavedAt:new Date().toISOString()}}))
+    showToast('文案已保存')
+  }
   function saveRefinedPlan(compId) {
-    updateRefinedComp(compId,{scriptModified:false,copyModified:false,savedAt:new Date().toISOString()})
+    setRefinedComps(prev=>({...prev,[compId]:{...defaultRcFor(prev[compId]),scriptModified:false,copyModified:false,savedAt:new Date().toISOString()}}))
     showToast('精修方案已保存')
+  }
+  function switchRefineComp(newCompId) {
+    const rc=refinedComps[refineCompId]||{}
+    if((rc.scriptModified||rc.copyModified)&&!window.confirm('当前方案有未保存的修改，确认切换？（修改仍在内存中，可稍后保存）')) return
+    stopRefinePlay()
+    setRefineCompId(newCompId)
+    setRefineSelSeg(null)
+    setRefinePrevPos(0)
   }
 
   function saveCompUndo() {
