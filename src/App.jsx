@@ -1125,6 +1125,7 @@ export default function App() {
   const refineTlRef        = useRef(null)   // v0.7.5: timeline DOM element for trim drag
   const refineVoiceRef      = useRef(null)
   const refineVoiceInputRef = useRef(null)
+  const refinePlanImportRef = useRef(null)    // v0.7.6: hidden file input for plan JSON import
   const refinePlayEsIdxRef  = useRef(0)       // index into active editTimeline.segments
   const refineEditTimelineRef = useRef(null)  // populated only during editSegs playback
 
@@ -1958,6 +1959,8 @@ export default function App() {
       editSegs:null,            // null = use deletedSegIdxs mode; array = cut/edit mode (v0.7.4)
       editSegsUndoStack:[],     // stack of prior editSegs snapshots for multi-step undo (v0.7.4-hotfix)
       savedAt:null,
+      planExportedAt:null,      // v0.7.6: last export timestamp
+      planImportedAt:null,      // v0.7.6: last import timestamp
       ...(existing||{}),
     }
   }
@@ -1993,6 +1996,102 @@ export default function App() {
     setRefinedComps(prev=>({...prev,[compId]:{...defaultRcFor(prev[compId]),scriptModified:false,copyModified:false,savedAt:new Date().toISOString()}}))
     showToast('精修方案已保存')
   }
+
+  // v0.7.6: Export refine plan as JSON file
+  function exportRefinePlan(compId, comp) {
+    const rc = defaultRcFor(refinedComps[compId])
+    const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
+    const { segments: derivedSegs, totalDuration } = hasEditSegs
+      ? buildEditTimeline(rc.editSegs)
+      : buildDerivedTimeline(comp, rc.deletedSegIdxs, rc.speedMap)
+    const voiceDuration = rc.voice?.duration ?? 0
+    const durationDiff = rc.voice ? (voiceDuration - totalDuration) : null
+    const now = new Date().toISOString()
+    const payload = {
+      version: '0.7.6',
+      type: 'refine-plan',
+      exportedAt: now,
+      compositionId: compId,
+      compositionName: comp.name,
+      summaryScript: rc.summaryScript,
+      copywriting: rc.copywriting,
+      audioPolicy: rc.audioPolicy,
+      deletedSegIdxs: rc.deletedSegIdxs,
+      speedMap: rc.speedMap,
+      editSegs: rc.editSegs,
+      voice: rc.voice ? { name: rc.voice.name, duration: rc.voice.duration } : null,
+      derivedTimeline: derivedSegs.map(ds => ({
+        esId: ds.esId ?? null,
+        segIdx: ds.segIdx ?? null,
+        label: ds.seg.label,
+        type: ds.seg.type,
+        videoIndex: ds.seg.videoIndex,
+        startSec: ds.seg.startSec,
+        endSec: ds.seg.endSec,
+        speed: ds.speed,
+        compStart: ds.compStart,
+        compEnd: ds.compEnd,
+        actualDur: ds.actualDur,
+      })),
+      totalDuration,
+      voiceDuration: rc.voice ? voiceDuration : null,
+      durationDiff,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const safeName = comp.name.replace(/[^a-zA-Z0-9一-龥_-]/g, '_')
+    a.href = url
+    a.download = `refine-plan-${safeName}-${now.slice(0,10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), planExportedAt: now } }))
+    showToast('方案 JSON 已导出')
+  }
+
+  // v0.7.6: Import refine plan from JSON file
+  function importRefinePlanFile(compId, file) {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = e => {
+      let data
+      try { data = JSON.parse(e.target.result) } catch { showToast('JSON 解析失败，文件可能损坏'); return }
+      if (data.type !== 'refine-plan') { showToast('不是有效的精修方案文件'); return }
+      if (!data.version) { showToast('文件缺少版本字段'); return }
+      if (data.compositionId && data.compositionId !== compId) {
+        if (!window.confirm(`此方案来自成品「${data.compositionName||data.compositionId}」，当前成品不同，仍要导入？`)) return
+      }
+      const now = new Date().toISOString()
+      setRefinedComps(prev => {
+        const base = defaultRcFor(prev[compId])
+        return {
+          ...prev,
+          [compId]: {
+            ...base,
+            summaryScript: data.summaryScript ?? base.summaryScript,
+            copywriting: data.copywriting ?? base.copywriting,
+            audioPolicy: data.audioPolicy ?? base.audioPolicy,
+            deletedSegIdxs: data.deletedSegIdxs ?? base.deletedSegIdxs,
+            speedMap: data.speedMap ?? base.speedMap,
+            editSegs: data.editSegs ?? base.editSegs,
+            editSegsUndoStack: [],
+            voice: null, // objectUrl cannot survive serialization; user must re-import
+            savedAt: data.exportedAt ?? null,
+            planImportedAt: now,
+            planExportedAt: null,
+          }
+        }
+      })
+      if (data.voice?.name) {
+        showToast(`方案已导入。语音文件「${data.voice.name}」请重新导入同名音频文件。`)
+      } else {
+        showToast('精修方案已导入')
+      }
+    }
+    reader.onerror = () => showToast('文件读取失败')
+    reader.readAsText(file)
+  }
+
   function switchRefineComp(newCompId) {
     const rc=refinedComps[refineCompId]||{}
     if((rc.scriptModified||rc.copyModified)&&!window.confirm('当前方案有未保存的修改，确认切换？（修改仍在内存中，可稍后保存）')) return
@@ -2969,6 +3068,8 @@ export default function App() {
             const scriptStatus=rc.scriptModified?'已修改未保存':rc.scriptSavedAt?`已保存 ${rc.scriptSavedAt.slice(11,16)}`:'未修改'
             const copyStatus=rc.copyModified?'已修改未保存':rc.copySavedAt?`已保存 ${rc.copySavedAt.slice(11,16)}`:'未修改'
             const planStatus=rc.savedAt?`方案已保存 ${rc.savedAt.slice(11,16)}`:'方案未保存'
+            const planExportStatus=rc.planExportedAt?`已导出 ${rc.planExportedAt.slice(11,16)}`:''
+            const planImportStatus=rc.planImportedAt?`已导入 ${rc.planImportedAt.slice(11,16)}`:''
             const voice=rc.voice||null
             const muteOriginal=rc.audioPolicy?.muteOriginalVideo??false
             const voiceDur=voice?.duration??0
@@ -3026,6 +3127,9 @@ export default function App() {
                 {/* Hidden voice file input */}
                 <input type="file" accept="audio/*" style={{display:'none'}} ref={refineVoiceInputRef}
                   onChange={e=>{ const f=e.target.files?.[0]; if(f) importVoiceFile(comp.id,f); e.target.value='' }} />
+                {/* Hidden plan JSON import input */}
+                <input type="file" accept=".json" style={{display:'none'}} ref={refinePlanImportRef}
+                  onChange={e=>{ const f=e.target.files?.[0]; if(f) importRefinePlanFile(comp.id,f); e.target.value='' }} />
                 {/* Banner */}
                 <div className="refine-banner">
                   <button className="refine-back-btn" onClick={()=>{stopRefinePlay();setSubStep('compose')}}>
@@ -3040,10 +3144,22 @@ export default function App() {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                     所有修改保存进最终方案 · 暂未生成视频文件 · 后续导出阶段执行
                   </div>
-                  <button className="refine-save-plan-btn" onClick={()=>saveRefinedPlan(comp.id)}>
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                    保存精修方案
-                  </button>
+                  <div className="refine-banner-actions">
+                    <button className="refine-save-plan-btn" onClick={()=>saveRefinedPlan(comp.id)}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                      保存
+                    </button>
+                    <button className="refine-export-plan-btn" onClick={()=>exportRefinePlan(comp.id,comp)}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                      导出 JSON
+                    </button>
+                    <button className="refine-import-plan-btn" onClick={()=>refinePlanImportRef.current?.click()}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="17"/></svg>
+                      导入 JSON
+                    </button>
+                    {planExportStatus&&<span className="refine-plan-io-status">{planExportStatus}</span>}
+                    {planImportStatus&&<span className="refine-plan-io-status imported">{planImportStatus}</span>}
+                  </div>
                 </div>
 
                 {/* Body: main + right sidebar */}

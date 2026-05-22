@@ -9534,6 +9534,54 @@ input[type=range] {
 }
 .refine-save-plan-btn:hover { background: rgba(34,197,94,.25); }
 
+/* v0.7.6: banner actions group */
+.refine-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.refine-export-plan-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(99,102,241,.4);
+  background: rgba(99,102,241,.12);
+  color: #a5b4fc;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background .13s;
+  white-space: nowrap;
+}
+.refine-export-plan-btn:hover { background: rgba(99,102,241,.25); }
+.refine-import-plan-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(245,158,11,.4);
+  background: rgba(245,158,11,.1);
+  color: #fcd34d;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background .13s;
+  white-space: nowrap;
+}
+.refine-import-plan-btn:hover { background: rgba(245,158,11,.22); }
+.refine-plan-io-status {
+  font-size: 10px;
+  color: #6ee7b7;
+  white-space: nowrap;
+}
+.refine-plan-io-status.imported {
+  color: #fcd34d;
+}
+
 /* actions summary */
 .refine-actions-summary {
   display: flex;
