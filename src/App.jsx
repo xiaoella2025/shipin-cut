@@ -3207,6 +3207,10 @@ export default function App() {
                     </button>
                     {planExportStatus&&<span className="refine-plan-io-status">{planExportStatus}</span>}
                     {planImportStatus&&<span className="refine-plan-io-status imported">{planImportStatus}</span>}
+                    <button className="refine-export-prep-btn" onClick={()=>{stopRefinePlay();setSubStep('export-prep')}}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+                      进入导出准备
+                    </button>
                   </div>
                 </div>
 
@@ -3848,6 +3852,288 @@ export default function App() {
                     </div>
                   </div>
                 </div>{/* end refine-body */}
+              </div>
+            )
+          })()}
+
+          {/* ── v0.8: Export Preparation page ── */}
+          {subStep==='export-prep'&&(()=>{
+            const comp=compositions.find(c=>c.id===refineCompId)
+            if(!comp) return (
+              <div className="ep-error">未找到成品方案 <button onClick={()=>setSubStep('refine')}>← 返回精修</button></div>
+            )
+            const rc=defaultRcFor(refinedComps[comp.id])
+            const hasEditSegs=!!(rc.editSegs&&rc.editSegs.length>0)
+            const {segments:epSegs,totalDuration:epDur}=hasEditSegs
+              ?buildEditTimeline(rc.editSegs)
+              :buildDerivedTimeline(comp,rc.deletedSegIdxs,rc.speedMap)
+            const voice=rc.voice||null
+            const voiceMeta=rc.voiceMeta||null
+            const voiceSrc=voice||voiceMeta||null
+            const voiceDur=voiceSrc?.duration??0
+            const durDiff=voiceSrc?(voiceDur-epDur):null
+            const muteOriginal=rc.audioPolicy?.muteOriginalVideo??false
+            const cp=rc.copywriting||{}
+
+            // ── segment analysis
+            const activeSegs=epSegs.filter(ds=>!ds.seg?.deleted)
+            const deletedEditCount=hasEditSegs?(rc.editSegs||[]).filter(s=>s.deleted).length:0
+            const deletedBaseCount=rc.deletedSegIdxs?.length??0
+            const speedEntries=Object.entries(rc.speedMap||{})
+            const speedCount=speedEntries.length
+
+            // anomaly checks: source video missing, duration zero
+            const anomalySegs=activeSegs.filter(ds=>{
+              const vid=uploadedVideos[ds.seg.videoIndex]
+              if(!vid) return true
+              if(ds.seg.endSec<=ds.seg.startSec) return true
+              if(ds.actualDur<0.05) return true
+              return false
+            })
+            const missingVideoSegs=activeSegs.filter(ds=>!uploadedVideos[ds.seg.videoIndex])
+            const shortSegs=activeSegs.filter(ds=>ds.actualDur>0&&ds.actualDur<0.2)
+
+            // cut segs from editSegs (segments that were created by cutting)
+            const cutSegCount=hasEditSegs?(rc.editSegs||[]).length:0
+
+            // ── required checks
+            const ckCompExists=!!comp
+            const ckHasSegs=epSegs.length>0
+            const ckDurOk=epDur>0
+            const ckVideosExist=uploadedVideos.length>0
+            const ckNoAnomalies=anomalySegs.length===0
+            const ckVoiceHasFile=!!voice  // has playable objectUrl
+            const ckVoiceRecorded=!!voiceSrc  // has name/meta at least
+            const ckMuteOriginal=muteOriginal
+            const ckJsonExported=!!rc.planExportedAt
+            const ckScriptExists=!!(rc.summaryScript&&rc.summaryScript.trim())
+            const ckTitleExists=!!(cp.finalTitle&&cp.finalTitle.trim())
+            const ckWechatExists=!!(cp.finalWechatBody&&cp.finalWechatBody.trim())
+            const ckXhsExists=!!(cp.finalXhs&&cp.finalXhs.trim())
+
+            const durDiffAbs=durDiff!==null?Math.abs(durDiff):0
+            const ckDurClose=durDiff===null||durDiffAbs<3
+
+            // ── overall status
+            const critical=[ckCompExists,ckHasSegs,ckDurOk,ckVideosExist,ckNoAnomalies]
+            const allCritical=critical.every(Boolean)
+            const warnings=[ckVoiceHasFile,ckMuteOriginal,ckJsonExported,ckDurClose]
+            const allWarnings=warnings.every(Boolean)
+            const overallStatus=!allCritical?'error':!allWarnings?'warn':'ok'
+
+            const fmt2=s=>{
+              if(s===null||s===undefined) return '—'
+              const t=Math.round(s)
+              const m=Math.floor(t/60), sec=t%60
+              return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
+            }
+
+            return (
+              <div className="ep-view">
+                {/* ── Top bar ── */}
+                <div className="ep-topbar">
+                  <button className="ep-back-btn" onClick={()=>setSubStep('refine')}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+                    返回精修
+                  </button>
+                  <span className="ep-title">导出准备检查</span>
+                  <span className="ep-comp-name">当前成品：{comp.name}</span>
+                  <div className={`ep-overall-badge ep-badge-${overallStatus}`}>
+                    {overallStatus==='ok'?'✓ 可以进入真实导出准备':overallStatus==='warn'?'⚠ 有警告，但可继续':'✗ 缺少关键内容，请先处理'}
+                  </div>
+                </div>
+
+                {/* ── Main scroll area ── */}
+                <div className="ep-body">
+
+                  {/* ── 1. 基础素材检查 ── */}
+                  <div className="ep-section">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">📦</span>
+                      <span className="ep-section-title">1 · 基础素材检查</span>
+                      <span className={`ep-section-badge ${ckCompExists&&ckHasSegs&&ckDurOk&&ckVideosExist?'ok':ckNoAnomalies?'warn':'err'}`}>
+                        {ckCompExists&&ckHasSegs&&ckDurOk&&ckVideosExist&&ckNoAnomalies?'通过':anomalySegs.length>0?'有异常':'通过'}
+                      </span>
+                    </div>
+                    <div className="ep-rows">
+                      <div className={`ep-row ${ckCompExists?'ok':'err'}`}><span className="ep-lbl">当前成品方案</span><span className="ep-val">{ckCompExists?`已选择 · ${comp.name}`:'未选择'}</span></div>
+                      <div className={`ep-row ${ckVideosExist?'ok':'err'}`}><span className="ep-lbl">源视频素材数量</span><span className="ep-val">{uploadedVideos.length} 个{!ckVideosExist&&' ⚠ 请先导入视频'}</span></div>
+                      <div className={`ep-row ${ckHasSegs?'ok':'err'}`}><span className="ep-lbl">最终参与片段</span><span className="ep-val">{activeSegs.length} 段{!ckHasSegs&&' ⚠ 无可用片段'}</span></div>
+                      <div className={`ep-row ${ckDurOk?'ok':'err'}`}><span className="ep-lbl">视频方案总时长</span><span className="ep-val">{fmt2(epDur)}{!ckDurOk&&' ⚠ 时长为 0'}</span></div>
+                      {hasEditSegs&&<div className="ep-row"><span className="ep-lbl">精剪模式小段数</span><span className="ep-val">{cutSegCount} 段（含已删除）</span></div>}
+                      <div className={`ep-row ${deletedEditCount+deletedBaseCount===0?'':'warn'}`}><span className="ep-lbl">已删除小段</span><span className="ep-val">{hasEditSegs?deletedEditCount:deletedBaseCount} 段</span></div>
+                      <div className={`ep-row ${missingVideoSegs.length===0?'ok':'err'}`}><span className="ep-lbl">缺少源视频片段</span><span className="ep-val">{missingVideoSegs.length===0?'无':`${missingVideoSegs.length} 个 ⚠`}</span></div>
+                      <div className={`ep-row ${shortSegs.length===0?'ok':'warn'}`}><span className="ep-lbl">时长过短片段（＜0.2s）</span><span className="ep-val">{shortSegs.length===0?'无':`${shortSegs.length} 个`}</span></div>
+                      <div className={`ep-row ${anomalySegs.length===0?'ok':'err'}`}><span className="ep-lbl">异常片段汇总</span><span className="ep-val">{anomalySegs.length===0?'0 个':'⚠ '+anomalySegs.length+' 个'}</span></div>
+                    </div>
+                  </div>
+
+                  {/* ── 2. 精修方案检查 ── */}
+                  <div className="ep-section">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">✂</span>
+                      <span className="ep-section-title">2 · 精修方案检查</span>
+                      <span className={`ep-section-badge ${ckJsonExported?'ok':'warn'}`}>{ckJsonExported?'已导出 JSON':'建议导出 JSON'}</span>
+                    </div>
+                    <div className="ep-rows">
+                      <div className={`ep-row ${rc.editSegs||rc.deletedSegIdxs?.length||speedCount?'ok':''}`}><span className="ep-lbl">剪辑模式</span><span className="ep-val">{hasEditSegs?'精剪模式（editSegs）':'基础模式（deletedSegIdxs）'}</span></div>
+                      {hasEditSegs&&<div className="ep-row ok"><span className="ep-lbl">切刀小段总数</span><span className="ep-val">{cutSegCount} 段</span></div>}
+                      {hasEditSegs&&<div className="ep-row"><span className="ep-lbl">已删除小段</span><span className="ep-val">{deletedEditCount} 段</span></div>}
+                      {!hasEditSegs&&<div className="ep-row"><span className="ep-lbl">整段删除</span><span className="ep-val">{deletedBaseCount} 段</span></div>}
+                      <div className={`ep-row ${speedCount?'':'ok'}`}><span className="ep-lbl">调速片段</span><span className="ep-val">{speedCount} 段</span></div>
+                      <div className="ep-row ok"><span className="ep-lbl">最终视频时长</span><span className="ep-val">{fmt2(epDur)}</span></div>
+                      <div className={`ep-row ${rc.savedAt?'ok':'warn'}`}><span className="ep-lbl">精修方案已保存</span><span className="ep-val">{rc.savedAt?`已保存 ${rc.savedAt.slice(11,16)}`:'未保存 ⚠'}</span></div>
+                      <div className={`ep-row ${ckJsonExported?'ok':'warn'}`}><span className="ep-lbl">精修方案 JSON 导出</span><span className="ep-val">{ckJsonExported?`已导出 ${rc.planExportedAt?.slice(11,16)}`:'未导出 — 建议先导出作为工程存档'}</span></div>
+                      {rc.planImportedAt&&<div className="ep-row ok"><span className="ep-lbl">上次导入时间</span><span className="ep-val">{rc.planImportedAt.slice(11,16)}</span></div>}
+                    </div>
+                  </div>
+
+                  {/* ── 3. 语音与音频检查 ── */}
+                  <div className="ep-section">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">🎙</span>
+                      <span className="ep-section-title">3 · 语音与音频检查</span>
+                      <span className={`ep-section-badge ${ckVoiceHasFile&&ckMuteOriginal?'ok':ckVoiceRecorded?'warn':'err'}`}>
+                        {ckVoiceHasFile&&ckMuteOriginal?'通过':ckVoiceHasFile?'已导入但原视频未静音':ckVoiceRecorded?'需要重新导入语音':'未导入语音'}
+                      </span>
+                    </div>
+                    <div className="ep-rows">
+                      <div className={`ep-row ${ckVoiceRecorded?'ok':'err'}`}><span className="ep-lbl">最终语音文件</span><span className="ep-val">{voiceSrc?.fileName||voiceSrc?.name||'未记录'}</span></div>
+                      <div className={`ep-row ${ckVoiceHasFile?'ok':ckVoiceRecorded?'warn':'err'}`}><span className="ep-lbl">语音导入状态</span><span className="ep-val">{ckVoiceHasFile?'已导入，可播放':ckVoiceRecorded?`需要重新导入 ${voiceSrc?.fileName||voiceSrc?.name||''}`:'未导入'}</span></div>
+                      <div className={`ep-row ${ckVoiceRecorded?'ok':''}`}><span className="ep-lbl">语音时长</span><span className="ep-val">{ckVoiceRecorded?fmt2(voiceDur):'—'}</span></div>
+                      <div className={`ep-row ${ckMuteOriginal?'ok':'warn'}`}><span className="ep-lbl">原视频声音</span><span className="ep-val">{ckMuteOriginal?'已关闭（推荐）':'未关闭 — 建议关闭，由最终语音替代'}</span></div>
+                      <div className="ep-row"><span className="ep-lbl">主音轨策略</span><span className="ep-val">{muteOriginal?'外部最终语音':'原视频音频保留'}</span></div>
+                      {durDiff!==null&&<div className={`ep-row ${ckDurClose?'ok':'warn'}`}>
+                        <span className="ep-lbl">时长差值</span>
+                        <span className="ep-val">{durDiffAbs<0.5?'基本一致':durDiff>0?`视频短 ${fmt2(durDiffAbs)}`:`视频长 ${fmt2(durDiffAbs)}`}</span>
+                      </div>}
+                      {!ckVoiceHasFile&&ckVoiceRecorded&&(
+                        <div className="ep-notice warn">方案中记录了最终语音文件：<b>{voiceSrc?.fileName||voiceSrc?.name}</b>。真实导出前需要重新导入同名语音文件。</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ── 4. 字幕与文案检查 ── */}
+                  <div className="ep-section">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">📝</span>
+                      <span className="ep-section-title">4 · 字幕与文案检查</span>
+                      <span className={`ep-section-badge ${ckScriptExists?'ok':'warn'}`}>{ckScriptExists?'字幕稿已填写':'字幕稿缺失'}</span>
+                    </div>
+                    <div className="ep-rows">
+                      <div className={`ep-row ${ckScriptExists?'ok':'warn'}`}><span className="ep-lbl">字幕汇总稿</span><span className="ep-val">{ckScriptExists?`已填写，约 ${rc.summaryScript.trim().length} 字`:'未填写'}</span></div>
+                      <div className={`ep-row ${ckTitleExists?'ok':''}`}><span className="ep-lbl">最终标题</span><span className="ep-val">{ckTitleExists?cp.finalTitle:'未填写'}</span></div>
+                      <div className={`ep-row ${ckWechatExists?'ok':''}`}><span className="ep-lbl">公众号正文</span><span className="ep-val">{ckWechatExists?`已填写，约 ${cp.finalWechatBody.trim().length} 字`:'未填写'}</span></div>
+                      <div className={`ep-row ${ckXhsExists?'ok':''}`}><span className="ep-lbl">小红书正文</span><span className="ep-val">{ckXhsExists?`已填写，约 ${cp.finalXhs.trim().length} 字`:'未填写'}</span></div>
+                    </div>
+                  </div>
+
+                  {/* ── 5. 剪辑动作检查 ── */}
+                  <div className="ep-section">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">🎬</span>
+                      <span className="ep-section-title">5 · 剪辑动作汇总</span>
+                      <span className="ep-section-badge ok">信息</span>
+                    </div>
+                    <div className="ep-rows">
+                      <div className="ep-row ok"><span className="ep-lbl">剪辑模式</span><span className="ep-val">{hasEditSegs?'精剪模式':'基础删除/调速模式'}</span></div>
+                      {hasEditSegs&&<div className="ep-row"><span className="ep-lbl">切刀后小段总数</span><span className="ep-val">{cutSegCount} 段</span></div>}
+                      {hasEditSegs&&<div className="ep-row warn"><span className="ep-lbl">精剪已删除小段</span><span className="ep-val">{deletedEditCount} 段</span></div>}
+                      {!hasEditSegs&&<div className="ep-row"><span className="ep-lbl">整段删除</span><span className="ep-val">{deletedBaseCount} 段</span></div>}
+                      <div className="ep-row"><span className="ep-lbl">调速片段</span><span className="ep-val">{speedCount > 0 ? `${speedCount} 段` : '无'}</span></div>
+                      {speedEntries.map(([si,sp])=>(
+                        <div key={si} className="ep-row indent"><span className="ep-lbl">片段 {parseInt(si)+1}</span><span className="ep-val">× {sp}{sp<1?' （慢速）':sp>1?' （加速）':''}</span></div>
+                      ))}
+                      <div className="ep-row ok"><span className="ep-lbl">最终参与片段</span><span className="ep-val">{activeSegs.length} 段</span></div>
+                      <div className="ep-row ok"><span className="ep-lbl">最终视频时长</span><span className="ep-val">{fmt2(epDur)}</span></div>
+                    </div>
+                  </div>
+
+                  {/* ── 6. 导出风险提示 ── */}
+                  <div className="ep-section">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">⚠</span>
+                      <span className="ep-section-title">6 · 导出风险提示</span>
+                      <span className={`ep-section-badge ${overallStatus==='ok'?'ok':overallStatus==='warn'?'warn':'err'}`}>
+                        {overallStatus==='ok'?'无阻断风险':overallStatus==='warn'?'有建议项':'有需要处理项'}
+                      </span>
+                    </div>
+                    <div className="ep-rows">
+                      {!ckVoiceHasFile&&ckVoiceRecorded&&<div className="ep-notice warn">语音文件「{voiceSrc?.fileName||voiceSrc?.name}」需要重新导入，真实导出前必须完成。</div>}
+                      {!ckVoiceHasFile&&!ckVoiceRecorded&&<div className="ep-notice warn">尚未导入最终语音文件。如不需要配音可忽略。</div>}
+                      {!ckMuteOriginal&&ckVoiceRecorded&&<div className="ep-notice warn">导入了最终语音，但原视频声音未关闭。建议在精修页语音轨道中关闭原视频声音。</div>}
+                      {!ckJsonExported&&<div className="ep-notice warn">精修方案 JSON 尚未导出。建议先导出作为工程存档，防止浏览器刷新丢失方案。</div>}
+                      {durDiff!==null&&durDiffAbs>=3&&<div className="ep-notice warn">视频方案时长（{fmt2(epDur)}）与语音时长（{fmt2(voiceDur)}）相差 {fmt2(durDiffAbs)}，请确认是否合理。</div>}
+                      {anomalySegs.length>0&&<div className="ep-notice err">{anomalySegs.length} 个片段存在异常（缺少源视频或时长为 0），真实导出可能失败。</div>}
+                      {allCritical&&allWarnings&&<div className="ep-notice ok">关键项和建议项均通过，可以进入真实导出准备阶段。</div>}
+                      {allCritical&&!allWarnings&&<div className="ep-notice ok">关键项已通过，有部分建议项可优化，视需求决定是否处理后再导出。</div>}
+                    </div>
+                  </div>
+
+                  {/* ── 7. 后续遗留任务提示 ── */}
+                  <div className="ep-section ep-section-todo">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">📌</span>
+                      <span className="ep-section-title">7 · 后续遗留整理任务</span>
+                      <span className="ep-section-badge info">规划中</span>
+                    </div>
+                    <div className="ep-rows">
+                      <div className="ep-todo-item">
+                        <div className="ep-todo-ver">v0.8.1</div>
+                        <div className="ep-todo-body">
+                          <div className="ep-todo-title">第一页素材入口整理</div>
+                          <div className="ep-todo-desc">当前第一页导入入口较多，需统一梳理：视频素材入口保留在第一页；字幕入口说明清楚（导入已识别字幕 JSON / 本地批量识别）；最终语音和精修方案 JSON 不放第一页主入口，分别移至精修页和导出准备页。第一页应成为清晰的素材入口页。</div>
+                        </div>
+                      </div>
+                      <div className="ep-todo-item">
+                        <div className="ep-todo-ver">v0.8.2</div>
+                        <div className="ep-todo-body">
+                          <div className="ep-todo-title">第二页导出/去重按钮归位</div>
+                          <div className="ep-todo-desc">当前第二页（字幕分段/组合方案）中仍有裁剪边缘、轻微缩放、镜像翻转、变速处理、背景底图、画中画、字幕扰动、片尾图片、分辨率、帧率、音频、字幕位置等导出相关按钮。这些应后移至导出设置页。字幕分段页只负责字幕/分段；组合方案页只负责生成/预览/替换；精修页只负责最终字幕/语音/切刀；导出设置页统一负责所有导出参数和去重处理。</div>
+                        </div>
+                      </div>
+                      <div className="ep-todo-item">
+                        <div className="ep-todo-ver">v0.9</div>
+                        <div className="ep-todo-body">
+                          <div className="ep-todo-title">真实导出（FFmpeg 拼接）</div>
+                          <div className="ep-todo-desc">完成导出准备检查后，引入 FFmpeg WASM 或本地服务端，执行：片段拼接、调速、音轨合并（最终语音替换原视频音频）、字幕烧录、导出 MP4。本阶段不实现。</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── 8. 底部操作 ── */}
+                  <div className="ep-section ep-actions-section">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">▶</span>
+                      <span className="ep-section-title">8 · 下一步操作</span>
+                    </div>
+                    <div className="ep-action-row">
+                      <button className="ep-act-btn secondary" onClick={()=>setSubStep('refine')}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+                        返回精修页
+                      </button>
+                      <button className="ep-act-btn save" onClick={()=>saveRefinedPlan(comp.id)}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                        保存精修方案
+                      </button>
+                      <button className="ep-act-btn export" onClick={()=>exportRefinePlan(comp.id,comp)}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        导出方案 JSON
+                      </button>
+                      <button className="ep-act-btn refresh" onClick={()=>{ setSubStep('cut'); setTimeout(()=>setSubStep('export-prep'),0) }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                        刷新检查
+                      </button>
+                      <button className="ep-act-btn disabled" disabled title="真实导出将在 v0.9 实现">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        进入真实导出
+                        <span className="ep-act-btn-sub">v0.9 实现</span>
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
               </div>
             )
           })()}
