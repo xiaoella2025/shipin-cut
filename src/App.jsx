@@ -1954,13 +1954,15 @@ export default function App() {
       copywriting:{ referenceTitle:'', finalTitle:'', referenceWechatBody:'', finalWechatBody:'', referenceXhs:'', finalXhs:'' },
       copyModified:false, copySavedAt:null,
       deletedSegIdxs:[], speedMap:{},
-      voice:null, // {name, url, duration}
+      voice:null, // runtime: {fileName, fileType, duration, importedAt, source:'external', url} — url is objectUrl, not exported
+      voiceMeta:null, // v0.7.6-hotfix: imported voice metadata without playable url (awaiting re-import)
       audioPolicy:{ muteOriginalVideo:false },
       editSegs:null,            // null = use deletedSegIdxs mode; array = cut/edit mode (v0.7.4)
       editSegsUndoStack:[],     // stack of prior editSegs snapshots for multi-step undo (v0.7.4-hotfix)
       savedAt:null,
       planExportedAt:null,      // v0.7.6: last export timestamp
       planImportedAt:null,      // v0.7.6: last import timestamp
+      importReport:null,        // v0.7.6-hotfix: integrity report after import
       ...(existing||{}),
     }
   }
@@ -2004,11 +2006,20 @@ export default function App() {
     const { segments: derivedSegs, totalDuration } = hasEditSegs
       ? buildEditTimeline(rc.editSegs)
       : buildDerivedTimeline(comp, rc.deletedSegIdxs, rc.speedMap)
-    const voiceDuration = rc.voice?.duration ?? 0
-    const durationDiff = rc.voice ? (voiceDuration - totalDuration) : null
+    // v0.7.6-hotfix: voice export uses normalized shape; objectUrl is never serialized
+    const voiceSrc = rc.voice || rc.voiceMeta || null
+    const exportedVoice = voiceSrc ? {
+      fileName: voiceSrc.fileName || voiceSrc.name || '',
+      fileType: voiceSrc.fileType || '',
+      duration: voiceSrc.duration || 0,
+      importedAt: voiceSrc.importedAt || '',
+      source: voiceSrc.source || 'external',
+    } : null
+    const voiceDuration = voiceSrc?.duration ?? 0
+    const durationDiff = voiceSrc ? (voiceDuration - totalDuration) : null
     const now = new Date().toISOString()
     const payload = {
-      version: '0.7.6',
+      version: '0.7.6-hotfix',
       type: 'refine-plan',
       exportedAt: now,
       compositionId: compId,
@@ -2019,7 +2030,7 @@ export default function App() {
       deletedSegIdxs: rc.deletedSegIdxs,
       speedMap: rc.speedMap,
       editSegs: rc.editSegs,
-      voice: rc.voice ? { name: rc.voice.name, duration: rc.voice.duration } : null,
+      voice: exportedVoice,
       derivedTimeline: derivedSegs.map(ds => ({
         esId: ds.esId ?? null,
         segIdx: ds.segIdx ?? null,
@@ -2034,7 +2045,7 @@ export default function App() {
         actualDur: ds.actualDur,
       })),
       totalDuration,
-      voiceDuration: rc.voice ? voiceDuration : null,
+      voiceDuration: voiceSrc ? voiceDuration : null,
       durationDiff,
     }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -2062,6 +2073,30 @@ export default function App() {
         if (!window.confirm(`此方案来自成品「${data.compositionName||data.compositionId}」，当前成品不同，仍要导入？`)) return
       }
       const now = new Date().toISOString()
+      // v0.7.6-hotfix: normalize voice (compat with old name/duration/url shape)
+      const oldVoice = data.voice || null
+      const normalizedVoiceMeta = oldVoice ? {
+        fileName: oldVoice.fileName || oldVoice.name || '',
+        fileType: oldVoice.fileType || '',
+        duration: oldVoice.duration || 0,
+        importedAt: oldVoice.importedAt || '',
+        source: oldVoice.source || 'external',
+      } : null
+      const hadLegacyVoiceFields = !!(oldVoice && (oldVoice.name || oldVoice.url) && !oldVoice.fileName)
+      // build integrity report
+      const report = {
+        summaryScript: !!(data.summaryScript && data.summaryScript.trim()),
+        copywriting: !!(data.copywriting && Object.values(data.copywriting).some(v => v && String(v).trim())),
+        editSegs: !!(data.editSegs && data.editSegs.length > 0),
+        editsBasic: (data.deletedSegIdxs?.length > 0) || (data.speedMap && Object.keys(data.speedMap).length > 0),
+        audioPolicy: !!data.audioPolicy,
+        voiceFileName: normalizedVoiceMeta?.fileName || '',
+        voiceDuration: normalizedVoiceMeta?.duration || 0,
+        totalDuration: data.totalDuration ?? 0,
+        durationDiff: data.durationDiff ?? null,
+        legacyVoiceCompat: hadLegacyVoiceFields,
+        importedAt: now,
+      }
       setRefinedComps(prev => {
         const base = defaultRcFor(prev[compId])
         return {
@@ -2075,17 +2110,19 @@ export default function App() {
             speedMap: data.speedMap ?? base.speedMap,
             editSegs: data.editSegs ?? base.editSegs,
             editSegsUndoStack: [],
-            voice: null, // objectUrl cannot survive serialization; user must re-import
+            voice: null, // objectUrl cannot survive serialization; user must re-import the file
+            voiceMeta: normalizedVoiceMeta,
             savedAt: data.exportedAt ?? null,
             planImportedAt: now,
             planExportedAt: null,
+            importReport: report,
           }
         }
       })
-      if (data.voice?.name) {
-        showToast(`方案已导入。语音文件「${data.voice.name}」请重新导入同名音频文件。`)
+      if (normalizedVoiceMeta?.fileName) {
+        showToast(`方案已导入，语音文件「${normalizedVoiceMeta.fileName}」需重新选择。`)
       } else {
-        showToast('精修方案已导入')
+        showToast('已导入方案，语音文件需重新选择。')
       }
     }
     reader.onerror = () => showToast('文件读取失败')
@@ -2108,8 +2145,17 @@ export default function App() {
     const tmp = new Audio(url)
     tmp.addEventListener('loadedmetadata', () => {
       const dur = isFinite(tmp.duration) ? tmp.duration : 0
+      const importedAt = new Date().toISOString()
       updateRefinedComp(compId, {
-        voice: { name: file.name, url, duration: dur },
+        voice: {
+          fileName: file.name,
+          fileType: file.type || '',
+          duration: dur,
+          importedAt,
+          source: 'external',
+          url,
+        },
+        voiceMeta: null, // cleared once a real file is loaded
         audioPolicy: { ...(defaultRcFor(refinedComps[compId]).audioPolicy), muteOriginalVideo: true },
       })
       showToast('语音已导入，原视频音频已自动静音')
@@ -3071,6 +3117,8 @@ export default function App() {
             const planExportStatus=rc.planExportedAt?`已导出 ${rc.planExportedAt.slice(11,16)}`:''
             const planImportStatus=rc.planImportedAt?`已导入 ${rc.planImportedAt.slice(11,16)}`:''
             const voice=rc.voice||null
+            const voiceMeta=rc.voiceMeta||null
+            const importReport=rc.importReport||null
             const muteOriginal=rc.audioPolicy?.muteOriginalVideo??false
             const voiceDur=voice?.duration??0
             const durDiff=voice?(voiceDur-derivedDur):0
@@ -3161,6 +3209,39 @@ export default function App() {
                     {planImportStatus&&<span className="refine-plan-io-status imported">{planImportStatus}</span>}
                   </div>
                 </div>
+
+                {/* v0.7.6-hotfix: Plan import integrity panel */}
+                {importReport&&(
+                  <div className="refine-import-report">
+                    <div className="refine-import-report-head">
+                      <span className="refine-import-report-title">方案导入检查</span>
+                      <span className="refine-import-report-time">导入于 {importReport.importedAt.slice(11,16)}</span>
+                      {importReport.legacyVoiceCompat&&<span className="refine-import-report-tag">已兼容旧语音字段</span>}
+                      <button className="refine-import-report-close" title="关闭"
+                        onClick={()=>setRefinedComps(prev=>({...prev,[comp.id]:{...defaultRcFor(prev[comp.id]),importReport:null}}))}>×</button>
+                    </div>
+                    <div className="refine-import-report-grid">
+                      <span className={`refine-irk ${importReport.summaryScript?'ok':'miss'}`}>字幕稿：{importReport.summaryScript?'已恢复':'缺失'}</span>
+                      <span className={`refine-irk ${importReport.copywriting?'ok':'miss'}`}>文案：{importReport.copywriting?'已恢复':'缺失'}</span>
+                      <span className={`refine-irk ${importReport.editSegs?'ok':'miss'}`}>剪辑小段：{importReport.editSegs?'已恢复':'无切刀数据'}</span>
+                      <span className={`refine-irk ${importReport.editsBasic?'ok':'miss'}`}>删除/调速：{importReport.editsBasic?'已恢复':'无修改'}</span>
+                      <span className={`refine-irk ${importReport.audioPolicy?'ok':'miss'}`}>原视频声音策略：{importReport.audioPolicy?'已恢复':'缺失'}</span>
+                      <span className={`refine-irk ${voice?'ok':(importReport.voiceFileName?'need':'miss')}`}>
+                        最终语音：{voice?'已重新导入':(importReport.voiceFileName?`需要重新导入 ${importReport.voiceFileName}`:'未记录语音')}
+                      </span>
+                      {importReport.totalDuration>0&&<span className="refine-irk">视频方案时长：{fmt(importReport.totalDuration)}</span>}
+                      {importReport.voiceDuration>0&&<span className="refine-irk">语音时长：{fmt(importReport.voiceDuration)}</span>}
+                      {importReport.durationDiff!==null&&importReport.voiceDuration>0&&(
+                        <span className="refine-irk">差值：{Math.abs(importReport.durationDiff)<0.5?'基本一致':importReport.durationDiff>0?`视频短 ${fmt(Math.abs(importReport.durationDiff))}`:`视频长 ${fmt(Math.abs(importReport.durationDiff))}`}</span>
+                      )}
+                    </div>
+                    {importReport.voiceFileName&&!voice&&(
+                      <div className="refine-import-report-hint">
+                        方案中记录了最终语音文件：<b>{importReport.voiceFileName}</b>。请重新导入同名语音文件用于预览和后续导出。
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Body: main + right sidebar */}
                 <div className="refine-body">
@@ -3534,7 +3615,7 @@ export default function App() {
                             onTimeUpdate={()=>{ const a=refineVoiceRef.current; if(a) setRefineVoicePos(a.currentTime) }}
                             onEnded={()=>setRefineVoicePlaying(false)}/>
                           <div className="refine-vt-info">
-                            <span className="refine-vt-filename" title={voice.name}>{voice.name}</span>
+                            <span className="refine-vt-filename" title={voice.fileName}>{voice.fileName}</span>
                             <span className="refine-vt-dur">{fmt(voiceDur)}</span>
                           </div>
                           <div className="refine-vt-controls">
@@ -3549,6 +3630,10 @@ export default function App() {
                             <span className="refine-vt-diff-item">最终语音时长 <b>{fmt(voiceDur)}</b></span>
                             <span className="refine-vt-diff-item">差值：<b>{durDiffStr}</b></span>
                           </div>
+                        </div>
+                      ):voiceMeta?.fileName?(
+                        <div className="refine-vt-empty refine-vt-need-reimport">
+                          方案中记录了 <b>{voiceMeta.fileName}</b>（{fmt(voiceMeta.duration||0)}）。请重新导入同名语音文件以恢复预览。
                         </div>
                       ):(
                         <div className="refine-vt-empty">导入配音文件后，可在此对比视频与语音时长</div>

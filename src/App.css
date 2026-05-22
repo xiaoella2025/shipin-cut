@@ -9582,6 +9582,83 @@ input[type=range] {
   color: #fcd34d;
 }
 
+/* v0.7.6-hotfix: plan import integrity report panel */
+.refine-import-report {
+  margin: 8px 18px 0;
+  padding: 9px 12px 10px;
+  background: rgba(245,158,11,.07);
+  border: 1px solid rgba(245,158,11,.3);
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+.refine-import-report-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.refine-import-report-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #fcd34d;
+}
+.refine-import-report-time {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.refine-import-report-tag {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(99,102,241,.18);
+  color: #a5b4fc;
+  border: 1px solid rgba(99,102,241,.3);
+}
+.refine-import-report-close {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--bdr);
+  color: var(--text-muted);
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+.refine-import-report-close:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.refine-import-report-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 11px;
+}
+.refine-irk {
+  color: var(--text-muted);
+}
+.refine-irk.ok { color: #6ee7b7; }
+.refine-irk.miss { color: #94a3b8; }
+.refine-irk.need { color: #fcd34d; font-weight: 600; }
+.refine-import-report-hint {
+  margin-top: 8px;
+  padding: 6px 9px;
+  background: rgba(245,158,11,.14);
+  border-left: 2px solid #f59e0b;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #fde68a;
+}
+.refine-import-report-hint b { color: #fff; }
+.refine-vt-need-reimport {
+  color: #fcd34d !important;
+  border: 1px dashed rgba(245,158,11,.4);
+  background: rgba(245,158,11,.08);
+  padding: 8px 10px;
+  border-radius: 5px;
+}
+.refine-vt-need-reimport b { color: #fff; }
+
 /* actions summary */
 .refine-actions-summary {
   display: flex;
