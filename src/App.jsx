@@ -98,11 +98,14 @@ const REFINE_MARK_TYPES = [
 ]
 
 const SUBTITLE_PROMPTS = [
-  { key:'polish',    label:'字幕润色',    text:'请帮我润色以下短视频口播字幕，要求：\n1. 保持口语化、自然流畅\n2. 适合短视频节奏，每句不超过 20 字\n3. 不改变核心意思，如有重复可适当删减\n\n字幕内容如下：\n' },
-  { key:'pace',      label:'保持口播节奏', text:'请把以下字幕改写成适合短视频口播的稿子，要求：\n1. 每句话简短有力\n2. 语气轻松自然，适合快节奏视频\n3. 保持原内容核心，不要添加无关内容\n\n字幕内容如下：\n' },
-  { key:'shorten',   label:'缩短口播',    text:'请帮我把以下字幕压缩，要求：\n1. 删除重复内容和过渡语句\n2. 保留核心信息\n3. 整体缩短 20–30%，保持口语化风格\n\n字幕内容如下：\n' },
-  { key:'natural',   label:'更生活化',    text:'请把以下字幕改得更像真人在说话，要求：\n1. 加入口语化表达\n2. 语气更亲切自然，可适当加入语气词\n3. 减少书面化表达\n\n字幕内容如下：\n' },
-  { key:'voiceover', label:'生成配音稿',  text:'请根据以下字幕生成适合文字转语音（TTS）的配音稿，要求：\n1. 语句流畅，适合朗读\n2. 避免特殊符号，每句控制在 15–20 字以内\n3. 适合标准普通话朗读\n\n字幕内容如下：\n' },
+  { key:'polish',    label:'字幕润色',         text:'请帮我润色以下短视频口播字幕，要求：\n1. 保持口语化、自然流畅\n2. 适合短视频节奏，每句不超过 20 字\n3. 不改变核心意思，如有重复可适当删减\n\n字幕内容如下：\n' },
+  { key:'pace',      label:'短视频节奏',        text:'请把以下字幕改写成适合短视频口播的稿子，要求：\n1. 每句话简短有力\n2. 语气轻松自然，适合快节奏视频\n3. 保持原内容核心，不要添加无关内容\n\n字幕内容如下：\n' },
+  { key:'shorten',   label:'缩短口播',          text:'请帮我把以下字幕压缩，要求：\n1. 删除重复内容和过渡语句\n2. 保留核心信息\n3. 整体缩短 20–30%，保持口语化风格\n\n字幕内容如下：\n' },
+  { key:'compress',  label:'压缩更短版本',       text:'请把以下字幕极度压缩，要求：\n1. 保留最核心的 3–5 句\n2. 去掉所有过渡、铺垫\n3. 适合在 30 秒以内讲完\n\n字幕内容如下：\n' },
+  { key:'natural',   label:'更口语自然',         text:'请把以下字幕改得更像真人在说话，要求：\n1. 加入口语化表达\n2. 语气更亲切自然，可适当加入语气词\n3. 减少书面化表达\n\n字幕内容如下：\n' },
+  { key:'emotional', label:'更有情绪感',         text:'请把以下字幕改得更有情绪感和故事感，要求：\n1. 加入更多情感描写和细节\n2. 让听众有代入感\n3. 语气生动，不平铺直叙\n\n字幕内容如下：\n' },
+  { key:'voiceover', label:'适合配音稿',         text:'请根据以下字幕生成适合文字转语音（TTS）的配音稿，要求：\n1. 语句流畅，适合朗读\n2. 避免特殊符号，每句控制在 15–20 字以内\n3. 适合标准普通话朗读\n\n字幕内容如下：\n' },
+  { key:'smooth',    label:'更顺口保持原意',     text:'请把以下字幕在不改变原意的前提下，改得更加顺口流畅，要求：\n1. 不改变核心信息\n2. 读起来更顺，没有别扭的停顿\n3. 每句控制在合理长度\n\n字幕内容如下：\n' },
 ]
 
 const COPY_TASKS = [
@@ -114,12 +117,33 @@ const COPY_TASKS = [
   { key:'finalXhs',            label:'我的小红书正文',   placeholder:'粘贴 AI 改写好的小红书正文...' },
 ]
 
-// Prompts live on REFERENCE tasks (user pastes reference → copies prompt+ref+script to AI)
-// Final tasks have no prompt (user just pastes AI result and saves)
+// Prompts live on REFERENCE tasks (arrays for multiple variants).
+// Final tasks have null (user just pastes AI result and saves).
 const COPY_PROMPT_MAP = {
-  referenceTitle: '请参考【对标标题】的表达方式、情绪、卖点和吸引力，结合【我的视频字幕/口播稿】，为我的视频生成 5 个适合短视频平台的标题。\n\n要求：\n1. 不要照抄对标标题\n2. 保留对标标题的吸引力和结构\n3. 标题要自然、有点击欲\n4. 适合中文短视频/图文内容\n5. 每个标题不超过 30 字\n\n【对标标题】\n',
-  referenceWechatBody: '请参考【对标公众号正文】的结构、叙述顺序、情绪和表达风格，结合【我的视频字幕/口播稿】，为我的内容改写一篇公众号正文。\n\n要求：\n1. 不要照抄对标正文\n2. 保留对标正文的叙事结构和情绪推进\n3. 内容要替换成我的视频内容\n4. 语言自然，适合公众号正文\n5. 可以适当补充生活化背景，但不要编造离谱信息\n\n【对标公众号正文】\n',
-  referenceXhs: '请参考【对标小红书正文】的开头钩子、情绪、卖点和表达节奏，结合【我的视频字幕/口播稿】，为我的内容改写一篇小红书正文。\n\n要求：\n1. 不要照抄对标正文\n2. 更生活化、更有分享感\n3. 开头要有吸引力\n4. 适合小红书发布\n5. 可以加入适当 emoji，但不要太多\n\n【对标小红书正文】\n',
+  referenceTitle: [
+    { key:'short_video', label:'短视频标题', text:'请参考【对标标题】的表达方式、情绪、卖点和吸引力，结合【我的视频字幕/口播稿】，为我的视频生成 5 个适合短视频平台的标题。\n\n要求：\n1. 不要照抄对标标题\n2. 保留对标标题的吸引力和结构\n3. 标题要自然、有点击欲\n4. 适合中文短视频/图文内容\n5. 每个标题不超过 30 字\n\n【对标标题】\n' },
+    { key:'xhs_title',   label:'小红书标题', text:'请参考【对标标题】，结合【我的视频字幕/口播稿】，为我的内容生成 5 个适合小红书的标题。\n\n要求：\n1. 小红书风格，可以活泼亲切\n2. 加入关键词，方便被搜索\n3. 可以加 emoji，但不超过 2 个\n4. 每个标题不超过 25 字\n\n【对标标题】\n' },
+    { key:'wechat_title',label:'公众号标题', text:'请参考【对标标题】，结合【我的视频字幕/口播稿】，为我的内容生成 5 个适合公众号的推文标题。\n\n要求：\n1. 公众号风格，可以有一些悬念感\n2. 引发读者点击欲望\n3. 适合图文推文格式\n4. 每个标题不超过 25 字\n\n【对标标题】\n' },
+    { key:'clickbait',   label:'更有点击欲', text:'请参考【对标标题】，结合【我的视频字幕/口播稿】，生成 5 个点击欲极强的标题。\n\n要求：\n1. 用问题、数字、对比等方式增强点击欲\n2. 不要夸张虚假，要真实可信\n3. 保留对标标题的情绪结构\n\n【对标标题】\n' },
+    { key:'life',        label:'生活化不夸张',text:'请参考【对标标题】，结合【我的视频字幕/口播稿】，生成 5 个生活化、不夸张的标题。\n\n要求：\n1. 真实亲切，像朋友推荐\n2. 不用夸大词、不用"绝""最"等\n3. 贴近生活场景\n\n【对标标题】\n' },
+    { key:'food_tut',    label:'美食/教程类',  text:'请参考【对标标题】，结合【我的视频字幕/口播稿】，生成 5 个适合美食或教程类内容的标题。\n\n要求：\n1. 突出"学会"或"能做"的获得感\n2. 简洁直接，易于搜索\n3. 适合美食或技巧教程类内容\n\n【对标标题】\n' },
+  ],
+  referenceWechatBody: [
+    { key:'standard',    label:'参考对标生成', text:'请参考【对标公众号正文】的结构、叙述顺序、情绪和表达风格，结合【我的视频字幕/口播稿】，为我的内容改写一篇公众号正文。\n\n要求：\n1. 不要照抄对标正文\n2. 保留对标正文的叙事结构和情绪推进\n3. 内容要替换成我的视频内容\n4. 语言自然，适合公众号正文\n5. 可以适当补充生活化背景，但不要编造离谱信息\n\n【对标公众号正文】\n' },
+    { key:'structure',   label:'保留结构替换', text:'请保留【对标公众号正文】的段落结构和各段功能（开头钩子、中间推进、结尾呼吁），把内容替换成【我的视频字幕/口播稿】的内容。\n\n要求：\n1. 段落结构和数量基本一致\n2. 用我的内容替换每段的具体信息\n3. 不要照抄原文表达\n\n【对标公众号正文】\n' },
+    { key:'story',       label:'故事感更强',   text:'请参考【对标公众号正文】的风格，结合【我的视频字幕/口播稿】，写一篇故事感更强的公众号正文。\n\n要求：\n1. 用叙事手法，有起承转合\n2. 加入细节和场景描写\n3. 让读者有代入感\n4. 适合公众号正文\n\n【对标公众号正文】\n' },
+    { key:'tutorial',    label:'教程型正文',   text:'请参考【对标公众号正文】的风格，结合【我的视频字幕/口播稿】，写一篇教程型公众号正文。\n\n要求：\n1. 有清晰的步骤或要点\n2. 语言简洁，方便读者操作\n3. 可以加粗关键步骤\n4. 结尾有互动或行动号召\n\n【对标公众号正文】\n' },
+    { key:'life_share',  label:'生活分享型',   text:'请参考【对标公众号正文】，结合【我的视频字幕/口播稿】，写一篇生活分享型公众号正文。\n\n要求：\n1. 语气温暖亲切\n2. 像真人真实分享，不像广告\n3. 有生活感和细节\n4. 适合生活类内容\n\n【对标公众号正文】\n' },
+    { key:'natural_pov', label:'更真实真人感', text:'请参考【对标公众号正文】，结合【我的视频字幕/口播稿】，写一篇更像真人分享的公众号正文。\n\n要求：\n1. 第一人称视角，真实感强\n2. 语言自然，不刻意\n3. 可以加入自己的感受和思考\n4. 不要像企业宣传\n\n【对标公众号正文】\n' },
+  ],
+  referenceXhs: [
+    { key:'standard',    label:'参考对标生成', text:'请参考【对标小红书正文】的开头钩子、情绪、卖点和表达节奏，结合【我的视频字幕/口播稿】，为我的内容改写一篇小红书正文。\n\n要求：\n1. 不要照抄对标正文\n2. 更生活化、更有分享感\n3. 开头要有吸引力\n4. 适合小红书发布\n5. 可以加入适当 emoji，但不要太多\n\n【对标小红书正文】\n' },
+    { key:'grass',       label:'更种草生活化', text:'请参考【对标小红书正文】，结合【我的视频字幕/口播稿】，改写一篇更有种草感和生活化的小红书正文。\n\n要求：\n1. 读起来像朋友在推荐\n2. 有真实体验感，不像广告\n3. 多用生活化词汇\n4. 加入合适 emoji\n\n【对标小红书正文】\n' },
+    { key:'food_tut',    label:'美食教程版',   text:'请参考【对标小红书正文】，结合【我的视频字幕/口播稿】，写一篇适合美食或教程类的小红书正文。\n\n要求：\n1. 开头说明做什么\n2. 步骤清晰，便于跟做\n3. 结尾有互动问题或评论引导\n4. 加入合适 emoji\n\n【对标小红书正文】\n' },
+    { key:'hook',        label:'开头更抓人',   text:'请参考【对标小红书正文】，结合【我的视频字幕/口播稿】，写一篇开头极其抓人的小红书正文。\n\n要求：\n1. 第一句必须让人想继续看\n2. 可以用问题、反差、悬念开头\n3. 后面自然展开内容\n4. 加入合适 emoji\n\n【对标小红书正文】\n' },
+    { key:'short',       label:'简短口语版',   text:'请参考【对标小红书正文】，结合【我的视频字幕/口播稿】，写一篇简短口语化的小红书正文。\n\n要求：\n1. 200 字以内\n2. 口语化，读起来像说话\n3. 抓住一个核心卖点\n4. 结尾加 1–2 个 hashtag\n\n【对标小红书正文】\n' },
+    { key:'family',      label:'家庭日常分享', text:'请参考【对标小红书正文】，结合【我的视频字幕/口播稿】，写一篇适合宝妈或家庭日常分享的小红书正文。\n\n要求：\n1. 温暖亲切，贴近家庭日常\n2. 强调实用性和性价比\n3. 语气像在群里分享心得\n4. 加入合适 emoji\n\n【对标小红书正文】\n' },
+  ],
   finalTitle: null,
   finalWechatBody: null,
   finalXhs: null,
@@ -975,8 +999,9 @@ export default function App() {
   // ── step-2 refined compositions (v0.7.1) ──
   // {compId: {summaryScript, scriptModified, copyTitle, copyBody, copyModified, editActions}}
   const [refinedComps, setRefinedComps]         = useState({})
-  const [refineSubPromptKey, setRefineSubPromptKey] = useState(null)
+  const [refineSubPromptKey, setRefineSubPromptKey] = useState(SUBTITLE_PROMPTS[0].key)
   const [refineCopyTask, setRefineCopyTask]     = useState('referenceTitle')
+  const [refineCopyVariantKey, setRefineCopyVariantKey] = useState(null)
 
   // ── step-2 refine (v0.7) ──
   const [refineCompId, setRefineCompId]         = useState(null)
@@ -2632,7 +2657,7 @@ export default function App() {
                     <div key={seg.id+'_'+si}
                       className={`comp-seg-blk${isSelected?' editing':''}${isLocked?' locked':''}`}
                       style={{width:w,background:stc+'cc',borderTop:`3px solid ${stc}`}}
-                      title={`${seg.label} · ${seg.type} · V${seg.videoIndex+1}\n${seg.startStr}–${seg.endStr} · ${fmt(dur)}`}
+                      title={`${seg.label} · ${seg.type} · V${seg.videoIndex+1}\n${seg.startStr}–${seg.endStr} · ${fmt(dur)}${seg.subtitle?'\n字幕：'+seg.subtitle:''}`}
                       onClick={e=>{
                         e.stopPropagation()
                         stopCompPlay()
@@ -2644,10 +2669,9 @@ export default function App() {
                         })()}))
                       }}>
                       <div className="comp-seg-info-col">
-                        <span className="comp-seg-inline">{seg.label}</span>
-                        <span className="comp-seg-inline-sub"><span style={{color:stc+'ff'}}>{seg.type}</span> · V{seg.videoIndex+1}</span>
-                        <span className="comp-seg-inline-time">{seg.startStr}–{seg.endStr} · {fmt(dur)}</span>
-                        {seg.subtitle&&<span className="comp-seg-inline-sub-text">{seg.subtitle.slice(0,18)}{seg.subtitle.length>18?'…':''}</span>}
+                        <span className="comp-seg-inline">{seg.label} · V{seg.videoIndex+1}</span>
+                        <span className="comp-seg-inline-sub" style={{color:stc+'ff'}}>{seg.type}</span>
+                        <span className="comp-seg-inline-time">{seg.startStr}–{seg.endStr}</span>
                       </div>
                       <div className="comp-seg-move-btns" onClick={e=>e.stopPropagation()}>
                         {si>0&&<button className="comp-seg-mv" title="前移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,-1)}}>←</button>}
@@ -2695,7 +2719,11 @@ export default function App() {
             const scriptText=rc.summaryScript
             const copyTask=COPY_TASKS.find(t=>t.key===refineCopyTask)||COPY_TASKS[0]
             const copyText=(rc.copywriting||{})[refineCopyTask]||''
-            const copyPrompt=COPY_PROMPT_MAP[refineCopyTask]
+            const copyPromptArr=COPY_PROMPT_MAP[refineCopyTask]  // array or null
+            // for reference tasks: pick selected variant (default first)
+            const copyPromptVariants=Array.isArray(copyPromptArr)?copyPromptArr:null
+            const selVariantKey=refineCopyVariantKey||(copyPromptVariants?copyPromptVariants[0].key:null)
+            const copyPrompt=copyPromptVariants?copyPromptVariants.find(v=>v.key===selVariantKey)||copyPromptVariants[0]:null
             const isDeleted=si=>deletedSegIdxs.includes(si)
             const getSpeed=si=>speedMap[si]??1
             const deletedCount=deletedSegIdxs.length
@@ -2895,22 +2923,16 @@ export default function App() {
                         </div>
                         <div className="refine-prompt-section">
                           <div className="refine-prompt-head">字幕改写提示词 <span className="refine-prompt-hint">（复制后到 DeepSeek/豆包 改写，结果粘回上方）</span></div>
-                          <div className="refine-prompt-tabs">
-                            {SUBTITLE_PROMPTS.map(p=>(
-                              <button key={p.key}
-                                className={`refine-prompt-tab${refineSubPromptKey===p.key?' active':''}`}
-                                onClick={()=>setRefineSubPromptKey(refineSubPromptKey===p.key?null:p.key)}>
-                                {p.label}
-                              </button>
-                            ))}
-                          </div>
+                          <select className="refine-copy-task-select" value={refineSubPromptKey||''} onChange={e=>setRefineSubPromptKey(e.target.value)}>
+                            {SUBTITLE_PROMPTS.map(p=>(<option key={p.key} value={p.key}>{p.label}</option>))}
+                          </select>
                           {selSubPrompt&&(
                             <div className="refine-prompt-preview">
-                              <div className="refine-prompt-text">{selSubPrompt.text}<span className="refine-prompt-placeholder">[在此处粘贴字幕]</span></div>
+                              <div className="refine-prompt-text">{selSubPrompt.text}<span className="refine-prompt-placeholder">（字幕稿自动插入）</span></div>
                               <button className="refine-tb-btn primary" style={{marginTop:5}} onClick={()=>{
                                 const full=selSubPrompt.text+(scriptText||'[请先生成汇总稿]')
-                                navigator.clipboard.writeText(full).then(()=>showToast('提示词已复制'))
-                              }}>复制提示词+字幕</button>
+                                navigator.clipboard.writeText(full).then(()=>showToast('提示词+字幕稿 已复制'))
+                              }}>复制提示词+字幕稿</button>
                             </div>
                           )}
                         </div>
@@ -2924,7 +2946,7 @@ export default function App() {
                         </div>
                         <select className="refine-copy-task-select"
                           value={refineCopyTask}
-                          onChange={e=>setRefineCopyTask(e.target.value)}>
+                          onChange={e=>{setRefineCopyTask(e.target.value);setRefineCopyVariantKey(null)}}>
                           {COPY_TASKS.map(t=>(
                             <option key={t.key} value={t.key}>{t.label}</option>
                           ))}
@@ -2944,18 +2966,23 @@ export default function App() {
                           }} disabled={!copyText}>复制内容</button>
                           <button className="refine-tb-btn success" onClick={()=>saveCopywriting(comp.id)} disabled={!rc.copyModified}>保存文案</button>
                         </div>
-                        {copyPrompt&&(
+                        {copyPromptVariants&&(
                           <div className="refine-prompt-section">
-                            <div className="refine-prompt-head">改写提示词 <span className="refine-prompt-hint">（点击复制→粘贴到 DeepSeek/豆包→把结果粘到对应"我的"任务）</span></div>
-                            <div className="refine-prompt-preview">
-                              <div className="refine-prompt-text">{copyPrompt}<span className="refine-prompt-placeholder">（对标内容自动插入）</span><br/><span style={{opacity:.6}}>【我的视频字幕/口播稿】<br/>（字幕稿自动插入）</span></div>
-                              <button className="refine-tb-btn primary" style={{marginTop:5}} onClick={()=>{
-                                const refContent=copyText||'（尚未填写对标内容）'
-                                const script=scriptText||'（尚未生成字幕稿）'
-                                const full=copyPrompt+refContent+'\n\n【我的视频字幕/口播稿】\n'+script
-                                navigator.clipboard.writeText(full).then(()=>showToast('提示词+对标内容+字幕 已复制'))
-                              }}>复制（提示词 + 对标内容 + 我的字幕）</button>
-                            </div>
+                            <div className="refine-prompt-head">改写提示词 <span className="refine-prompt-hint">（复制→DeepSeek/豆包→结果粘到"我的"任务）</span></div>
+                            <select className="refine-copy-task-select" value={selVariantKey||''} onChange={e=>setRefineCopyVariantKey(e.target.value)}>
+                              {copyPromptVariants.map(v=>(<option key={v.key} value={v.key}>{v.label}</option>))}
+                            </select>
+                            {copyPrompt&&(
+                              <div className="refine-prompt-preview">
+                                <div className="refine-prompt-text" style={{fontSize:10}}>{copyPrompt.text.slice(0,80)}…<span className="refine-prompt-placeholder">（对标内容+字幕稿自动插入）</span></div>
+                                <button className="refine-tb-btn primary" style={{marginTop:5}} onClick={()=>{
+                                  const refContent=copyText||'（尚未填写对标内容）'
+                                  const script=scriptText||'（尚未生成字幕稿）'
+                                  const full=copyPrompt.text+refContent+'\n\n【我的视频字幕/口播稿】\n'+script
+                                  navigator.clipboard.writeText(full).then(()=>showToast('提示词+对标内容+字幕 已复制'))
+                                }}>复制（提示词 + 对标 + 我的字幕）</button>
+                              </div>
+                            )}
                           </div>
                         )}
                         {!copyPrompt&&(
