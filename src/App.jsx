@@ -114,13 +114,15 @@ const COPY_TASKS = [
   { key:'finalXhs',            label:'我的小红书正文',   placeholder:'粘贴 AI 改写好的小红书正文...' },
 ]
 
+// Prompts live on REFERENCE tasks (user pastes reference → copies prompt+ref+script to AI)
+// Final tasks have no prompt (user just pastes AI result and saves)
 const COPY_PROMPT_MAP = {
-  finalTitle: '请参考下方【对标标题】，结合【我的字幕】，生成 5 个适合短视频平台的标题，要求：\n1. 有吸引力，能引发点击\n2. 15 字以内，不夸张不虚假\n3. 保留对标标题的情绪和结构，但替换成我的内容\n\n【对标标题】\n（请在此处粘贴对标标题）\n\n【我的字幕】\n',
-  finalWechatBody: '请参考下方【对标公众号正文】的结构和风格，结合【我的字幕】，生成一篇公众号文章，要求：\n1. 保留对标文章的情绪和卖点，但替换成我的视频内容，不要照抄\n2. 有标题、导语、正文、结尾\n3. 500–800 字，适合图文排版\n\n【对标公众号正文】\n（请在此处粘贴对标正文）\n\n【我的字幕】\n',
-  finalXhs: '请参考下方【对标小红书正文】的风格，结合【我的字幕】，生成一篇小红书笔记，要求：\n1. 保留对标文案的情绪和卖点，但替换成我的内容，不要照抄\n2. 语气活泼，适合小红书\n3. 多用分段，加入合适 emoji\n4. 结尾加话题标签建议（3–5 个）\n\n【对标小红书正文】\n（请在此处粘贴对标正文）\n\n【我的字幕】\n',
-  referenceTitle: null,
-  referenceWechatBody: null,
-  referenceXhs: null,
+  referenceTitle: '请参考【对标标题】的表达方式、情绪、卖点和吸引力，结合【我的视频字幕/口播稿】，为我的视频生成 5 个适合短视频平台的标题。\n\n要求：\n1. 不要照抄对标标题\n2. 保留对标标题的吸引力和结构\n3. 标题要自然、有点击欲\n4. 适合中文短视频/图文内容\n5. 每个标题不超过 30 字\n\n【对标标题】\n',
+  referenceWechatBody: '请参考【对标公众号正文】的结构、叙述顺序、情绪和表达风格，结合【我的视频字幕/口播稿】，为我的内容改写一篇公众号正文。\n\n要求：\n1. 不要照抄对标正文\n2. 保留对标正文的叙事结构和情绪推进\n3. 内容要替换成我的视频内容\n4. 语言自然，适合公众号正文\n5. 可以适当补充生活化背景，但不要编造离谱信息\n\n【对标公众号正文】\n',
+  referenceXhs: '请参考【对标小红书正文】的开头钩子、情绪、卖点和表达节奏，结合【我的视频字幕/口播稿】，为我的内容改写一篇小红书正文。\n\n要求：\n1. 不要照抄对标正文\n2. 更生活化、更有分享感\n3. 开头要有吸引力\n4. 适合小红书发布\n5. 可以加入适当 emoji，但不要太多\n\n【对标小红书正文】\n',
+  finalTitle: null,
+  finalWechatBody: null,
+  finalXhs: null,
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -2641,7 +2643,12 @@ export default function App() {
                           let acc=0; for(let i=0;i<si;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec; return acc
                         })()}))
                       }}>
-                      <span className="comp-seg-inline">{seg.label} · V{seg.videoIndex+1} · {fmt(dur)}</span>
+                      <div className="comp-seg-info-col">
+                        <span className="comp-seg-inline">{seg.label}</span>
+                        <span className="comp-seg-inline-sub"><span style={{color:stc+'ff'}}>{seg.type}</span> · V{seg.videoIndex+1}</span>
+                        <span className="comp-seg-inline-time">{seg.startStr}–{seg.endStr} · {fmt(dur)}</span>
+                        {seg.subtitle&&<span className="comp-seg-inline-sub-text">{seg.subtitle.slice(0,18)}{seg.subtitle.length>18?'…':''}</span>}
+                      </div>
                       <div className="comp-seg-move-btns" onClick={e=>e.stopPropagation()}>
                         {si>0&&<button className="comp-seg-mv" title="前移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,-1)}}>←</button>}
                         {si<comp.segments.length-1&&<button className="comp-seg-mv" title="后移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,+1)}}>→</button>}
@@ -2939,20 +2946,22 @@ export default function App() {
                         </div>
                         {copyPrompt&&(
                           <div className="refine-prompt-section">
-                            <div className="refine-prompt-head">对标改写提示词 <span className="refine-prompt-hint">（复制→去 DeepSeek/豆包→粘结果到对应"我的"任务）</span></div>
+                            <div className="refine-prompt-head">改写提示词 <span className="refine-prompt-hint">（点击复制→粘贴到 DeepSeek/豆包→把结果粘到对应"我的"任务）</span></div>
                             <div className="refine-prompt-preview">
-                              <div className="refine-prompt-text">{copyPrompt}<span className="refine-prompt-placeholder">[在此处粘贴字幕]</span></div>
+                              <div className="refine-prompt-text">{copyPrompt}<span className="refine-prompt-placeholder">（对标内容自动插入）</span><br/><span style={{opacity:.6}}>【我的视频字幕/口播稿】<br/>（字幕稿自动插入）</span></div>
                               <button className="refine-tb-btn primary" style={{marginTop:5}} onClick={()=>{
-                                const full=copyPrompt+(scriptText||'[请先生成汇总稿]')
-                                navigator.clipboard.writeText(full).then(()=>showToast('提示词已复制'))
-                              }}>复制提示词+字幕</button>
+                                const refContent=copyText||'（尚未填写对标内容）'
+                                const script=scriptText||'（尚未生成字幕稿）'
+                                const full=copyPrompt+refContent+'\n\n【我的视频字幕/口播稿】\n'+script
+                                navigator.clipboard.writeText(full).then(()=>showToast('提示词+对标内容+字幕 已复制'))
+                              }}>复制（提示词 + 对标内容 + 我的字幕）</button>
                             </div>
                           </div>
                         )}
                         {!copyPrompt&&(
                           <div className="refine-copy-ref-hint">
                             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                            粘贴对标内容后，切换到对应的"我的"任务，复制提示词，去 DeepSeek/豆包 改写，粘贴结果回来保存。
+                            这里粘贴 AI 改写好的最终内容并保存。如需改写，先在"对标"任务中粘贴参考内容，然后复制提示词发给 AI。
                           </div>
                         )}
                         <div className="refine-voice-section">
@@ -3469,7 +3478,7 @@ export default function App() {
                                   </span>
                                 )}
                                 {sub.corrected&&<span className="s2-sub-corrected-mark" title="已人工校对">✎</span>}
-                                {!isEditing&&editorAnalysis?.subtitleSource==='real'&&(
+                                {!isEditing&&(
                                   <button
                                     className="s2-sub-edit-btn"
                                     onClick={e=>{ e.stopPropagation(); setEditingSubId(sub.id); setEditingSubText(sub.text) }}
