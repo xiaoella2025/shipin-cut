@@ -3386,15 +3386,9 @@ export default function App() {
                           const stc=SEG_TYPE_COLORS[ds.seg.type]||'#6366f1'
                           return (
                             <div key={hasEditSegs?ds.esId:ds.segIdx}
-                              className={`refine-tl-seg${isActive?' active':''}${hasEditSegs?' editable':''}`}
+                              className={`refine-tl-seg${isActive?' active':''}`}
                               style={{width:w,background:stc+(isActive?'ee':'88'),borderTop:`3px solid ${stc}`}}>
-                              {hasEditSegs&&!refineTrimState&&(
-                                <div className="refine-tl-trim-l" onMouseDown={e=>startTrimDrag(e,'head',ds)} title="拖动裁剪头部"/>
-                              )}
                               <span className="refine-tl-seg-lbl">{ds.seg.label}{ds.speed!==1?` ×${ds.speed}`:''}</span>
-                              {hasEditSegs&&!refineTrimState&&(
-                                <div className="refine-tl-trim-r" onMouseDown={e=>startTrimDrag(e,'tail',ds)} title="拖动裁剪尾部"/>
-                              )}
                             </div>
                           )
                         })}
@@ -3462,6 +3456,7 @@ export default function App() {
                                   <span className="refine-cut-title">✂ 精剪操作</span>
                                   <span className="refine-cut-hint">{cannotCutReason&&!canCut?cannotCutReason:''}</span>
                                 </div>
+                                <div className="refine-cut-flow-hint">推荐操作：拖动播放头找位置 → 切一刀 → 再切一刀 → 选中中间多余小段 → 删除</div>
                                 <div className="refine-cut-btns">
                                   <button className="refine-cut-btn primary" disabled={!canCut}
                                     title={canCut?'在当前播放位置切分片段':cannotCutReason}
@@ -3532,6 +3527,7 @@ export default function App() {
                                 <span className="refine-cut-title">✂ 精剪操作</span>
                                 <span className="refine-cut-hint">{cannotCutReason&&!canCut?cannotCutReason:''}</span>
                               </div>
+                              <div className="refine-cut-flow-hint">推荐操作：拖动播放头找位置 → 切一刀 → 再切一刀 → 选中中间多余小段 → 删除</div>
                               <div className="refine-cut-btns">
                                 <button className="refine-cut-btn primary" disabled={!canCut}
                                   title={canCut?'在当前播放位置切分片段（进入精剪模式）':cannotCutReason}
