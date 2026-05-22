@@ -336,6 +336,39 @@ function buildCompSubtitles(comp, videoAnalysis, uploadedVideos) {
   return result
 }
 
+// v0.7.4-hotfix: subtitles based on editSegs (respects cut/delete/speed)
+function buildCompSubtitlesFromEditSegs(editSegs, videoAnalysis, uploadedVideos) {
+  if (!editSegs || !editSegs.length) return []
+  const result = []
+  let acc = 0
+  editSegs.forEach((es) => {
+    if (es.deleted) return
+    const rawDur = Math.max(0, es.endSec - es.startSec)
+    const spd = es.speed ?? 1
+    const actualDur = rawDur / Math.max(0.1, spd)
+    const vid = uploadedVideos[es.videoIndex]
+    const ana = videoAnalysis?.[vid?.id]
+    if (ana?.subtitles?.length) {
+      ana.subtitles
+        .filter(s => s.startSec < es.endSec && s.endSec > es.startSec)
+        .forEach((s, oi) => {
+          const clipStart = Math.max(s.startSec, es.startSec)
+          const clipEnd   = Math.min(s.endSec,   es.endSec)
+          result.push({
+            id: `${es.id}-csub-${oi}`,
+            text: s.text,
+            compStart: +(acc + (clipStart - es.startSec) / spd).toFixed(2),
+            compEnd:   +(acc + (clipEnd   - es.startSec) / spd).toFixed(2),
+            segIdx: es.origSegIdx,
+            esId: es.id,
+          })
+        })
+    }
+    acc += actualDur
+  })
+  return result
+}
+
 // Build a single summary script string from comp subtitles (one paragraph per segment)
 function buildSummaryScript(comp, videoAnalysis, uploadedVideos) {
   const subs = buildCompSubtitles(comp, videoAnalysis, uploadedVideos)
@@ -1920,8 +1953,8 @@ export default function App() {
       deletedSegIdxs:[], speedMap:{},
       voice:null, // {name, url, duration}
       audioPolicy:{ muteOriginalVideo:false },
-      editSegs:null,      // null = use deletedSegIdxs mode; array = cut/edit mode (v0.7.4)
-      editSegsUndo:null,  // previous editSegs for single-step undo
+      editSegs:null,            // null = use deletedSegIdxs mode; array = cut/edit mode (v0.7.4)
+      editSegsUndoStack:[],     // stack of prior editSegs snapshots for multi-step undo (v0.7.4-hotfix)
       savedAt:null,
       ...(existing||{}),
     }
@@ -2005,6 +2038,12 @@ export default function App() {
     }))
   }
 
+  // v0.7.4-hotfix: push current editSegs (deep-cloned snapshot) onto undo stack
+  function pushEditSegsUndoSnapshot(rc) {
+    const snap = rc.editSegs ? rc.editSegs.map(s => ({ ...s })) : null
+    return [...(rc.editSegsUndoStack || []), snap]
+  }
+
   function cutAtPos(compId, comp) {
     const rc = defaultRcFor(refinedComps[compId])
     const currentEditSegs = rc.editSegs || initEditSegsFromComp(comp, rc)
@@ -2025,8 +2064,11 @@ export default function App() {
     const partB = { ...orig, id:`es-${ts}-b-${Math.random().toString(36).slice(2,5)}`, startSec: cutSrcTime }
     const newEditSegs = [...currentEditSegs]
     newEditSegs.splice(origIdx, 1, partA, partB)
-    const saveUndo = rc.editSegs   // null means "first cut, undo returns to no-editSegs state"
-    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), editSegs: newEditSegs, editSegsUndo: saveUndo } }))
+    stopRefinePlay()
+    setRefinedComps(prev => {
+      const rcP = defaultRcFor(prev[compId])
+      return { ...prev, [compId]: { ...rcP, editSegs: newEditSegs, editSegsUndoStack: pushEditSegsUndoSnapshot(rcP) } }
+    })
     setRefineSelEsId(partA.id)
     showToast('✂ 已切分')
   }
@@ -2035,7 +2077,11 @@ export default function App() {
     const rc = defaultRcFor(refinedComps[compId])
     if (!rc.editSegs) return
     const newEditSegs = rc.editSegs.map(s => s.id === esId ? { ...s, deleted: true } : s)
-    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), editSegs: newEditSegs, editSegsUndo: rc.editSegs } }))
+    stopRefinePlay()
+    setRefinedComps(prev => {
+      const rcP = defaultRcFor(prev[compId])
+      return { ...prev, [compId]: { ...rcP, editSegs: newEditSegs, editSegsUndoStack: pushEditSegsUndoSnapshot(rcP) } }
+    })
     showToast('已删除该小段')
   }
 
@@ -2043,18 +2089,29 @@ export default function App() {
     const rc = defaultRcFor(refinedComps[compId])
     if (!rc.editSegs) return
     const newEditSegs = rc.editSegs.map(s => s.id === esId ? { ...s, deleted: false } : s)
-    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), editSegs: newEditSegs, editSegsUndo: rc.editSegs } }))
+    stopRefinePlay()
+    setRefinedComps(prev => {
+      const rcP = defaultRcFor(prev[compId])
+      return { ...prev, [compId]: { ...rcP, editSegs: newEditSegs, editSegsUndoStack: pushEditSegsUndoSnapshot(rcP) } }
+    })
     showToast('已恢复该小段')
   }
 
   function undoEditSegs(compId) {
-    const rc = defaultRcFor(refinedComps[compId])
-    if (rc.editSegsUndo === undefined || (rc.editSegsUndo === null && !rc.editSegs)) {
-      showToast('没有可撤销的操作'); return
-    }
-    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), editSegs: rc.editSegsUndo, editSegsUndo: null } }))
+    let didUndo = false
+    stopRefinePlay()
+    setRefinedComps(prev => {
+      const rcP = defaultRcFor(prev[compId])
+      const stack = rcP.editSegsUndoStack || []
+      if (stack.length === 0) return prev
+      const newStack = stack.slice(0, -1)
+      const last = stack[stack.length - 1]   // restore previous snapshot
+      didUndo = true
+      return { ...prev, [compId]: { ...rcP, editSegs: last, editSegsUndoStack: newStack } }
+    })
     setRefineSelEsId(null)
-    showToast('已撤销')
+    if (didUndo) showToast('已撤销一步')
+    else showToast('没有可撤销的操作')
   }
 
   function saveCompUndo() {
@@ -2857,7 +2914,10 @@ export default function App() {
             const {segments:derivedSegs,totalDuration:derivedDur}=hasEditSegs
               ?buildEditTimeline(rc.editSegs)
               :buildDerivedTimeline(comp,deletedSegIdxs,speedMap)
-            const compSubs=buildCompSubtitles(comp,videoAnalysis,uploadedVideos)
+            // v0.7.4-hotfix: in editSegs mode, subtitles follow editSegs timeline
+            const compSubs=hasEditSegs
+              ?buildCompSubtitlesFromEditSegs(rc.editSegs,videoAnalysis,uploadedVideos)
+              :buildCompSubtitles(comp,videoAnalysis,uploadedVideos)
             // current segment resolution
             const curDerivedEntry=derivedSegs.find(ds=>refinePrevPos>=ds.compStart&&refinePrevPos<ds.compEnd)||derivedSegs[0]
             // editSegs mode: track by esId; original mode: track by segIdx
@@ -2874,7 +2934,7 @@ export default function App() {
               if(cutSrc-cutEntry.seg.startSec<MIN_CUT_GAP||cutEntry.seg.endSec-cutSrc<MIN_CUT_GAP){canCut=false;cannotCutReason='太接近片段边界'}
             } else { cannotCutReason='播放头不在片段内' }
             const editDeletedCount=hasEditSegs?(rc.editSegs||[]).filter(s=>s.deleted).length:0
-            const canUndoEdit=hasEditSegs&&(rc.editSegsUndo!==undefined&&!(rc.editSegsUndo===null&&!rc.editSegs))
+            const canUndoEdit=(rc.editSegsUndoStack||[]).length>0
             const playheadPct=derivedDur>0?Math.min(100,(refinePrevPos/derivedDur)*100):0
             const curSubIdx=compSubs.findIndex(s=>refinePrevPos>=s.compStart&&refinePrevPos<s.compEnd)
             const scriptText=rc.summaryScript
@@ -3216,21 +3276,32 @@ export default function App() {
                         onMouseDown={e=>{
                           e.stopPropagation()
                           stopRefinePlay()
-                          const rect=e.currentTarget.getBoundingClientRect()
-                          const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width))
-                          const derivedPos=ratio*derivedDur
-                          setRefinePrevPos(derivedPos)
-                          // find which derived seg
-                          const ds=derivedSegs.find(s=>derivedPos>=s.compStart&&derivedPos<s.compEnd)||derivedSegs[derivedSegs.length-1]
-                          if(ds){
-                            if(hasEditSegs) setRefineSelEsId(ds.esId)
-                            else setRefineSelSeg(ds.segIdx)
-                            const offsetInSeg=(derivedPos-ds.compStart)*ds.speed
-                            const seekT=ds.seg.startSec+Math.min(offsetInSeg,ds.seg.endSec-ds.seg.startSec-0.01)
-                            refinePrevSeekRef.current=seekT
-                            const vid=refinePrevRef.current
-                            if(vid&&vid.readyState>=2) vid.currentTime=seekT
+                          const tlEl=e.currentTarget
+                          // v0.7.4-hotfix: support click + drag on the playhead/timeline
+                          const updateFromClientX=(clientX)=>{
+                            const rect=tlEl.getBoundingClientRect()
+                            const ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width))
+                            const derivedPos=ratio*derivedDur
+                            setRefinePrevPos(derivedPos)
+                            const ds=derivedSegs.find(s=>derivedPos>=s.compStart&&derivedPos<s.compEnd)||derivedSegs[derivedSegs.length-1]
+                            if(ds){
+                              if(hasEditSegs) setRefineSelEsId(ds.esId)
+                              else setRefineSelSeg(ds.segIdx)
+                              const offsetInSeg=(derivedPos-ds.compStart)*ds.speed
+                              const seekT=ds.seg.startSec+Math.min(Math.max(0,offsetInSeg),ds.seg.endSec-ds.seg.startSec-0.01)
+                              refinePrevSeekRef.current=seekT
+                              const vid=refinePrevRef.current
+                              if(vid&&vid.readyState>=2) vid.currentTime=seekT
+                            }
                           }
+                          updateFromClientX(e.clientX)
+                          const onMove=ev=>{ ev.preventDefault(); updateFromClientX(ev.clientX) }
+                          const onUp=()=>{
+                            document.removeEventListener('mousemove',onMove)
+                            document.removeEventListener('mouseup',onUp)
+                          }
+                          document.addEventListener('mousemove',onMove)
+                          document.addEventListener('mouseup',onUp)
                         }}>
                         {derivedSegs.map((ds)=>{
                           const w=`${derivedDur>0?(ds.actualDur/derivedDur)*100:0}%`
@@ -3474,13 +3545,15 @@ export default function App() {
                             className={`refine-sub-row${isCur?' active':''}`}
                             onClick={()=>{
                               stopRefinePlay()
-                              // find in derived timeline
-                              const ds2=derivedSegs.find(ds=>ds.segIdx===sub.segIdx)
+                              // v0.7.4-hotfix: jump to subtitle's actual compStart, not segment start
+                              const cs=sub.compStart
+                              setRefinePrevPos(cs)
+                              const ds2=derivedSegs.find(ds=>cs>=ds.compStart&&cs<ds.compEnd)||derivedSegs[derivedSegs.length-1]
                               if(ds2){
-                                const posInDerived=ds2.compStart
-                                setRefinePrevPos(posInDerived)
-                                setRefineSelSeg(sub.segIdx)
-                                const seekT=ds2.seg.startSec
+                                if(hasEditSegs) setRefineSelEsId(ds2.esId)
+                                else setRefineSelSeg(ds2.segIdx)
+                                const offsetInSeg=(cs-ds2.compStart)*ds2.speed
+                                const seekT=ds2.seg.startSec+Math.min(Math.max(0,offsetInSeg),ds2.seg.endSec-ds2.seg.startSec-0.01)
                                 refinePrevSeekRef.current=seekT
                                 const vid=refinePrevRef.current
                                 if(vid&&vid.readyState>=2) vid.currentTime=seekT
