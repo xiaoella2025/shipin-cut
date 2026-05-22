@@ -2759,9 +2759,9 @@ export default function App() {
             const muteOriginal=rc.audioPolicy?.muteOriginalVideo??false
             const voiceDur=voice?.duration??0
             const durDiff=voice?(voiceDur-derivedDur):0
-            const durDiffStr=voice?(Math.abs(durDiff)<0.5?'时长基本一致'
-              :durDiff>0?`语音比视频长 ${fmt(Math.abs(durDiff))}，需删减或加速`
-              :`语音比视频短 ${fmt(Math.abs(durDiff))}，需填充或减速`):''
+            const durDiffStr=voice?(Math.abs(durDiff)<0.5?'基本一致'
+              :durDiff>0?`视频短 ${fmt(Math.abs(durDiff))}`
+              :`视频长 ${fmt(Math.abs(durDiff))}`):''
             return (
               <div className="refine-view">
                 {/* Hidden voice file input */}
@@ -3027,12 +3027,7 @@ export default function App() {
                         )}
                         <div className="refine-voice-section">
                           <div className="refine-voice-hint">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                            后续可导入新配音，自动生成新字幕时间轴，不需手动对齐。
-                          </div>
-                          <div className="refine-toolbar">
-                            <button className="refine-tb-btn" disabled title="后续版本">+ 导入新语音</button>
-                            <button className="refine-tb-btn" disabled title="后续版本">识别字幕</button>
+                            口播稿定稿后，请在下方"最终语音轨道"导入生成好的语音。
                           </div>
                         </div>
                       </div>
@@ -3118,9 +3113,10 @@ export default function App() {
                             }}>{refineVoicePlaying?'⏸ 暂停':'▶ 播放'}</button>
                             <span className="refine-vt-pos">{fmt(refineVoicePos)} / {fmt(voiceDur)}</span>
                           </div>
-                          <div className={`refine-vt-diff${Math.abs(durDiff)<0.5?' ok':durDiff>0?' long':' short'}`}>
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                            视频 {fmt(derivedDur)} · 语音 {fmt(voiceDur)} · {durDiffStr}
+                          <div className={`refine-vt-diff${Math.abs(durDiff)<0.5?' ok':durDiff>0?' short':' long'}`}>
+                            <span className="refine-vt-diff-item">视频方案时长 <b>{fmt(derivedDur)}</b></span>
+                            <span className="refine-vt-diff-item">最终语音时长 <b>{fmt(voiceDur)}</b></span>
+                            <span className="refine-vt-diff-item">差值：<b>{durDiffStr}</b></span>
                           </div>
                         </div>
                       ):(

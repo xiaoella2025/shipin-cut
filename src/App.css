@@ -9269,11 +9269,17 @@ input[type=range] {
   font-size: 11px;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 14px;
   padding: 4px 8px;
   border-radius: 4px;
   color: rgba(255,255,255,.55);
   background: rgba(255,255,255,.04);
+  flex-wrap: wrap;
+}
+.refine-vt-diff-item b {
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+  margin-left: 3px;
 }
 .refine-vt-diff.ok   { color: #86efac; background: rgba(134,239,172,.08); }
 .refine-vt-diff.long { color: #fca5a5; background: rgba(252,165,165,.08); }
