@@ -97,6 +97,22 @@ const REFINE_MARK_TYPES = [
   {key:'keep',           label:'保留',      color:'#10b981'},
 ]
 
+const SUBTITLE_PROMPTS = [
+  { key:'polish',    label:'字幕润色',    text:'请帮我润色以下短视频口播字幕，要求：\n1. 保持口语化、自然流畅\n2. 适合短视频节奏，每句不超过 20 字\n3. 不改变核心意思，如有重复可适当删减\n\n字幕内容如下：\n' },
+  { key:'pace',      label:'保持口播节奏', text:'请把以下字幕改写成适合短视频口播的稿子，要求：\n1. 每句话简短有力\n2. 语气轻松自然，适合快节奏视频\n3. 保持原内容核心，不要添加无关内容\n\n字幕内容如下：\n' },
+  { key:'shorten',   label:'缩短口播',    text:'请帮我把以下字幕压缩，要求：\n1. 删除重复内容和过渡语句\n2. 保留核心信息\n3. 整体缩短 20–30%，保持口语化风格\n\n字幕内容如下：\n' },
+  { key:'natural',   label:'更生活化',    text:'请把以下字幕改得更像真人在说话，要求：\n1. 加入口语化表达\n2. 语气更亲切自然，可适当加入语气词\n3. 减少书面化表达\n\n字幕内容如下：\n' },
+  { key:'voiceover', label:'生成配音稿',  text:'请根据以下字幕生成适合文字转语音（TTS）的配音稿，要求：\n1. 语句流畅，适合朗读\n2. 避免特殊符号，每句控制在 15–20 字以内\n3. 适合标准普通话朗读\n\n字幕内容如下：\n' },
+]
+
+const COPY_PROMPTS = [
+  { key:'gen_title',    label:'生成标题',      text:'请根据以下短视频字幕内容生成 5 个发布标题，要求：\n1. 标题有吸引力，引发点击\n2. 15 字以内，不夸张虚假\n3. 适合短视频平台\n\n字幕内容如下：\n' },
+  { key:'gen_body',     label:'生成正文文案',   text:'请根据以下字幕内容生成一段视频发布正文文案，要求：\n1. 200 字以内，介绍视频核心内容\n2. 结尾加互动引导（如"你觉得呢？"）\n3. 适合短视频平台发布\n\n字幕内容如下：\n' },
+  { key:'xiaohongshu',  label:'小红书风格',     text:'请帮我把以下字幕改写成小红书风格文案，要求：\n1. 活泼可爱语气，多用 emoji\n2. 分段清晰\n3. 结尾加话题标签建议\n\n字幕内容如下：\n' },
+  { key:'wechat',       label:'公众号文章',     text:'请根据以下字幕内容生成一篇公众号文章，要求：\n1. 有标题、导语、正文、结尾\n2. 语言专业但不失亲切\n3. 500–800 字，适合图文排版\n\n字幕内容如下：\n' },
+  { key:'douyin',       label:'短视频发布文案',  text:'请根据以下字幕内容生成适合抖音/快手/视频号发布的文案，要求：\n1. 简洁有力，100 字以内\n2. 突出核心看点\n3. 附 2–3 个话题标签建议\n\n字幕内容如下：\n' },
+]
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function fmt(s) {
@@ -282,6 +298,36 @@ function buildCompSubtitles(comp, videoAnalysis, uploadedVideos) {
     acc += dur
   })
   return result
+}
+
+// Build a single summary script string from comp subtitles (one paragraph per segment)
+function buildSummaryScript(comp, videoAnalysis, uploadedVideos) {
+  const subs = buildCompSubtitles(comp, videoAnalysis, uploadedVideos)
+  const bySegment = {}
+  subs.forEach(s => {
+    if (!bySegment[s.segIdx]) bySegment[s.segIdx] = []
+    bySegment[s.segIdx].push(s.text)
+  })
+  return comp.segments.map((seg, si) => {
+    const texts = bySegment[si] || (seg.subtitle ? [seg.subtitle] : [])
+    return texts.join(' ')
+  }).filter(t => t.trim()).join('\n\n')
+}
+
+function downloadTextFile(text, filename) {
+  const blob = new Blob([text], {type:'text/plain;charset=utf-8'})
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href=url; a.download=filename; a.click()
+  URL.revokeObjectURL(url)
+}
+
+function downloadJSONFile(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json'})
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href=url; a.download=filename; a.click()
+  URL.revokeObjectURL(url)
 }
 
 // Get best subtitle text for a segment: real subtitles > seg.subtitle field
@@ -899,6 +945,12 @@ export default function App() {
   const [compPlaySegIdx, setCompPlaySegIdx] = useState(0)
   const [candidatePreview, setCandidatePreview] = useState(null) // {cand, compId, segIdx}
   const [prevVidPlaying, setPrevVidPlaying] = useState(false) // tracks actual video element play state
+
+  // ── step-2 refined compositions (v0.7.1) ──
+  // {compId: {summaryScript, scriptModified, copyTitle, copyBody, copyModified, editActions}}
+  const [refinedComps, setRefinedComps]         = useState({})
+  const [refineSubPromptKey, setRefineSubPromptKey] = useState(null)  // selected subtitle prompt key
+  const [refineCopyPromptKey, setRefineCopyPromptKey] = useState(null)
 
   // ── step-2 refine (v0.7) ──
   const [refineCompId, setRefineCompId]         = useState(null)
@@ -1750,6 +1802,34 @@ export default function App() {
     setRefineMarkUndo(null)
   }
 
+  function updateRefinedComp(compId, updates) {
+    setRefinedComps(prev=>({
+      ...prev,
+      [compId]: {summaryScript:'',scriptModified:false,copyTitle:'',copyBody:'',copyModified:false,editActions:[],...prev[compId],...updates}
+    }))
+  }
+
+  function toggleDeleteSeg(compId, segIdx) {
+    const rc=refinedComps[compId]||{editActions:[]}
+    const exists=rc.editActions.find(a=>a.type==='delete'&&a.segIdx===segIdx)
+    const newActions=exists
+      ?rc.editActions.filter(a=>!(a.type==='delete'&&a.segIdx===segIdx))
+      :[...rc.editActions,{id:`ea-${Date.now()}`,type:'delete',segIdx}]
+    updateRefinedComp(compId,{editActions:newActions})
+  }
+
+  function setSegSpeed(compId, segIdx, speed) {
+    const rc=refinedComps[compId]||{editActions:[]}
+    const without=rc.editActions.filter(a=>!(a.type==='speed'&&a.segIdx===segIdx))
+    const newActions=speed===1?without:[...without,{id:`ea-${Date.now()}`,type:'speed',segIdx,speed}]
+    updateRefinedComp(compId,{editActions:newActions})
+  }
+
+  function saveRefinedPlan(compId) {
+    updateRefinedComp(compId,{scriptModified:false,copyModified:false,savedAt:new Date().toISOString()})
+    showToast('精修方案已保存')
+  }
+
   function saveCompUndo() {
     setCompUndoSnap({ compositions, lockedSegs, compManualEdited })
   }
@@ -2540,51 +2620,309 @@ export default function App() {
           {subStep==='refine'&&(()=>{
             const comp=compositions.find(c=>c.id===refineCompId)
             if (!comp) return (
-              <div className="refine-error">
-                未找到成品方案
-                <button onClick={()=>setSubStep('compose')}>← 返回组合方案</button>
-              </div>
+              <div className="refine-error">未找到成品方案 <button onClick={()=>setSubStep('compose')}>← 返回</button></div>
             )
             const compSubs=buildCompSubtitles(comp,videoAnalysis,uploadedVideos)
-            const marks=refineMarks[comp.id]||[]
             const totalDur=comp.totalDur
             const playheadPct=totalDur>0?Math.min(100,(refinePrevPos/totalDur)*100):0
             const curSegIdx=refineSelSeg??findSegAtPos(comp,refinePrevPos)
             const curSeg=comp.segments[curSegIdx]
             const curVid=curSeg?uploadedVideos[curSeg.videoIndex]:null
             const curSubIdx=compSubs.findIndex(s=>refinePrevPos>=s.compStart&&refinePrevPos<s.compEnd)
+            const rc=refinedComps[comp.id]||{}
+            const scriptText=rc.summaryScript??''
+            const copyTitle=rc.copyTitle??''
+            const copyBody=rc.copyBody??''
+            const editActions=rc.editActions||[]
+            const isDeleted=si=>editActions.some(a=>a.type==='delete'&&a.segIdx===si)
+            const getSpeed=si=>editActions.find(a=>a.type==='speed'&&a.segIdx===si)?.speed??1
+            const deletedCount=editActions.filter(a=>a.type==='delete').length
+            const selSubPrompt=SUBTITLE_PROMPTS.find(p=>p.key===refineSubPromptKey)
+            const selCopyPrompt=COPY_PROMPTS.find(p=>p.key===refineCopyPromptKey)
             return (
               <div className="refine-view">
+                {/* ── Banner ── */}
                 <div className="refine-banner">
                   <button className="refine-back-btn" onClick={()=>{stopRefinePlay();setSubStep('compose')}}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
                     返回组合方案
                   </button>
-                  <span className="refine-banner-title">{comp.name} · 成品精修</span>
+                  <span className="refine-banner-title">{comp.name} · 成品精修方案工作台</span>
+                  {deletedCount>0&&<span className="refine-del-badge">{deletedCount} 段已标删</span>}
                   <div className="refine-proto-notice">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                    当前为精修标记阶段 · 尚未真实裁剪视频 · 标记将在后续导出阶段处理
+                    所有修改保存进最终方案 · 暂未生成视频文件 · 后续导出阶段执行
                   </div>
                 </div>
-                <div className="refine-body">
-                  {/* LEFT: composition subtitle list */}
+
+                {/* ── Top 3-column row ── */}
+                <div className="refine-top">
+                  {/* Col 1: Video preview */}
+                  <div className="refine-vc">
+                    <div className="refine-vc-head">
+                      <span>预览</span>
+                      <button className={`refine-tl-playbtn${refineIsPlaying?' playing':''}`}
+                        onClick={()=>refineIsPlaying?stopRefinePlay():startRefinePlay(comp)}>
+                        {refineIsPlaying
+                          ?<><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停</>
+                          :<><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>播放</>}
+                      </button>
+                    </div>
+                    <div className="refine-video-wrap" onClick={()=>{
+                      const vid=refinePrevRef.current; if(!vid||!curVid) return
+                      if(refineIsPlayingRef.current) stopRefinePlay()
+                      else if(refineVidPlaying) vid.pause()
+                      else startRefinePlay(comp)
+                    }}>
+                      {curVid?(
+                        <video
+                          ref={refinePrevRef}
+                          key={curVid.id}
+                          src={curVid.url}
+                          preload="auto"
+                          playsInline
+                          className="refine-video"
+                          onPlay={()=>setRefineVidPlaying(true)}
+                          onPause={()=>setRefineVidPlaying(false)}
+                          onLoadedMetadata={()=>{
+                            const vid=refinePrevRef.current; if(!vid) return
+                            vid.currentTime=refinePrevSeekRef.current??0
+                            if(refineIsPlayingRef.current) vid.play().catch(()=>{})
+                          }}
+                          onTimeUpdate={()=>{
+                            const vid=refinePrevRef.current; if(!vid) return
+                            if(!refineIsPlayingRef.current) return
+                            const c=compositionsRef.current.find(x=>x.id===refinePlayCompIdRef.current); if(!c) return
+                            const segIdx=refinePlaySegIdxRef.current
+                            const seg=c.segments[segIdx]; if(!seg) return
+                            let acc=0; for(let i=0;i<segIdx;i++) acc+=c.segments[i].endSec-c.segments[i].startSec
+                            const posInComp=acc+Math.max(0,vid.currentTime-seg.startSec)
+                            setRefinePrevPos(posInComp)
+                            setRefineSelSeg(segIdx)
+                            if(vid.currentTime>=seg.endSec-0.15){
+                              const nextIdx=segIdx+1
+                              if(nextIdx>=c.segments.length){
+                                vid.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成')
+                              } else {
+                                const nextSeg=c.segments[nextIdx]
+                                refinePlaySegIdxRef.current=nextIdx; setRefinePlaySegIdx(nextIdx)
+                                if(nextSeg.videoIndex===seg.videoIndex){ vid.currentTime=nextSeg.startSec; vid.play().catch(()=>{}) }
+                                else { refinePrevSeekRef.current=nextSeg.startSec }
+                              }
+                            }
+                          }}
+                          onEnded={()=>{
+                            if(!refineIsPlayingRef.current) return
+                            const c=compositionsRef.current.find(x=>x.id===refinePlayCompIdRef.current); if(!c) return
+                            if(refinePlaySegIdxRef.current+1>=c.segments.length){ setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成') }
+                          }}
+                        />
+                      ):(
+                        <div className="refine-no-vid">点击时间轴选择片段</div>
+                      )}
+                      <div className={`refine-play-btn${refineVidPlaying?' playing':''}`}>
+                        {refineVidPlaying
+                          ?<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                          :<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>}
+                      </div>
+                    </div>
+                    <div className="refine-video-meta">
+                      {curSeg?(
+                        <>
+                          <span style={{color:SEG_TYPE_COLORS[curSeg.type]||'#6366f1',fontWeight:600}}>{curSeg.label}</span>
+                          <span className="refine-vm-dot">·</span>
+                          <span className="refine-vm-type">{curSeg.type}</span>
+                          <span className="refine-vm-dot">·</span>
+                          <span className="refine-vm-vsrc">V{curSeg.videoIndex+1}</span>
+                        </>
+                      ):<span className="refine-vm-hint">模拟预览</span>}
+                      <span className="refine-vm-spacer"/>
+                      <span className="refine-vm-time">{fmt(refinePrevPos)}/{fmt(totalDur)}</span>
+                    </div>
+                    {curSubIdx>=0&&compSubs[curSubIdx]&&(
+                      <div className="refine-vc-cursub">{compSubs[curSubIdx].text}</div>
+                    )}
+                  </div>
+
+                  {/* Col 2: Summary script */}
+                  <div className="refine-sc">
+                    <div className="refine-col-head">
+                      <span>整条字幕汇总稿</span>
+                      {rc.scriptModified&&<span className="refine-dirty-badge">已修改</span>}
+                    </div>
+                    <textarea
+                      className="refine-textarea"
+                      placeholder={'点击"从逐句字幕生成"自动填入，或直接粘贴 AI 改写后的口播稿...'}
+                      value={scriptText}
+                      onChange={e=>updateRefinedComp(comp.id,{summaryScript:e.target.value,scriptModified:true})}
+                    />
+                    <div className="refine-toolbar">
+                      <button className="refine-tb-btn primary" onClick={()=>{
+                        const s=buildSummaryScript(comp,videoAnalysis,uploadedVideos)
+                        updateRefinedComp(comp.id,{summaryScript:s,scriptModified:true})
+                        showToast('已从逐句字幕生成汇总稿')
+                      }}>从逐句生成</button>
+                      <button className="refine-tb-btn" onClick={()=>{
+                        navigator.clipboard.writeText(scriptText).then(()=>showToast('已复制'))
+                      }} disabled={!scriptText}>复制全部</button>
+                      <button className="refine-tb-btn" onClick={()=>{
+                        downloadTextFile(scriptText,`${comp.name}_字幕稿.txt`)
+                      }} disabled={!scriptText}>导出 TXT</button>
+                      <button className="refine-tb-btn" onClick={()=>{
+                        downloadJSONFile({compositionId:comp.id,compositionName:comp.name,summaryScript:scriptText,exportedAt:new Date().toISOString()},`${comp.name}_字幕稿.json`)
+                      }} disabled={!scriptText}>导出 JSON</button>
+                      <button className="refine-tb-btn success" onClick={()=>saveRefinedPlan(comp.id)} disabled={!rc.scriptModified}>保存口播稿</button>
+                    </div>
+                    <div className="refine-prompt-section">
+                      <div className="refine-prompt-head">字幕改写提示词 <span className="refine-prompt-hint">（复制后到 DeepSeek / 豆包 改写，结果粘回上方）</span></div>
+                      <div className="refine-prompt-tabs">
+                        {SUBTITLE_PROMPTS.map(p=>(
+                          <button key={p.key}
+                            className={`refine-prompt-tab${refineSubPromptKey===p.key?' active':''}`}
+                            onClick={()=>setRefineSubPromptKey(refineSubPromptKey===p.key?null:p.key)}>
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                      {selSubPrompt&&(
+                        <div className="refine-prompt-preview">
+                          <div className="refine-prompt-text">{selSubPrompt.text}<span className="refine-prompt-placeholder">[在此处粘贴字幕]</span></div>
+                          <button className="refine-tb-btn primary" onClick={()=>{
+                            const full=selSubPrompt.text+(scriptText||'[请先生成汇总稿]')
+                            navigator.clipboard.writeText(full).then(()=>showToast('提示词已复制'))
+                          }}>复制提示词+字幕</button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Col 3: Copywriting */}
+                  <div className="refine-cc">
+                    <div className="refine-col-head">
+                      <span>标题 / 正文文案</span>
+                      {rc.copyModified&&<span className="refine-dirty-badge">已修改</span>}
+                    </div>
+                    <label className="refine-copy-label">标题</label>
+                    <input className="refine-copy-input"
+                      placeholder="视频标题..."
+                      value={copyTitle}
+                      onChange={e=>updateRefinedComp(comp.id,{copyTitle:e.target.value,copyModified:true})}
+                    />
+                    <label className="refine-copy-label">正文文案</label>
+                    <textarea className="refine-textarea refine-copy-body"
+                      placeholder="正文文案..."
+                      value={copyBody}
+                      onChange={e=>updateRefinedComp(comp.id,{copyBody:e.target.value,copyModified:true})}
+                    />
+                    <div className="refine-toolbar">
+                      <button className="refine-tb-btn" onClick={()=>{
+                        navigator.clipboard.writeText(copyTitle).then(()=>showToast('标题已复制'))
+                      }} disabled={!copyTitle}>复制标题</button>
+                      <button className="refine-tb-btn" onClick={()=>{
+                        navigator.clipboard.writeText(copyBody).then(()=>showToast('正文已复制'))
+                      }} disabled={!copyBody}>复制正文</button>
+                      <button className="refine-tb-btn success" onClick={()=>saveRefinedPlan(comp.id)} disabled={!rc.copyModified}>保存文案</button>
+                    </div>
+                    <div className="refine-prompt-section">
+                      <div className="refine-prompt-head">文案改写提示词</div>
+                      <div className="refine-prompt-tabs">
+                        {COPY_PROMPTS.map(p=>(
+                          <button key={p.key}
+                            className={`refine-prompt-tab${refineCopyPromptKey===p.key?' active':''}`}
+                            onClick={()=>setRefineCopyPromptKey(refineCopyPromptKey===p.key?null:p.key)}>
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                      {selCopyPrompt&&(
+                        <div className="refine-prompt-preview">
+                          <div className="refine-prompt-text">{selCopyPrompt.text}<span className="refine-prompt-placeholder">[在此处粘贴字幕]</span></div>
+                          <button className="refine-tb-btn primary" onClick={()=>{
+                            const full=selCopyPrompt.text+(scriptText||'[请先生成汇总稿]')
+                            navigator.clipboard.writeText(full).then(()=>showToast('提示词已复制'))
+                          }}>复制提示词+字幕</button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="refine-voice-section">
+                      <div className="refine-voice-hint">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        后续导入新语音后，将自动生成新的逐句字幕时间轴，不需要手动逐句对齐。
+                      </div>
+                      <div className="refine-toolbar">
+                        <button className="refine-tb-btn" disabled title="后续版本实现">+ 导入新语音</button>
+                        <button className="refine-tb-btn" disabled title="后续版本实现">识别字幕时间轴</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Timeline ── */}
+                <div className="refine-tl-section">
+                  <div className="refine-tl-controls">
+                    <button className={`refine-tl-playbtn${refineIsPlaying?' playing':''}`}
+                      onClick={()=>refineIsPlaying?stopRefinePlay():startRefinePlay(comp)}>
+                      {refineIsPlaying
+                        ?<><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停</>
+                        :<><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>播放</>}
+                    </button>
+                    <span className="refine-tl-timestr">{fmt(refinePrevPos)} / {fmt(totalDur)}</span>
+                    {deletedCount>0&&<span className="refine-tl-markct">{deletedCount} 段已标删</span>}
+                    <span className="refine-tl-seg-hint">{comp.segments.length} 段 · 总时长 {fmt(totalDur)}</span>
+                  </div>
+                  <div className="refine-timeline"
+                    onMouseDown={e=>{
+                      e.stopPropagation()
+                      stopRefinePlay()
+                      const rect=e.currentTarget.getBoundingClientRect()
+                      refineTlDragRef.current={compId:comp.id,rect,totalDur:comp.totalDur}
+                      const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width))
+                      const pos=snapToSegBoundary(comp,ratio*comp.totalDur)
+                      setRefinePrevPos(pos)
+                      const sIdx=findSegAtPos(comp,pos)
+                      setRefineSelSeg(sIdx)
+                      let acc=0; for(let i=0;i<sIdx;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec
+                      refinePrevSeekRef.current=comp.segments[sIdx].startSec+Math.min(Math.max(0,pos-acc),comp.segments[sIdx].endSec-comp.segments[sIdx].startSec-0.01)
+                      const vid=refinePrevRef.current
+                      if(vid&&vid.readyState>=2) vid.currentTime=refinePrevSeekRef.current
+                    }}>
+                    {comp.segments.map((seg,si)=>{
+                      const dur=seg.endSec-seg.startSec
+                      const w=`${totalDur>0?(dur/totalDur)*100:0}%`
+                      const stc=SEG_TYPE_COLORS[seg.type]||'#6366f1'
+                      const isActive=si===curSegIdx
+                      const deleted=isDeleted(si)
+                      const spd=getSpeed(si)
+                      return (
+                        <div key={seg.id+'_'+si}
+                          className={`refine-tl-seg${isActive?' active':''}${deleted?' deleted':''}`}
+                          style={{width:w,background:deleted?'#33333388':stc+(isActive?'ee':'88'),borderTop:`3px solid ${deleted?'#555':stc}`}}>
+                          <span className="refine-tl-seg-lbl">{deleted?'✕ ':''}{seg.label}{spd!==1?` ×${spd}`:''}</span>
+                        </div>
+                      )
+                    })}
+                    <div className="refine-tl-playhead" style={{left:`${playheadPct}%`}}>
+                      <div className="refine-tl-ph-dot"/>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Bottom row ── */}
+                <div className="refine-bottom">
+                  {/* Left: subtitle list (unchanged) */}
                   <div className="refine-sub-col">
                     <div className="refine-sub-head">
-                      成品字幕
+                      逐句字幕
                       <span className="refine-sub-cnt">{compSubs.length} 条</span>
                     </div>
                     <div className="refine-sub-list">
-                      {compSubs.length===0&&(
-                        <div className="refine-sub-empty">暂无字幕<br/>导入字幕后将按成品时间显示</div>
-                      )}
+                      {compSubs.length===0&&<div className="refine-sub-empty">暂无字幕<br/>导入字幕后将按成品时间显示</div>}
                       {compSubs.map((sub,si)=>{
                         const isCur=si===curSubIdx
-                        const subMark=marks.find(m=>m.targetType==='subtitle'&&m.subIdx===si)
-                        const mt=subMark?REFINE_MARK_TYPES.find(t=>t.key===subMark.type):null
                         const segClr=SEG_TYPE_COLORS[comp.segments[sub.segIdx]?.type]||'#6366f1'
                         return (
                           <div key={sub.id}
-                            className={`refine-sub-row${isCur?' active':''}${subMark?' marked':''}`}
+                            className={`refine-sub-row${isCur?' active':''}`}
                             onClick={()=>{
                               stopRefinePlay()
                               const pos=snapToSegBoundary(comp,sub.compStart)
@@ -2601,232 +2939,95 @@ export default function App() {
                               <span className="refine-sub-seg-dot" style={{background:segClr}} title={comp.segments[sub.segIdx]?.label}/>
                               <span className="refine-sub-text">{sub.text}</span>
                             </div>
-                            {mt&&<div className="refine-sub-mark-badge" style={{color:mt.color,borderColor:mt.color+'44',background:mt.color+'18'}}>{mt.label}</div>}
                           </div>
                         )
                       })}
                     </div>
                   </div>
-                  {/* RIGHT: video + timeline + mark panel */}
-                  <div className="refine-main-col">
-                    {/* Video */}
-                    <div className="refine-video-area">
-                      <div className="refine-video-wrap" onClick={()=>{
-                        const vid=refinePrevRef.current; if(!vid||!curVid) return
-                        if(refineIsPlayingRef.current) stopRefinePlay()
-                        else if(refineVidPlaying) vid.pause()
-                        else startRefinePlay(comp)
-                      }}>
-                        {curVid?(
-                          <video
-                            ref={refinePrevRef}
-                            key={curVid.id}
-                            src={curVid.url}
-                            preload="auto"
-                            playsInline
-                            className="refine-video"
-                            onPlay={()=>setRefineVidPlaying(true)}
-                            onPause={()=>setRefineVidPlaying(false)}
-                            onLoadedMetadata={()=>{
-                              const vid=refinePrevRef.current; if(!vid) return
-                              vid.currentTime=refinePrevSeekRef.current??0
-                              if(refineIsPlayingRef.current) vid.play().catch(()=>{})
-                            }}
-                            onTimeUpdate={()=>{
-                              const vid=refinePrevRef.current; if(!vid) return
-                              if(!refineIsPlayingRef.current) return
-                              const c=compositionsRef.current.find(x=>x.id===refinePlayCompIdRef.current); if(!c) return
-                              const segIdx=refinePlaySegIdxRef.current
-                              const seg=c.segments[segIdx]; if(!seg) return
-                              let acc=0; for(let i=0;i<segIdx;i++) acc+=c.segments[i].endSec-c.segments[i].startSec
-                              const posInComp=acc+Math.max(0,vid.currentTime-seg.startSec)
-                              setRefinePrevPos(posInComp)
-                              setRefineSelSeg(segIdx)
-                              if(vid.currentTime>=seg.endSec-0.15){
-                                const nextIdx=segIdx+1
-                                if(nextIdx>=c.segments.length){
-                                  vid.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成')
-                                } else {
-                                  const nextSeg=c.segments[nextIdx]
-                                  refinePlaySegIdxRef.current=nextIdx; setRefinePlaySegIdx(nextIdx)
-                                  if(nextSeg.videoIndex===seg.videoIndex){ vid.currentTime=nextSeg.startSec; vid.play().catch(()=>{}) }
-                                  else { refinePrevSeekRef.current=nextSeg.startSec }
-                                }
-                              }
-                            }}
-                            onEnded={()=>{
-                              if(!refineIsPlayingRef.current) return
-                              const c=compositionsRef.current.find(x=>x.id===refinePlayCompIdRef.current); if(!c) return
-                              if(refinePlaySegIdxRef.current+1>=c.segments.length){ setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成') }
-                            }}
-                          />
-                        ):(
-                          <div className="refine-no-vid">点击时间轴选择片段</div>
-                        )}
-                        <div className={`refine-play-btn${refineVidPlaying?' playing':''}`}>
-                          {refineVidPlaying
-                            ?<svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                            :<svg width="28" height="28" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>}
-                        </div>
-                      </div>
-                      <div className="refine-video-meta">
-                        {curSeg?(
-                          <>
-                            <span className="refine-vm-label" style={{color:SEG_TYPE_COLORS[curSeg.type]||'#6366f1'}}>{curSeg.label}</span>
-                            <span className="refine-vm-dot">·</span>
-                            <span className="refine-vm-type">{curSeg.type}</span>
-                            <span className="refine-vm-dot">·</span>
-                            <span className="refine-vm-vsrc">V{curSeg.videoIndex+1}</span>
-                            <span className="refine-vm-spacer"/>
-                            <span className="refine-vm-time">{fmt(refinePrevPos)} / {fmt(totalDur)}</span>
-                          </>
-                        ):<span className="refine-vm-hint">模拟组合预览 · 点击时间轴定位</span>}
-                      </div>
-                    </div>
-                    {/* Timeline */}
-                    <div className="refine-tl-section">
-                      <div className="refine-tl-controls">
-                        <button className={`refine-tl-playbtn${refineIsPlaying?' playing':''}`}
-                          onClick={()=>refineIsPlaying?stopRefinePlay():startRefinePlay(comp)}>
-                          {refineIsPlaying
-                            ?<><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停</>
-                            :<><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>播放</>}
-                        </button>
-                        <span className="refine-tl-timestr">{fmt(refinePrevPos)} / {fmt(totalDur)}</span>
-                        {marks.length>0&&<span className="refine-tl-markct">{marks.length} 个标记</span>}
-                      </div>
-                      <div className="refine-timeline"
-                        onMouseDown={e=>{
-                          e.stopPropagation()
-                          stopRefinePlay()
-                          const rect=e.currentTarget.getBoundingClientRect()
-                          refineTlDragRef.current={compId:comp.id,rect,totalDur:comp.totalDur}
-                          const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width))
-                          const pos=snapToSegBoundary(comp,ratio*comp.totalDur)
-                          setRefinePrevPos(pos)
-                          const sIdx=findSegAtPos(comp,pos)
-                          setRefineSelSeg(sIdx)
-                          let acc=0; for(let i=0;i<sIdx;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec
-                          refinePrevSeekRef.current=comp.segments[sIdx].startSec+Math.min(Math.max(0,pos-acc),comp.segments[sIdx].endSec-comp.segments[sIdx].startSec-0.01)
-                          const vid=refinePrevRef.current
-                          if(vid&&vid.readyState>=2) vid.currentTime=refinePrevSeekRef.current
-                        }}>
-                        {comp.segments.map((seg,si)=>{
-                          const dur=seg.endSec-seg.startSec
-                          const w=`${totalDur>0?(dur/totalDur)*100:0}%`
-                          const stc=SEG_TYPE_COLORS[seg.type]||'#6366f1'
-                          const isActive=si===curSegIdx
-                          const hasMark=marks.some(m=>m.segIdx===si)
-                          return (
-                            <div key={seg.id+'_'+si}
-                              className={`refine-tl-seg${isActive?' active':''}${hasMark?' has-mark':''}`}
-                              style={{width:w,background:stc+(isActive?'ee':'88'),borderTop:`3px solid ${stc}`}}>
-                              <span className="refine-tl-seg-lbl">{seg.label}</span>
+
+                  {/* Right: ops panel */}
+                  <div className="refine-ops-col">
+                    {curSeg?(()=>{
+                      const tc=SEG_TYPE_COLORS[curSeg.type]||'#6366f1'
+                      const deleted=isDeleted(curSegIdx)
+                      const spd=getSpeed(curSegIdx)
+                      const dur=curSeg.endSec-curSeg.startSec
+                      return (
+                        <>
+                          <div className="refine-ops-head">
+                            <span>当前片段操作</span>
+                            <button className="refine-save-plan-btn" onClick={()=>saveRefinedPlan(comp.id)}>
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                              保存精修方案
+                            </button>
+                          </div>
+                          <div className="refine-seg-card">
+                            <div className="refine-seg-card-top">
+                              <span className="refine-seg-label" style={{color:tc}}>{curSeg.label}</span>
+                              <span className="refine-seg-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{curSeg.type}</span>
+                              <span className="refine-seg-vsrc">V{curSeg.videoIndex+1}</span>
+                              {deleted&&<span className="refine-seg-del-badge">已标删</span>}
+                              {spd!==1&&<span className="refine-seg-spd-badge">×{spd}</span>}
                             </div>
-                          )
-                        })}
-                        {marks.map(m=>{
-                          const mt=REFINE_MARK_TYPES.find(t=>t.key===m.type)
-                          const pLeft=totalDur>0?(m.compStart/totalDur)*100:0
-                          return (
-                            <div key={m.id} className="refine-tl-pin"
-                              style={{left:`${pLeft}%`,background:mt?.color||'#fff'}}
-                              title={`${mt?.label||m.type} · ${fmt(m.compStart)}`}/>
-                          )
-                        })}
-                        <div className="refine-tl-playhead" style={{left:`${playheadPct}%`}}>
-                          <div className="refine-tl-ph-dot"/>
-                        </div>
-                      </div>
-                    </div>
-                    {/* Mark panel */}
-                    <div className="refine-mark-panel">
-                      <div className="refine-mark-head">
-                        <span className="refine-mark-head-title">精修标记</span>
-                        {refineMarkUndo!==null&&<button className="refine-undo-btn" onClick={()=>undoRefineMark(comp.id)}>↩ 撤销</button>}
-                      </div>
-                      <div className="refine-mark-targets">
-                        {curSubIdx>=0&&compSubs[curSubIdx]&&(()=>{
-                          const sub=compSubs[curSubIdx]
-                          const existMark=marks.find(m=>m.targetType==='subtitle'&&m.subIdx===curSubIdx)
-                          const mt=existMark?REFINE_MARK_TYPES.find(t=>t.key===existMark.type):null
-                          return (
-                            <div className="refine-mark-block">
-                              <div className="refine-mark-block-head">当前字幕</div>
-                              <div className="refine-mark-cur-text">{sub.text}</div>
-                              {existMark?(
-                                <button className="refine-cancel-mark" style={{color:mt?.color}} onClick={()=>removeRefineMark(comp.id,existMark.id)}>
-                                  ✕ 取消标记（{mt?.label}）
-                                </button>
-                              ):(
-                                <div className="refine-mark-btns">
-                                  {REFINE_MARK_TYPES.map(rmt=>(
-                                    <button key={rmt.key} className="refine-mark-btn" style={{'--mc':rmt.color}}
-                                      onClick={()=>addRefineMark(comp.id,rmt.key,'subtitle',sub.segIdx,curSubIdx,sub.compStart,sub.compEnd)}>
-                                      {rmt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })()}
-                        {curSeg&&(()=>{
-                          let segAcc=0; for(let i=0;i<curSegIdx;i++) segAcc+=comp.segments[i].endSec-comp.segments[i].startSec
-                          const existMark=marks.find(m=>m.targetType==='segment'&&m.segIdx===curSegIdx)
-                          const mt=existMark?REFINE_MARK_TYPES.find(t=>t.key===existMark.type):null
-                          return (
-                            <div className="refine-mark-block">
-                              <div className="refine-mark-block-head">当前片段 · {curSeg.label} · {curSeg.type}</div>
-                              {existMark?(
-                                <button className="refine-cancel-mark" style={{color:mt?.color}} onClick={()=>removeRefineMark(comp.id,existMark.id)}>
-                                  ✕ 取消标记（{mt?.label}）
-                                </button>
-                              ):(
-                                <div className="refine-mark-btns">
-                                  {REFINE_MARK_TYPES.map(rmt=>(
-                                    <button key={rmt.key} className="refine-mark-btn" style={{'--mc':rmt.color}}
-                                      onClick={()=>addRefineMark(comp.id,rmt.key,'segment',curSegIdx,-1,segAcc,segAcc+(curSeg.endSec-curSeg.startSec))}>
-                                      {rmt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })()}
-                      </div>
-                      {marks.length>0&&(
-                        <div className="refine-mark-list">
-                          <div className="refine-ml-head">全部标记（{marks.length}）</div>
-                          {marks.map(m=>{
-                            const mt=REFINE_MARK_TYPES.find(t=>t.key===m.type)
-                            const tgtText=m.targetType==='subtitle'&&compSubs[m.subIdx]
-                              ?compSubs[m.subIdx].text.slice(0,18)+(compSubs[m.subIdx].text.length>18?'…':'')
-                              :(comp.segments[m.segIdx]?.label||'')
-                            return (
-                              <div key={m.id} className="refine-ml-row" onClick={()=>{
-                                stopRefinePlay()
-                                const pos=snapToSegBoundary(comp,m.compStart)
-                                setRefinePrevPos(pos)
-                                const sIdx=findSegAtPos(comp,pos)
-                                setRefineSelSeg(sIdx)
-                                let acc=0; for(let i=0;i<sIdx;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec
-                                refinePrevSeekRef.current=comp.segments[sIdx].startSec+Math.min(Math.max(0,pos-acc),comp.segments[sIdx].endSec-comp.segments[sIdx].startSec-0.01)
-                                const vid=refinePrevRef.current
-                                if(vid&&vid.readyState>=2) vid.currentTime=refinePrevSeekRef.current
+                            <div className="refine-seg-card-meta">{curSeg.startStr} – {curSeg.endStr} · {fmt(dur)}</div>
+                            {curSubIdx>=0&&compSubs[curSubIdx]&&(
+                              <div className="refine-seg-cursub">{compSubs[curSubIdx].text}</div>
+                            )}
+                          </div>
+                          <div className="refine-ops-row">
+                            {deleted?(
+                              <button className="refine-op-btn restore" onClick={()=>toggleDeleteSeg(comp.id,curSegIdx)}>
+                                ↩ 恢复这一段
+                              </button>
+                            ):(
+                              <button className="refine-op-btn danger" onClick={()=>{
+                                toggleDeleteSeg(comp.id,curSegIdx)
+                                showToast(`${curSeg.label} 已标记删除 · 点击时间轴恢复`)
                               }}>
-                                <span className="refine-ml-dot" style={{background:mt?.color||'#888'}}/>
-                                <span className="refine-ml-type" style={{color:mt?.color}}>{mt?.label||m.type}</span>
-                                <span className="refine-ml-time">{fmt(m.compStart)}</span>
-                                <span className="refine-ml-tgt">{tgtText}</span>
-                                <button className="refine-ml-del" onClick={e=>{e.stopPropagation();removeRefineMark(comp.id,m.id)}}>✕</button>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
+                                ✕ 删除这一段
+                              </button>
+                            )}
+                          </div>
+                          <div className="refine-speed-section">
+                            <div className="refine-speed-label">调速</div>
+                            <div className="refine-speed-row">
+                              {[0.8,0.9,1,1.25,1.5,2].map(s=>(
+                                <button key={s}
+                                  className={`refine-speed-btn${spd===s?' active':''}`}
+                                  onClick={()=>{setSegSpeed(comp.id,curSegIdx,s);showToast(`${curSeg.label} 速度设为 ×${s}`)}}>
+                                  {s===1?'1× 默认':`×${s}`}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {editActions.length>0&&(
+                            <div className="refine-actions-summary">
+                              <div className="refine-actions-head">精修方案（{editActions.length} 项操作）</div>
+                              {editActions.map(a=>(
+                                <div key={a.id} className="refine-action-row">
+                                  <span className="refine-action-type">{a.type==='delete'?'✕ 删除':'⏩ 调速'}</span>
+                                  <span className="refine-action-target">{comp.segments[a.segIdx]?.label||`第${a.segIdx+1}段`}</span>
+                                  {a.type==='speed'&&<span className="refine-action-val">×{a.speed}</span>}
+                                  <button className="refine-action-del" onClick={()=>{
+                                    updateRefinedComp(comp.id,{editActions:editActions.filter(x=>x.id!==a.id)})
+                                  }}>↩</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )
+                    })():(
+                      <div className="refine-ops-empty">
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" opacity=".3"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                        <p>点击时间轴选择片段</p>
+                        <p>可删除、调速或保存精修方案</p>
+                        <button className="refine-save-plan-btn" style={{marginTop:10}} onClick={()=>saveRefinedPlan(comp.id)}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                          保存精修方案
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
