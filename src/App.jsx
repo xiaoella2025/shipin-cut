@@ -1064,6 +1064,7 @@ export default function App() {
   const [refineVoicePlaying, setRefineVoicePlaying] = useState(false)
   const [refineVoicePos, setRefineVoicePos]         = useState(0)
   const [refineSelEsId, setRefineSelEsId]           = useState(null)  // selected edit-seg id (v0.7.4)
+  const [refineTrimState, setRefineTrimState]       = useState(null)  // v0.7.5 trim drag preview: {esId,edge,previewStartSec,previewEndSec}
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1121,6 +1122,7 @@ export default function App() {
   const refinePlayCompIdRef = useRef(null)
   const refinePrevSeekRef  = useRef(null)
   const refineTlDragRef    = useRef(null)
+  const refineTlRef        = useRef(null)   // v0.7.5: timeline DOM element for trim drag
   const refineVoiceRef      = useRef(null)
   const refineVoiceInputRef = useRef(null)
   const refinePlayEsIdxRef  = useRef(0)       // index into active editTimeline.segments
@@ -2114,6 +2116,20 @@ export default function App() {
     else showToast('没有可撤销的操作')
   }
 
+  function applyTrim(compId, esId, newStartSec, newEndSec) {
+    const MIN_SEG = 0.3
+    if (newEndSec - newStartSec < MIN_SEG) { showToast('片段太短，无法裁剪'); return }
+    stopRefinePlay()
+    setRefinedComps(prev => {
+      const rcP = defaultRcFor(prev[compId])
+      if (!rcP.editSegs) return prev
+      const newEditSegs = rcP.editSegs.map(s =>
+        s.id === esId ? { ...s, startSec: newStartSec, endSec: newEndSec } : s
+      )
+      return { ...prev, [compId]: { ...rcP, editSegs: newEditSegs, editSegsUndoStack: pushEditSegsUndoSnapshot(rcP) } }
+    })
+  }
+
   function saveCompUndo() {
     setCompUndoSnap({ compositions, lockedSegs, compManualEdited })
   }
@@ -2960,6 +2976,51 @@ export default function App() {
             const durDiffStr=voice?(Math.abs(durDiff)<0.5?'基本一致'
               :durDiff>0?`视频短 ${fmt(Math.abs(durDiff))}`
               :`视频长 ${fmt(Math.abs(durDiff))}`):''
+
+            // v0.7.5: trim drag — captures derivedDur, derivedSegs, comp.id
+            const MIN_TRIM_SEG = 0.3
+            const startTrimDrag = (e, edge, ds) => {
+              e.stopPropagation()
+              e.preventDefault()
+              stopRefinePlay()
+              const tlEl = refineTlRef.current; if(!tlEl) return
+              const snapDur = derivedDur
+              refineTlDragRef.current = {
+                esId: ds.esId, edge,
+                origStartSec: ds.seg.startSec, origEndSec: ds.seg.endSec,
+                speed: ds.speed, compStart: ds.compStart,
+                totalDur: snapDur,
+                curStartSec: ds.seg.startSec, curEndSec: ds.seg.endSec,
+                changed: false,
+              }
+              const onMove = (ev) => {
+                const drag = refineTlDragRef.current; if(!drag) return
+                const rect = tlEl.getBoundingClientRect()
+                const ratio = Math.max(0, Math.min(1, (ev.clientX-rect.left)/rect.width))
+                const compPos = ratio * drag.totalDur
+                const srcPos = drag.origStartSec + (compPos - drag.compStart) * drag.speed
+                if (drag.edge === 'tail') {
+                  drag.curEndSec = Math.max(drag.origStartSec + MIN_TRIM_SEG, Math.min(drag.origEndSec, srcPos))
+                } else {
+                  drag.curStartSec = Math.max(drag.origStartSec, Math.min(drag.origEndSec - MIN_TRIM_SEG, srcPos))
+                }
+                drag.changed = true
+                setRefineTrimState({ esId: drag.esId, edge: drag.edge, previewStartSec: drag.curStartSec, previewEndSec: drag.curEndSec })
+              }
+              const onUp = () => {
+                document.removeEventListener('mousemove', onMove)
+                document.removeEventListener('mouseup', onUp)
+                const drag = refineTlDragRef.current
+                if (drag && drag.changed && drag.curEndSec - drag.curStartSec >= MIN_TRIM_SEG) {
+                  applyTrim(comp.id, drag.esId, drag.curStartSec, drag.curEndSec)
+                }
+                refineTlDragRef.current = null
+                setRefineTrimState(null)
+              }
+              document.addEventListener('mousemove', onMove)
+              document.addEventListener('mouseup', onUp)
+            }
+
             return (
               <div className="refine-view">
                 {/* Hidden voice file input */}
@@ -3271,13 +3332,22 @@ export default function App() {
                         <span className="refine-tl-timestr">{fmt(refinePrevPos)} / {fmt(derivedDur)}</span>
                         <span className="refine-tl-seg-hint">{derivedSegs.length} 段（共 {comp.segments.length} 段）· 总时长 {fmt(derivedDur)}</span>
                         {(hasEditSegs?editDeletedCount:deletedCount)>0&&<span className="refine-tl-markct">已删 {hasEditSegs?editDeletedCount:deletedCount} 段</span>}
+                        {refineTrimState&&(
+                          <span className="refine-tl-trim-indicator">
+                            {refineTrimState.edge==='tail'?'✂ 裁尾':'✂ 裁头'}
+                            {' '}{fmt(refineTrimState.previewEndSec-refineTrimState.previewStartSec)}
+                            {' → '}{refineTrimState.edge==='tail'?fmt(refineTrimState.previewEndSec):fmt(refineTrimState.previewStartSec)}
+                          </span>
+                        )}
                       </div>
                       <div className="refine-timeline"
+                        ref={refineTlRef}
                         onMouseDown={e=>{
+                          // Skip if clicking on a trim handle (they stop propagation)
+                          if(e.target.classList.contains('refine-tl-trim-l')||e.target.classList.contains('refine-tl-trim-r')) return
                           e.stopPropagation()
                           stopRefinePlay()
                           const tlEl=e.currentTarget
-                          // v0.7.4-hotfix: support click + drag on the playhead/timeline
                           const updateFromClientX=(clientX)=>{
                             const rect=tlEl.getBoundingClientRect()
                             const ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width))
@@ -3304,16 +3374,27 @@ export default function App() {
                           document.addEventListener('mouseup',onUp)
                         }}>
                         {derivedSegs.map((ds)=>{
-                          const w=`${derivedDur>0?(ds.actualDur/derivedDur)*100:0}%`
-                          const stc=SEG_TYPE_COLORS[ds.seg.type]||'#6366f1'
                           const isActive=hasEditSegs
                             ?ds.esId===(refineSelEsId||curDerivedEntry?.esId)
                             :ds.segIdx===curSegIdx
+                          // v0.7.5: apply trim preview width
+                          const trim=refineTrimState&&refineTrimState.esId===ds.esId
+                          const dispStartSec=trim?refineTrimState.previewStartSec:ds.seg.startSec
+                          const dispEndSec=trim?refineTrimState.previewEndSec:ds.seg.endSec
+                          const dispDur=(dispEndSec-dispStartSec)/Math.max(0.1,ds.speed)
+                          const w=`${derivedDur>0?(dispDur/derivedDur)*100:0}%`
+                          const stc=SEG_TYPE_COLORS[ds.seg.type]||'#6366f1'
                           return (
                             <div key={hasEditSegs?ds.esId:ds.segIdx}
-                              className={`refine-tl-seg${isActive?' active':''}`}
+                              className={`refine-tl-seg${isActive?' active':''}${hasEditSegs?' editable':''}`}
                               style={{width:w,background:stc+(isActive?'ee':'88'),borderTop:`3px solid ${stc}`}}>
+                              {hasEditSegs&&!refineTrimState&&(
+                                <div className="refine-tl-trim-l" onMouseDown={e=>startTrimDrag(e,'head',ds)} title="拖动裁剪头部"/>
+                              )}
                               <span className="refine-tl-seg-lbl">{ds.seg.label}{ds.speed!==1?` ×${ds.speed}`:''}</span>
+                              {hasEditSegs&&!refineTrimState&&(
+                                <div className="refine-tl-trim-r" onMouseDown={e=>startTrimDrag(e,'tail',ds)} title="拖动裁剪尾部"/>
+                              )}
                             </div>
                           )
                         })}

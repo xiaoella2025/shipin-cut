@@ -9786,6 +9786,34 @@ input[type=range] {
 .refine-ops-inner .refine-speed-section { flex: 2; min-width: 260px; }
 .refine-ops-inner .refine-actions-summary { width: 100%; }
 
+/* ── trim handles (v0.7.5) ── */
+.refine-tl-trim-l,
+.refine-tl-trim-r {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  background: rgba(255,255,255,.75);
+  z-index: 15;
+  opacity: 0;
+  transition: opacity .1s;
+  border-radius: 2px;
+}
+.refine-tl-trim-l { left: 0; cursor: w-resize; border-radius: 2px 0 0 2px; }
+.refine-tl-trim-r { right: 0; cursor: e-resize; border-radius: 0 2px 2px 0; }
+.refine-tl-seg.editable:hover .refine-tl-trim-l,
+.refine-tl-seg.editable:hover .refine-tl-trim-r { opacity: 0.4; }
+.refine-tl-seg.editable.active .refine-tl-trim-l,
+.refine-tl-seg.editable.active .refine-tl-trim-r { opacity: 0.85; }
+
+.refine-tl-trim-indicator {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #fde68a;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 /* ── cut section (v0.7.4) ── */
 .refine-cut-section {
   width: 100%;
