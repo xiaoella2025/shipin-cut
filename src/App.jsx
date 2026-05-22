@@ -2668,11 +2668,7 @@ export default function App() {
                           let acc=0; for(let i=0;i<si;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec; return acc
                         })()}))
                       }}>
-                      <div className="comp-seg-info-col">
-                        <span className="comp-seg-inline">{seg.label} · V{seg.videoIndex+1}</span>
-                        <span className="comp-seg-inline-sub" style={{color:stc+'ff'}}>{seg.type}</span>
-                        <span className="comp-seg-inline-time">{seg.startStr}–{seg.endStr}</span>
-                      </div>
+                      <span className="comp-seg-inline">{seg.label} · V{seg.videoIndex+1} · {seg.type} · {seg.startStr}-{seg.endStr}</span>
                       <div className="comp-seg-move-btns" onClick={e=>e.stopPropagation()}>
                         {si>0&&<button className="comp-seg-mv" title="前移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,-1)}}>←</button>}
                         {si<comp.segments.length-1&&<button className="comp-seg-mv" title="后移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,+1)}}>→</button>}
