@@ -9786,7 +9786,83 @@ input[type=range] {
 .refine-ops-inner .refine-speed-section { flex: 2; min-width: 260px; }
 .refine-ops-inner .refine-actions-summary { width: 100%; }
 
-/* Segment card meta extras */
+/* ── cut section (v0.7.4) ── */
+.refine-cut-section {
+  width: 100%;
+  flex-shrink: 0;
+  background: rgba(99,102,241,.06);
+  border: 1px solid rgba(99,102,241,.2);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.refine-cut-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.refine-cut-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #a5b4fc;
+  letter-spacing: .03em;
+}
+.refine-cut-hint {
+  font-size: 10px;
+  color: rgba(252,165,165,.8);
+  flex: 1;
+}
+.refine-cut-btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.refine-cut-btn {
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(99,102,241,.35);
+  color: rgba(255,255,255,.7);
+  background: transparent;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.refine-cut-btn:hover:not(:disabled) { background: rgba(99,102,241,.18); border-color: #818cf8; color: #fff; }
+.refine-cut-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.refine-cut-btn.primary {
+  background: rgba(99,102,241,.2);
+  border-color: rgba(99,102,241,.5);
+  color: #a5b4fc;
+  font-weight: 700;
+}
+.refine-cut-btn.primary:hover:not(:disabled) { background: rgba(99,102,241,.35); color: #fff; }
+
+/* edit-seg badge in banner */
+.refine-cut-badge {
+  background: rgba(99,102,241,.2);
+  border-color: rgba(99,102,241,.4);
+  color: #a5b4fc;
+}
+
+/* editSegs summary rows */
+.refine-es-row {
+  cursor: pointer;
+  transition: background .1s;
+}
+.refine-es-row:hover { background: rgba(255,255,255,.05); }
+.refine-es-row.current { background: rgba(99,102,241,.1); }
+.refine-es-row.deleted { opacity: 0.5; }
+.refine-es-status {
+  font-size: 10px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+  color: rgba(255,255,255,.4);
+}
+.refine-es-row.deleted .refine-es-status { color: #fca5a5; }
+.refine-es-row:not(.deleted) .refine-es-status { color: #86efac; }
+
+
 .refine-seg-del-meta { color: #fca5a5; }
 
 /* Right sidebar: subtitle list */

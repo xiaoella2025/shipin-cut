@@ -364,6 +364,22 @@ function buildDerivedTimeline(comp, deletedSegIdxs, speedMap) {
   return { segments, totalDuration: acc }
 }
 
+// editSegs timeline (v0.7.4): synthesizes `seg` shape compatible with render/playback
+function buildEditTimeline(editSegs) {
+  let acc = 0
+  const segments = []
+  ;(editSegs||[]).forEach(es => {
+    if (es.deleted) return
+    const rawDur = es.endSec - es.startSec
+    const spd = es.speed ?? 1
+    const actualDur = rawDur / Math.max(0.1, spd)
+    const seg = { videoIndex: es.videoIndex, startSec: es.startSec, endSec: es.endSec, label: es.label, type: es.type||'', subtitle:'', startStr: fmt(es.startSec), endStr: fmt(es.endSec) }
+    segments.push({ segIdx: es.origSegIdx, esId: es.id, seg, compStart: acc, compEnd: acc + actualDur, actualDur, speed: spd })
+    acc += actualDur
+  })
+  return { segments, totalDuration: acc }
+}
+
 function downloadTextFile(text, filename) {
   const blob = new Blob([text], {type:'text/plain;charset=utf-8'})
   const url = URL.createObjectURL(blob)
@@ -1014,6 +1030,7 @@ export default function App() {
   const [refineVidPlaying, setRefineVidPlaying] = useState(false)   // actual video element play state
   const [refineVoicePlaying, setRefineVoicePlaying] = useState(false)
   const [refineVoicePos, setRefineVoicePos]         = useState(0)
+  const [refineSelEsId, setRefineSelEsId]           = useState(null)  // selected edit-seg id (v0.7.4)
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1071,8 +1088,10 @@ export default function App() {
   const refinePlayCompIdRef = useRef(null)
   const refinePrevSeekRef  = useRef(null)
   const refineTlDragRef    = useRef(null)
-  const refineVoiceRef     = useRef(null)
+  const refineVoiceRef      = useRef(null)
   const refineVoiceInputRef = useRef(null)
+  const refinePlayEsIdxRef  = useRef(0)       // index into active editTimeline.segments
+  const refineEditTimelineRef = useRef(null)  // populated only during editSegs playback
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -1808,6 +1827,38 @@ export default function App() {
   function startRefinePlay(comp) {
     if (!comp||!comp.segments.length) return
     const rc=refinedComps[comp.id]||{}
+
+    // editSegs mode (v0.7.4)
+    if (rc.editSegs && rc.editSegs.length > 0) {
+      const etl=buildEditTimeline(rc.editSegs)
+      if (!etl.segments.length) { showToast('所有片段已删除，无法播放'); return }
+      const currentPos=refinePrevPos
+      const atEnd=currentPos>=etl.totalDuration-0.2
+      let startEntry=etl.segments[0], seekTime=etl.segments[0].seg.startSec
+      if (!atEnd&&currentPos>0) {
+        for (const s of etl.segments) {
+          if (currentPos<=s.compEnd||s===etl.segments[etl.segments.length-1]) {
+            startEntry=s
+            const offsetInSeg=Math.max(0,currentPos-s.compStart)*s.speed
+            seekTime=s.seg.startSec+Math.min(offsetInSeg,s.seg.endSec-s.seg.startSec-0.01)
+            break
+          }
+        }
+      } else if (atEnd) {
+        setRefinePrevPos(0)
+      }
+      setRefineIsPlaying(true); refineIsPlayingRef.current=true
+      refinePlayEsIdxRef.current=etl.segments.indexOf(startEntry)
+      refineEditTimelineRef.current=etl
+      refinePlayCompIdRef.current=comp.id
+      refinePrevSeekRef.current=seekTime
+      const vid=refinePrevRef.current
+      if (vid) { vid.currentTime=seekTime; vid.play().catch(()=>{}) }
+      return
+    }
+
+    // original deletedSegIdxs mode
+    refineEditTimelineRef.current=null
     const deletedSegIdxs=rc.deletedSegIdxs||[]
     const activeIdxs=comp.segments.map((_,i)=>i).filter(i=>!deletedSegIdxs.includes(i))
     if (!activeIdxs.length) { showToast('所有片段已标删，无法播放'); return }
@@ -1869,6 +1920,8 @@ export default function App() {
       deletedSegIdxs:[], speedMap:{},
       voice:null, // {name, url, duration}
       audioPolicy:{ muteOriginalVideo:false },
+      editSegs:null,      // null = use deletedSegIdxs mode; array = cut/edit mode (v0.7.4)
+      editSegsUndo:null,  // previous editSegs for single-step undo
       savedAt:null,
       ...(existing||{}),
     }
@@ -1911,6 +1964,7 @@ export default function App() {
     stopRefinePlay()
     setRefineCompId(newCompId)
     setRefineSelSeg(null)
+    setRefineSelEsId(null)
     setRefinePrevPos(0)
   }
 
@@ -1933,6 +1987,74 @@ export default function App() {
       const rc = defaultRcFor(prev[compId])
       return { ...prev, [compId]: { ...rc, audioPolicy: { ...rc.audioPolicy, muteOriginalVideo: !rc.audioPolicy.muteOriginalVideo } } }
     })
+  }
+
+  // ── edit-seg helpers (v0.7.4) ──
+  function initEditSegsFromComp(comp, rc) {
+    const { segments: ds } = buildDerivedTimeline(comp, rc.deletedSegIdxs||[], rc.speedMap||{})
+    return ds.map((d, i) => ({
+      id: `es-${Date.now()}-${i}-${Math.random().toString(36).slice(2,5)}`,
+      origSegIdx: d.segIdx,
+      videoIndex: d.seg.videoIndex,
+      label: d.seg.label,
+      type: d.seg.type || '',
+      startSec: d.seg.startSec,
+      endSec: d.seg.endSec,
+      speed: d.speed,
+      deleted: false,
+    }))
+  }
+
+  function cutAtPos(compId, comp) {
+    const rc = defaultRcFor(refinedComps[compId])
+    const currentEditSegs = rc.editSegs || initEditSegsFromComp(comp, rc)
+    const { segments: etl } = buildEditTimeline(currentEditSegs)
+    const pos = refinePrevPos
+    const entry = etl.find(s => pos > s.compStart && pos < s.compEnd)
+    if (!entry) { showToast('当前位置不在任何片段内'); return }
+    const cutSrcTime = entry.seg.startSec + (pos - entry.compStart) * entry.speed
+    const MIN_GAP = 0.2
+    if (cutSrcTime - entry.seg.startSec < MIN_GAP || entry.seg.endSec - cutSrcTime < MIN_GAP) {
+      showToast('当前位置太接近片段边界，无法切分'); return
+    }
+    const origIdx = currentEditSegs.findIndex(s => s.id === entry.esId)
+    if (origIdx < 0) return
+    const orig = currentEditSegs[origIdx]
+    const ts = Date.now()
+    const partA = { ...orig, id:`es-${ts}-a-${Math.random().toString(36).slice(2,5)}`, endSec: cutSrcTime }
+    const partB = { ...orig, id:`es-${ts}-b-${Math.random().toString(36).slice(2,5)}`, startSec: cutSrcTime }
+    const newEditSegs = [...currentEditSegs]
+    newEditSegs.splice(origIdx, 1, partA, partB)
+    const saveUndo = rc.editSegs   // null means "first cut, undo returns to no-editSegs state"
+    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), editSegs: newEditSegs, editSegsUndo: saveUndo } }))
+    setRefineSelEsId(partA.id)
+    showToast('✂ 已切分')
+  }
+
+  function deleteEditSeg(compId, esId) {
+    const rc = defaultRcFor(refinedComps[compId])
+    if (!rc.editSegs) return
+    const newEditSegs = rc.editSegs.map(s => s.id === esId ? { ...s, deleted: true } : s)
+    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), editSegs: newEditSegs, editSegsUndo: rc.editSegs } }))
+    showToast('已删除该小段')
+  }
+
+  function restoreEditSeg(compId, esId) {
+    const rc = defaultRcFor(refinedComps[compId])
+    if (!rc.editSegs) return
+    const newEditSegs = rc.editSegs.map(s => s.id === esId ? { ...s, deleted: false } : s)
+    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), editSegs: newEditSegs, editSegsUndo: rc.editSegs } }))
+    showToast('已恢复该小段')
+  }
+
+  function undoEditSegs(compId) {
+    const rc = defaultRcFor(refinedComps[compId])
+    if (rc.editSegsUndo === undefined || (rc.editSegsUndo === null && !rc.editSegs)) {
+      showToast('没有可撤销的操作'); return
+    }
+    setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), editSegs: rc.editSegsUndo, editSegsUndo: null } }))
+    setRefineSelEsId(null)
+    showToast('已撤销')
   }
 
   function saveCompUndo() {
@@ -2730,13 +2852,29 @@ export default function App() {
             const rc=defaultRcFor(refinedComps[comp.id])
             const deletedSegIdxs=rc.deletedSegIdxs
             const speedMap=rc.speedMap
-            const {segments:derivedSegs,totalDuration:derivedDur}=buildDerivedTimeline(comp,deletedSegIdxs,speedMap)
+            // v0.7.4: use editSegs timeline when cuts have been made
+            const hasEditSegs=!!(rc.editSegs&&rc.editSegs.length>0)
+            const {segments:derivedSegs,totalDuration:derivedDur}=hasEditSegs
+              ?buildEditTimeline(rc.editSegs)
+              :buildDerivedTimeline(comp,deletedSegIdxs,speedMap)
             const compSubs=buildCompSubtitles(comp,videoAnalysis,uploadedVideos)
-            // curSegIdx: which original segment index is current
+            // current segment resolution
             const curDerivedEntry=derivedSegs.find(ds=>refinePrevPos>=ds.compStart&&refinePrevPos<ds.compEnd)||derivedSegs[0]
+            // editSegs mode: track by esId; original mode: track by segIdx
+            const curEsEntry=hasEditSegs?(derivedSegs.find(ds=>ds.esId===refineSelEsId)||curDerivedEntry):null
             const curSegIdx=refineSelSeg??curDerivedEntry?.segIdx??0
-            const curSeg=comp.segments[curSegIdx]
+            const curSeg=hasEditSegs?curEsEntry?.seg:comp.segments[curSegIdx]
             const curVid=curSeg?uploadedVideos[curSeg.videoIndex]:null
+            // cut readiness
+            const MIN_CUT_GAP=0.2
+            const cutEntry=derivedSegs.find(s=>refinePrevPos>s.compStart&&refinePrevPos<s.compEnd)
+            let canCut=!!cutEntry, cannotCutReason=''
+            if(cutEntry){
+              const cutSrc=cutEntry.seg.startSec+(refinePrevPos-cutEntry.compStart)*cutEntry.speed
+              if(cutSrc-cutEntry.seg.startSec<MIN_CUT_GAP||cutEntry.seg.endSec-cutSrc<MIN_CUT_GAP){canCut=false;cannotCutReason='太接近片段边界'}
+            } else { cannotCutReason='播放头不在片段内' }
+            const editDeletedCount=hasEditSegs?(rc.editSegs||[]).filter(s=>s.deleted).length:0
+            const canUndoEdit=hasEditSegs&&(rc.editSegsUndo!==undefined&&!(rc.editSegsUndo===null&&!rc.editSegs))
             const playheadPct=derivedDur>0?Math.min(100,(refinePrevPos/derivedDur)*100):0
             const curSubIdx=compSubs.findIndex(s=>refinePrevPos>=s.compStart&&refinePrevPos<s.compEnd)
             const scriptText=rc.summaryScript
@@ -2774,7 +2912,8 @@ export default function App() {
                     返回组合方案
                   </button>
                   <span className="refine-banner-title">成品精修方案工作台</span>
-                  {deletedCount>0&&<span className="refine-del-badge">{deletedCount} 段已标删</span>}
+                  {hasEditSegs&&<span className="refine-del-badge refine-cut-badge">✂ 精剪模式</span>}
+                  {(hasEditSegs?editDeletedCount:deletedCount)>0&&<span className="refine-del-badge">{hasEditSegs?editDeletedCount:deletedCount} 段已删</span>}
                   <span className="refine-banner-dur">总时长 {fmt(derivedDur)}{derivedDur!==comp.totalDur?` （原 ${fmt(comp.totalDur)}）`:''}</span>
                   <div className="refine-proto-notice">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -2863,6 +3002,28 @@ export default function App() {
                               onTimeUpdate={()=>{
                                 const vid=refinePrevRef.current; if(!vid) return
                                 if(!refineIsPlayingRef.current) return
+                                // editSegs mode (v0.7.4)
+                                if(refineEditTimelineRef.current){
+                                  const etl=refineEditTimelineRef.current
+                                  const esIdx=refinePlayEsIdxRef.current
+                                  const s=etl.segments[esIdx]; if(!s) return
+                                  const offsetInSeg=(vid.currentTime-s.seg.startSec)/s.speed
+                                  setRefinePrevPos(s.compStart+Math.max(0,offsetInSeg))
+                                  setRefineSelEsId(s.esId)
+                                  if(vid.currentTime>=s.seg.endSec-0.15){
+                                    const nextEsIdx=esIdx+1
+                                    if(nextEsIdx>=etl.segments.length){
+                                      vid.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成')
+                                    } else {
+                                      const nextS=etl.segments[nextEsIdx]
+                                      refinePlayEsIdxRef.current=nextEsIdx
+                                      if(nextS.seg.videoIndex===s.seg.videoIndex){ vid.currentTime=nextS.seg.startSec; vid.play().catch(()=>{}) }
+                                      else { refinePrevSeekRef.current=nextS.seg.startSec }
+                                    }
+                                  }
+                                  return
+                                }
+                                // original mode
                                 const c2=compositionsRef.current.find(x=>x.id===refinePlayCompIdRef.current); if(!c2) return
                                 const segIdx=refinePlaySegIdxRef.current
                                 const seg2=c2.segments[segIdx]; if(!seg2) return
@@ -2892,6 +3053,11 @@ export default function App() {
                               }}
                               onEnded={()=>{
                                 if(!refineIsPlayingRef.current) return
+                                if(refineEditTimelineRef.current){
+                                  const nextIdx=refinePlayEsIdxRef.current+1
+                                  if(nextIdx>=refineEditTimelineRef.current.segments.length){ setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成') }
+                                  return
+                                }
                                 const c2=compositionsRef.current.find(x=>x.id===refinePlayCompIdRef.current); if(!c2) return
                                 const rcNow=refinedComps[c2.id]||{}
                                 const deletedNow=rcNow.deletedSegIdxs||[]
@@ -3044,7 +3210,7 @@ export default function App() {
                         </button>
                         <span className="refine-tl-timestr">{fmt(refinePrevPos)} / {fmt(derivedDur)}</span>
                         <span className="refine-tl-seg-hint">{derivedSegs.length} 段（共 {comp.segments.length} 段）· 总时长 {fmt(derivedDur)}</span>
-                        {deletedCount>0&&<span className="refine-tl-markct">已删 {deletedCount} 段</span>}
+                        {(hasEditSegs?editDeletedCount:deletedCount)>0&&<span className="refine-tl-markct">已删 {hasEditSegs?editDeletedCount:deletedCount} 段</span>}
                       </div>
                       <div className="refine-timeline"
                         onMouseDown={e=>{
@@ -3057,7 +3223,8 @@ export default function App() {
                           // find which derived seg
                           const ds=derivedSegs.find(s=>derivedPos>=s.compStart&&derivedPos<s.compEnd)||derivedSegs[derivedSegs.length-1]
                           if(ds){
-                            setRefineSelSeg(ds.segIdx)
+                            if(hasEditSegs) setRefineSelEsId(ds.esId)
+                            else setRefineSelSeg(ds.segIdx)
                             const offsetInSeg=(derivedPos-ds.compStart)*ds.speed
                             const seekT=ds.seg.startSec+Math.min(offsetInSeg,ds.seg.endSec-ds.seg.startSec-0.01)
                             refinePrevSeekRef.current=seekT
@@ -3068,9 +3235,11 @@ export default function App() {
                         {derivedSegs.map((ds)=>{
                           const w=`${derivedDur>0?(ds.actualDur/derivedDur)*100:0}%`
                           const stc=SEG_TYPE_COLORS[ds.seg.type]||'#6366f1'
-                          const isActive=ds.segIdx===curSegIdx
+                          const isActive=hasEditSegs
+                            ?ds.esId===(refineSelEsId||curDerivedEntry?.esId)
+                            :ds.segIdx===curSegIdx
                           return (
-                            <div key={ds.segIdx}
+                            <div key={hasEditSegs?ds.esId:ds.segIdx}
                               className={`refine-tl-seg${isActive?' active':''}`}
                               style={{width:w,background:stc+(isActive?'ee':'88'),borderTop:`3px solid ${stc}`}}>
                               <span className="refine-tl-seg-lbl">{ds.seg.label}{ds.speed!==1?` ×${ds.speed}`:''}</span>
@@ -3128,13 +3297,95 @@ export default function App() {
                     <div className="refine-ops-section">
                       {curSeg?(()=>{
                         const tc=SEG_TYPE_COLORS[curSeg.type]||'#6366f1'
+                        const rawDur=curSeg.endSec-curSeg.startSec
+
+                        // ── editSegs mode (v0.7.4) ──
+                        if(hasEditSegs){
+                          const esDeleted=curEsEntry?!!(rc.editSegs||[]).find(s=>s.id===curEsEntry.esId)?.deleted:false
+                          return (
+                            <div className="refine-ops-inner">
+                              {/* Cut toolbar */}
+                              <div className="refine-cut-section">
+                                <div className="refine-cut-head">
+                                  <span className="refine-cut-title">✂ 精剪操作</span>
+                                  <span className="refine-cut-hint">{cannotCutReason&&!canCut?cannotCutReason:''}</span>
+                                </div>
+                                <div className="refine-cut-btns">
+                                  <button className="refine-cut-btn primary" disabled={!canCut}
+                                    title={canCut?'在当前播放位置切分片段':cannotCutReason}
+                                    onClick={()=>cutAtPos(comp.id,comp)}>✂ 切一刀</button>
+                                  {canUndoEdit&&(
+                                    <button className="refine-cut-btn" onClick={()=>undoEditSegs(comp.id)}>↩ 撤销</button>
+                                  )}
+                                </div>
+                              </div>
+                              {/* Current edit seg card */}
+                              {curEsEntry&&(
+                                <div className="refine-seg-card">
+                                  <div className="refine-seg-card-top">
+                                    <span className="refine-seg-label" style={{color:tc}}>{curSeg.label}</span>
+                                    {curSeg.type&&<span className="refine-seg-type" style={{color:tc,borderColor:tc+'44',background:tc+'18'}}>{curSeg.type}</span>}
+                                    <span className="refine-seg-vsrc">V{curSeg.videoIndex+1}</span>
+                                    {esDeleted&&<span className="refine-seg-del-badge">已删除</span>}
+                                  </div>
+                                  <div className="refine-seg-card-meta">
+                                    {fmt(curSeg.startSec)} – {fmt(curSeg.endSec)} · {fmt(rawDur)}
+                                  </div>
+                                  <div className="refine-seg-card-meta">
+                                    成品位置：{fmt(curEsEntry.compStart)} – {fmt(curEsEntry.compEnd)}
+                                  </div>
+                                  <div className="refine-ops-row">
+                                    {esDeleted?(
+                                      <button className="refine-op-btn restore" onClick={()=>restoreEditSeg(comp.id,curEsEntry.esId)}>↩ 恢复此小段</button>
+                                    ):(
+                                      <button className="refine-op-btn danger" onClick={()=>{ deleteEditSeg(comp.id,curEsEntry.esId); stopRefinePlay() }}>✕ 删除此小段</button>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                              {/* EditSegs full summary */}
+                              <div className="refine-actions-summary">
+                                <div className="refine-actions-head">精剪方案（{(rc.editSegs||[]).filter(s=>!s.deleted).length} 段有效 / {(rc.editSegs||[]).length} 段总计 · {fmt(derivedDur)}）</div>
+                                {(rc.editSegs||[]).map((es,i)=>{
+                                  const esTC=SEG_TYPE_COLORS[es.type]||'#6366f1'
+                                  const isCurEs=curEsEntry?.esId===es.id
+                                  return (
+                                    <div key={es.id}
+                                      className={`refine-action-row refine-es-row${es.deleted?' deleted':''}${isCurEs?' current':''}`}
+                                      onClick={()=>setRefineSelEsId(es.id)}>
+                                      <span className="refine-es-status">{es.deleted?'✕':'✓'}</span>
+                                      <span className="refine-action-target" style={{color:esTC}}>{es.label}</span>
+                                      <span className="refine-action-val">{fmt(es.endSec-es.startSec)}</span>
+                                      <button className="refine-action-del" onClick={e=>{e.stopPropagation();es.deleted?restoreEditSeg(comp.id,es.id):deleteEditSeg(comp.id,es.id)}}>
+                                        {es.deleted?'↩':'✕'}
+                                      </button>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )
+                        }
+
+                        // ── original deletedSegIdxs mode ──
                         const deleted=isDeleted(curSegIdx)
                         const spd=getSpeed(curSegIdx)
-                        const rawDur=curSeg.endSec-curSeg.startSec
                         const actualDur=rawDur/Math.max(0.1,spd)
                         const dsEntry=derivedSegs.find(ds=>ds.segIdx===curSegIdx)
                         return (
                           <div className="refine-ops-inner">
+                            {/* Cut toolbar (first cut initializes editSegs mode) */}
+                            <div className="refine-cut-section">
+                              <div className="refine-cut-head">
+                                <span className="refine-cut-title">✂ 精剪操作</span>
+                                <span className="refine-cut-hint">{cannotCutReason&&!canCut?cannotCutReason:''}</span>
+                              </div>
+                              <div className="refine-cut-btns">
+                                <button className="refine-cut-btn primary" disabled={!canCut}
+                                  title={canCut?'在当前播放位置切分片段（进入精剪模式）':cannotCutReason}
+                                  onClick={()=>cutAtPos(comp.id,comp)}>✂ 切一刀</button>
+                              </div>
+                            </div>
                             <div className="refine-seg-card">
                               <div className="refine-seg-card-top">
                                 <span className="refine-seg-label" style={{color:tc}}>{curSeg.label}</span>
@@ -3201,7 +3452,7 @@ export default function App() {
                         <div className="refine-ops-empty">
                           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" opacity=".3"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/><polyline points="7 3 7 8 15 8"/></svg>
                           <p>点击时间轴选择片段</p>
-                          <p>可删除或调速</p>
+                          <p>可删除或调速，或切一刀开始精剪</p>
                         </div>
                       )}
                     </div>
