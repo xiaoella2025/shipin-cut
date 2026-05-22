@@ -1012,6 +1012,8 @@ export default function App() {
   const [refinePlaySegIdx, setRefinePlaySegIdx] = useState(0)
   const [refineSelSeg, setRefineSelSeg]         = useState(null)    // explicitly selected segIdx
   const [refineVidPlaying, setRefineVidPlaying] = useState(false)   // actual video element play state
+  const [refineVoicePlaying, setRefineVoicePlaying] = useState(false)
+  const [refineVoicePos, setRefineVoicePos]         = useState(0)
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1069,6 +1071,8 @@ export default function App() {
   const refinePlayCompIdRef = useRef(null)
   const refinePrevSeekRef  = useRef(null)
   const refineTlDragRef    = useRef(null)
+  const refineVoiceRef     = useRef(null)
+  const refineVoiceInputRef = useRef(null)
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -1863,6 +1867,8 @@ export default function App() {
       copywriting:{ referenceTitle:'', finalTitle:'', referenceWechatBody:'', finalWechatBody:'', referenceXhs:'', finalXhs:'' },
       copyModified:false, copySavedAt:null,
       deletedSegIdxs:[], speedMap:{},
+      voice:null, // {name, url, duration}
+      audioPolicy:{ muteOriginalVideo:false },
       savedAt:null,
       ...(existing||{}),
     }
@@ -1906,6 +1912,27 @@ export default function App() {
     setRefineCompId(newCompId)
     setRefineSelSeg(null)
     setRefinePrevPos(0)
+  }
+
+  function importVoiceFile(compId, file) {
+    if (!file) return
+    const url = URL.createObjectURL(file)
+    const tmp = new Audio(url)
+    tmp.addEventListener('loadedmetadata', () => {
+      const dur = isFinite(tmp.duration) ? tmp.duration : 0
+      updateRefinedComp(compId, {
+        voice: { name: file.name, url, duration: dur },
+        audioPolicy: { ...(defaultRcFor(refinedComps[compId]).audioPolicy), muteOriginalVideo: true },
+      })
+      showToast('语音已导入，原视频音频已自动静音')
+    })
+    tmp.addEventListener('error', () => showToast('音频文件读取失败'))
+  }
+  function toggleMuteOriginal(compId) {
+    setRefinedComps(prev => {
+      const rc = defaultRcFor(prev[compId])
+      return { ...prev, [compId]: { ...rc, audioPolicy: { ...rc.audioPolicy, muteOriginalVideo: !rc.audioPolicy.muteOriginalVideo } } }
+    })
   }
 
   function saveCompUndo() {
@@ -2728,8 +2755,18 @@ export default function App() {
             const scriptStatus=rc.scriptModified?'已修改未保存':rc.scriptSavedAt?`已保存 ${rc.scriptSavedAt.slice(11,16)}`:'未修改'
             const copyStatus=rc.copyModified?'已修改未保存':rc.copySavedAt?`已保存 ${rc.copySavedAt.slice(11,16)}`:'未修改'
             const planStatus=rc.savedAt?`方案已保存 ${rc.savedAt.slice(11,16)}`:'方案未保存'
+            const voice=rc.voice||null
+            const muteOriginal=rc.audioPolicy?.muteOriginalVideo??false
+            const voiceDur=voice?.duration??0
+            const durDiff=voice?(voiceDur-derivedDur):0
+            const durDiffStr=voice?(Math.abs(durDiff)<0.5?'时长基本一致'
+              :durDiff>0?`语音比视频长 ${fmt(Math.abs(durDiff))}，需删减或加速`
+              :`语音比视频短 ${fmt(Math.abs(durDiff))}，需填充或减速`):''
             return (
               <div className="refine-view">
+                {/* Hidden voice file input */}
+                <input type="file" accept="audio/*" style={{display:'none'}} ref={refineVoiceInputRef}
+                  onChange={e=>{ const f=e.target.files?.[0]; if(f) importVoiceFile(comp.id,f); e.target.value='' }} />
                 {/* Banner */}
                 <div className="refine-banner">
                   <button className="refine-back-btn" onClick={()=>{stopRefinePlay();setSubStep('compose')}}>
@@ -2814,6 +2851,7 @@ export default function App() {
                               src={curVid.url}
                               preload="auto"
                               playsInline
+                              muted={muteOriginal}
                               className="refine-video"
                               onPlay={()=>setRefineVidPlaying(true)}
                               onPause={()=>setRefineVidPlaying(false)}
@@ -3048,6 +3086,46 @@ export default function App() {
                           <div className="refine-tl-ph-dot"/>
                         </div>
                       </div>
+                    </div>
+
+                    {/* Voice track section */}
+                    <div className="refine-voice-track">
+                      <div className="refine-vt-head">
+                        <span className="refine-vt-label">最终语音轨道</span>
+                        <button className="refine-tb-btn primary" onClick={()=>refineVoiceInputRef.current?.click()}>
+                          {voice?'重新导入':'+ 导入语音文件'}
+                        </button>
+                        <label className={`refine-vt-mute-toggle${muteOriginal?' on':''}`} title="控制预览时原视频的音频是否播放">
+                          <input type="checkbox" checked={muteOriginal} onChange={()=>toggleMuteOriginal(comp.id)} style={{display:'none'}}/>
+                          {muteOriginal?'原视频已静音':'原视频有声'}
+                        </label>
+                      </div>
+                      {voice?(
+                        <div className="refine-vt-body">
+                          <audio ref={refineVoiceRef} src={voice.url} preload="auto"
+                            onPlay={()=>setRefineVoicePlaying(true)}
+                            onPause={()=>setRefineVoicePlaying(false)}
+                            onTimeUpdate={()=>{ const a=refineVoiceRef.current; if(a) setRefineVoicePos(a.currentTime) }}
+                            onEnded={()=>setRefineVoicePlaying(false)}/>
+                          <div className="refine-vt-info">
+                            <span className="refine-vt-filename" title={voice.name}>{voice.name}</span>
+                            <span className="refine-vt-dur">{fmt(voiceDur)}</span>
+                          </div>
+                          <div className="refine-vt-controls">
+                            <button className={`refine-tb-btn${refineVoicePlaying?' active':''}`} onClick={()=>{
+                              const a=refineVoiceRef.current; if(!a) return
+                              refineVoicePlaying?a.pause():a.play().catch(()=>{})
+                            }}>{refineVoicePlaying?'⏸ 暂停':'▶ 播放'}</button>
+                            <span className="refine-vt-pos">{fmt(refineVoicePos)} / {fmt(voiceDur)}</span>
+                          </div>
+                          <div className={`refine-vt-diff${Math.abs(durDiff)<0.5?' ok':durDiff>0?' long':' short'}`}>
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                            视频 {fmt(derivedDur)} · 语音 {fmt(voiceDur)} · {durDiffStr}
+                          </div>
+                        </div>
+                      ):(
+                        <div className="refine-vt-empty">导入配音文件后，可在此对比视频与语音时长</div>
+                      )}
                     </div>
 
                     {/* Ops panel */}
