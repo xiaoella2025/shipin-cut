@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-shipin-cut v0.9 — 本地成品视频生成脚本
+shipin-cut v0.9-hotfix — 本地成品视频生成脚本
 用法: python export_video.py [草稿JSON路径]
      不传参数则自动扫描 export_workspace/drafts/ 下最新的 JSON
 依赖: Python 3.8+, FFmpeg（ffmpeg/ffprobe 必须在 PATH 中）
@@ -52,6 +52,8 @@ def run(cmd, check=True, capture=False):
 
 def safe_name(s):
     return re.sub(r'[^\w一-鿿.-]', '_', s)
+
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac"}
 
 # ── 查找草稿 ──────────────────────────────────────────────────────────────────
 def find_draft(arg=None):
@@ -109,20 +111,56 @@ def resolve_videos(source_videos):
     return resolved
 
 # ── 解析音频文件 ──────────────────────────────────────────────────────────────
-def resolve_voice(voice_meta):
-    """在 export_workspace/audio/ 下按 fileName 匹配"""
-    if not voice_meta:
-        return None
-    fname = voice_meta.get("fileName", "")
+def resolve_voice(data):
+    """
+    按优先级查找最终语音文件，返回 Path 或 None（None 表示无声导出）。
+
+    优先级 1: draft.voice.fileName → audio/ 同名文件
+    优先级 2: draft.voiceMeta.fileName → audio/ 同名文件（兼容旧格式）
+    优先级 3: 草稿无记录 + audio/ 只有 1 个音频 → 自动使用
+    优先级 4: 草稿无记录 + audio/ 多个音频 → 报错退出
+    兜底:    草稿无记录 + audio/ 无音频 → 无声导出，打印提示
+    """
+    audio_files = [
+        f for f in AUDIO_DIR.iterdir()
+        if f.is_file() and f.suffix.lower() in AUDIO_EXTS
+    ]
+    audio_map = {f.name.lower(): f for f in audio_files}
+
+    # 优先级 1: voice.fileName
+    voice = data.get("voice") or {}
+    fname = voice.get("fileName", "").strip() if isinstance(voice, dict) else ""
+
+    # 优先级 2: voiceMeta.fileName（兼容旧版或备用字段）
     if not fname:
+        voice_meta = data.get("voiceMeta") or {}
+        fname = voice_meta.get("fileName", "").strip() if isinstance(voice_meta, dict) else ""
+
+    if fname:
+        match = audio_map.get(fname.lower())
+        if match:
+            log(f"已找到最终语音：{match.name}")
+            return match
+        else:
+            err(f"剪辑草稿记录了最终语音：{fname}")
+            err(f"但在 export_workspace/audio/ 中没有找到该文件。")
+            err(f"请把 {fname} 放入 audio 文件夹，或重新导出剪辑草稿。")
+            sys.exit(1)
+
+    # 草稿没有记录语音文件名
+    if len(audio_files) == 1:
+        log(f"草稿未记录语音，已自动使用 audio 文件夹中的唯一音频：{audio_files[0].name}")
+        return audio_files[0]
+    elif len(audio_files) > 1:
+        err("audio 文件夹里有多个音频文件，但剪辑草稿没有记录最终语音文件名。")
+        err("请只保留一个音频文件，或在精修页重新导入最终语音后导出剪辑草稿。")
+        err("检测到的音频文件：")
+        for f in sorted(audio_files, key=lambda x: x.name):
+            err(f"  {f.name}")
+        sys.exit(1)
+    else:
+        log("未检测到最终语音文件，本次将导出无声视频。")
         return None
-    available = {f.name.lower(): f for f in AUDIO_DIR.iterdir() if f.is_file()}
-    match = available.get(fname.lower())
-    if match:
-        log(f"  配音文件: {match.name}")
-        return match
-    log(f"  警告: 配音文件 {fname} 未找到，将仅导出画面（无配音）")
-    return None
 
 # ── 裁剪单个片段 ──────────────────────────────────────────────────────────────
 def cut_segment(seg, video_path, out_path, speed=1.0):
@@ -240,10 +278,9 @@ def main():
     draft_path = find_draft(sys.argv[1] if len(sys.argv) > 1 else None)
     data = load_draft(draft_path)
 
-    comp_name   = data.get("compositionName", "output")
-    timeline    = data.get("derivedTimeline", [])
-    source_vids = data.get("sourceVideos", [])
-    voice_meta  = data.get("voice")
+    comp_name    = data.get("compositionName", "output")
+    timeline     = data.get("derivedTimeline", [])
+    source_vids  = data.get("sourceVideos", [])
     audio_policy = data.get("exportSettings", {})
 
     if not timeline:
@@ -258,8 +295,8 @@ def main():
     # 解析素材视频路径
     video_map = resolve_videos(source_vids)
 
-    # 解析配音文件
-    voice_path = resolve_voice(voice_meta)
+    # 解析配音文件（含 4 级自动匹配逻辑）
+    voice_path = resolve_voice(data)
 
     # 清理临时目录
     for f in TEMP_DIR.glob("seg_*.mp4"):
@@ -291,10 +328,10 @@ def main():
     final_name = f"{safe}_{ts}.mp4"
     final_out  = OUTPUT_DIR / final_name
     if voice_path:
-        log(f"混合配音 → {final_out.name}")
+        log(f"正在合成配音...")
         mux_voice(concat_out, voice_path, final_out, audio_policy)
+        log(f"已合成配音 → {final_name}")
     else:
-        log(f"无配音，直接输出 → {final_out.name}")
         shutil.copy2(concat_out, final_out)
 
     # 清理临时片段

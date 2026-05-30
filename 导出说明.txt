@@ -19,48 +19,75 @@ shipin-cut v0.9  本地成品视频导出说明
         → 将下载的 .json 文件放入  export_workspace/drafts/
 
 步骤 2  将对应的原始素材视频放入  export_workspace/videos/
-        文件名必须与导出 JSON 中 sourceVideos[].fileName 一致
-        （即你上传到网页时的原始文件名）
+        文件名必须与草稿中的素材文件名一致
+        （就是你当时上传到网页的那个视频文件名）
 
-步骤 3  如果有配音文件，将其放入  export_workspace/audio/
-        文件名必须与导出 JSON 中 voice.fileName 一致
+步骤 3  把最终配音文件放入  export_workspace/audio/
+        支持格式：mp3 / wav / m4a / aac（大小写均可）
+        放法见下方"三、最终配音文件怎么放"
 
 步骤 4  双击  启动生成视频.bat
         脚本会自动读取 drafts/ 中最新的 JSON，处理完成后
         成品 MP4 输出到  export_workspace/output/
 
 
-三、目录结构说明
+三、最终配音文件怎么放
+-----------------------
+把配音文件放入  export_workspace/audio/  文件夹，规则如下：
+
+情况 1：草稿里记录了语音文件名（精修页导入过配音并导出了草稿）
+  → 把同名音频放进 audio/ 就行
+  → 比如草稿记录了 voice_final.mp3，就放 voice_final.mp3
+
+情况 2：草稿没有记录语音文件名，但 audio/ 文件夹里只有一个音频文件
+  → 脚本会自动使用这个唯一的音频文件，不需要改名
+  → 比如 audio/ 里只有 1.mp3，脚本就直接用 1.mp3
+
+情况 3：草稿没有记录语音文件名，但 audio/ 文件夹里放了多个音频文件
+  → 脚本不会随便选，会报错提示
+  → 解决办法：只保留一个音频文件，或者回到精修页重新导入配音后再导出草稿
+
+情况 4：草稿没有记录语音，audio/ 文件夹里也没有任何音频
+  → 脚本会导出无声视频，并提示"未检测到最终语音文件，本次将导出无声视频"
+
+
+四、目录结构说明
 -----------------
 export_workspace/
   drafts/   ← 放从网页导出的 .json 草稿文件
   videos/   ← 放原始素材视频（文件名必须与草稿一致）
-  audio/    ← 放配音音频文件（mp3/wav/m4a 均可）
+  audio/    ← 放最终配音文件（mp3/wav/m4a/aac 均可）
   output/   ← 生成的成品 MP4 保存在这里
   temp/     ← 临时文件，生成完自动清理，不用管
 
 
-四、高级用法
+五、高级用法
 --------------
 指定某个草稿文件：
   python tools/export_video.py "export_workspace/drafts/你的草稿.json"
 
 
-五、常见问题
+六、常见问题
 --------------
 Q: 提示"找不到素材视频"
 A: 检查 export_workspace/videos/ 中的文件名是否与草稿 JSON 里
    sourceVideos[].fileName 完全一致（包括扩展名大小写）
 
+Q: 提示"剪辑草稿记录了最终语音：xxx.mp3，但在 audio/ 中没有找到"
+A: 把对应的音频文件放入 export_workspace/audio/，文件名要和提示一致
+
+Q: 提示"audio 文件夹里有多个音频文件"
+A: 只保留一个音频文件，把其他的移出去；
+   或者回精修页重新导入配音，再导出草稿
+
 Q: 生成的视频没有声音
-A: 确认配音文件名与草稿 JSON 里 voice.fileName 一致，
-   并放入了 export_workspace/audio/
+A: 检查 audio/ 文件夹里是否有音频文件，格式是否为 mp3/wav/m4a/aac
 
 Q: FFmpeg 报错
 A: 运行 ffmpeg -version 确认 FFmpeg 版本 >= 4.0
 
 
-六、注意事项
+七、注意事项
 --------------
 - 原始视频文件不会被修改，所有操作读取原文件后写到 output/
 - temp/ 目录中的临时片段在生成完成后自动删除
