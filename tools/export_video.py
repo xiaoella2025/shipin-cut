@@ -238,37 +238,25 @@ def concat_segments(clip_paths, out_path):
 # ── 混合配音 ──────────────────────────────────────────────────────────────────
 def mux_voice(video_path, voice_path, out_path, audio_policy):
     """
-    将配音混入视频。
-    audio_policy: { keepOriginal, voiceVolume, musicVolume, ... }
-    此版本仅支持纯配音（不保留原声，不加背景音乐）。
+    将最终语音作为成品唯一音轨合入视频。
+    临时视频由 -an 生成，没有音频轨，所以只取 0:v:0 + 1:a:0。
+    v0.9 暂不支持 amix 原声混合，keepOriginalAudio 为 true 时打印提示后仍走替换逻辑。
     """
     keep_orig = audio_policy.get("keepOriginalAudio", False) if audio_policy else False
-
     if keep_orig:
-        # 原声 + 配音混合
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-i", voice_path,
-            "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first",
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-shortest",
-            out_path,
-        ]
-    else:
-        # 仅配音，视频原声丢弃
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,   # video stream only (was cut with -an, so no audio)
-            "-i", voice_path,
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-shortest",
-            out_path,
-        ]
+        log("提示：当前 v0.9 暂不混合原声，仍使用最终语音作为主音轨。")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-i", voice_path,
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-shortest",
+        out_path,
+    ]
     run(cmd)
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
@@ -328,7 +316,7 @@ def main():
     final_name = f"{safe}_{ts}.mp4"
     final_out  = OUTPUT_DIR / final_name
     if voice_path:
-        log(f"正在合成配音...")
+        log(f"正在合成配音：使用最终语音作为成品音轨")
         mux_voice(concat_out, voice_path, final_out, audio_policy)
         log(f"已合成配音 → {final_name}")
     else:
