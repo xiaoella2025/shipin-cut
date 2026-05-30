@@ -1995,7 +1995,7 @@ export default function App() {
   }
   function saveScript(compId) {
     setRefinedComps(prev=>({...prev,[compId]:{...defaultRcFor(prev[compId]),scriptModified:false,scriptSavedAt:new Date().toISOString()}}))
-    showToast('口播稿已保存')
+    showToast('最终字幕稿已保存')
   }
   function saveCopywriting(compId) {
     setRefinedComps(prev=>({...prev,[compId]:{...defaultRcFor(prev[compId]),copyModified:false,copySavedAt:new Date().toISOString()}}))
@@ -2303,7 +2303,7 @@ export default function App() {
         voiceMeta: null, // cleared once a real file is loaded
         audioPolicy: { ...(defaultRcFor(refinedComps[compId]).audioPolicy), muteOriginalVideo: true },
       })
-      showToast('语音已导入，原视频音频已自动静音')
+      showToast('本条成品配音已导入，原视频音频已自动静音')
     })
     tmp.addEventListener('error', () => showToast('音频文件读取失败'))
   }
@@ -3601,9 +3601,10 @@ export default function App() {
                           <span>字幕汇总稿</span>
                           <span className={`refine-save-status${rc.scriptModified?' dirty':rc.scriptSavedAt?' saved':''}`}>{scriptStatus}</span>
                         </div>
+                        <div className="refine-sc-desc">当前成品的最终字幕稿，也是生成本条配音的文案。可直接修改，也可复制出去给外部 AI 改写后再粘回来。</div>
                         <textarea
                           className="refine-textarea"
-                          placeholder={'点击"从逐句生成"自动填入，或直接粘贴 AI 改写后的口播稿...'}
+                          placeholder={'点击"从逐句生成"自动填入，或直接粘贴 AI 改写后的字幕稿...'}
                           value={scriptText}
                           onChange={e=>updateRefinedComp(comp.id,{summaryScript:e.target.value,scriptModified:true})}
                         />
@@ -3614,12 +3615,23 @@ export default function App() {
                             showToast('已从逐句字幕生成汇总稿')
                           }}>从逐句生成</button>
                           <button className="refine-tb-btn" onClick={()=>{
-                            navigator.clipboard.writeText(scriptText).then(()=>showToast('已复制'))
-                          }} disabled={!scriptText}>复制</button>
+                            navigator.clipboard.writeText(scriptText).then(()=>showToast('已复制')).catch(()=>showToast('复制失败，请手动 Ctrl+C'))
+                          }} disabled={!scriptText}>复制字幕稿</button>
+                          <button className="refine-tb-btn" onClick={async ()=>{
+                            try {
+                              const text = await navigator.clipboard.readText()
+                              if (!text.trim()) { showToast('剪贴板为空'); return }
+                              if (!window.confirm(`是否用剪贴板内容覆盖当前字幕汇总稿？\n\n前100字：\n${text.slice(0,100)}${text.length>100?'...':''}`)) return
+                              updateRefinedComp(comp.id, {summaryScript: text, scriptModified: true})
+                              showToast('已粘贴外部改写稿，点击"保存最终字幕稿"确认')
+                            } catch {
+                              showToast('无法自动读取剪贴板，请直接在上方文本框 Ctrl+V 粘贴')
+                            }
+                          }}>粘贴改写稿</button>
                           <button className="refine-tb-btn" onClick={()=>{
                             downloadTextFile(scriptText,`${comp.name}_字幕稿.txt`)
                           }} disabled={!scriptText}>导出 TXT</button>
-                          <button className="refine-tb-btn success" onClick={()=>saveScript(comp.id)} disabled={!rc.scriptModified}>保存口播稿</button>
+                          <button className="refine-tb-btn success" onClick={()=>saveScript(comp.id)} disabled={!rc.scriptModified}>保存最终字幕稿</button>
                         </div>
                         <div className="refine-prompt-section">
                           <div className="refine-prompt-head">字幕改写提示词 <span className="refine-prompt-hint">（复制后到 DeepSeek/豆包 改写，结果粘回上方）</span></div>
@@ -3780,10 +3792,18 @@ export default function App() {
                     {/* Voice track section */}
                     <div className="refine-voice-track">
                       <div className="refine-vt-head">
-                        <span className="refine-vt-label">最终语音轨道</span>
+                        <span className="refine-vt-label">本条成品配音 <span className="refine-vt-comp-badge">{comp.name}</span></span>
                         <button className="refine-tb-btn primary" onClick={()=>refineVoiceInputRef.current?.click()}>
-                          {voice?'重新导入':'+ 导入语音文件'}
+                          {voice?'更换配音':'+ 导入本条配音'}
                         </button>
+                        {voice&&(
+                          <button className="refine-tb-btn danger" onClick={()=>{
+                            if (!window.confirm('确认删除本条成品的配音？')) return
+                            const a=refineVoiceRef.current; if(a){a.pause();a.src=''}
+                            updateRefinedComp(comp.id,{voice:null,voiceMeta:null})
+                            showToast('本条成品配音已删除')
+                          }}>删除配音</button>
+                        )}
                         <label className={`refine-vt-mute-toggle${muteOriginal?' on':''}`} title="控制预览时原视频的音频是否播放">
                           <input type="checkbox" checked={muteOriginal} onChange={()=>toggleMuteOriginal(comp.id)} style={{display:'none'}}/>
                           {muteOriginal?'原视频已静音':'原视频有声'}
@@ -3804,21 +3824,21 @@ export default function App() {
                             <button className={`refine-tb-btn${refineVoicePlaying?' active':''}`} onClick={()=>{
                               const a=refineVoiceRef.current; if(!a) return
                               refineVoicePlaying?a.pause():a.play().catch(()=>{})
-                            }}>{refineVoicePlaying?'⏸ 暂停':'▶ 播放'}</button>
+                            }}>{refineVoicePlaying?'⏸ 暂停':'▶ 播放配音'}</button>
                             <span className="refine-vt-pos">{fmt(refineVoicePos)} / {fmt(voiceDur)}</span>
                           </div>
                           <div className={`refine-vt-diff${Math.abs(durDiff)<0.5?' ok':durDiff>0?' short':' long'}`}>
                             <span className="refine-vt-diff-item">视频方案时长 <b>{fmt(derivedDur)}</b></span>
-                            <span className="refine-vt-diff-item">最终语音时长 <b>{fmt(voiceDur)}</b></span>
+                            <span className="refine-vt-diff-item">本条配音时长 <b>{fmt(voiceDur)}</b></span>
                             <span className="refine-vt-diff-item">差值：<b>{durDiffStr}</b></span>
                           </div>
                         </div>
                       ):voiceMeta?.fileName?(
                         <div className="refine-vt-empty refine-vt-need-reimport">
-                          方案中记录了 <b>{voiceMeta.fileName}</b>（{fmt(voiceMeta.duration||0)}）。请重新导入同名语音文件以恢复预览。
+                          方案中记录了 <b>{voiceMeta.fileName}</b>（{fmt(voiceMeta.duration||0)}）。请重新导入同名配音文件以恢复预览。
                         </div>
                       ):(
-                        <div className="refine-vt-empty">导入配音文件后，可在此对比视频与语音时长</div>
+                        <div className="refine-vt-empty">导入本条成品的配音后，可在此对比视频时长和配音时长</div>
                       )}
                     </div>
 
@@ -4178,8 +4198,8 @@ export default function App() {
                             <div className="ep-bc3-name">{c.name}</div>
                             <div className="ep-bc3-meta">{fmt2(dur)} · {active.length} 段</div>
                             <div className="ep-bc3-tags">
-                              <span className={`ep-bc3-tag ${v2?'ok':vs2?'warn':'miss'}`}>
-                                {v2?'语音已导入':vs2?'语音需重导':'缺语音'}
+                              <span className={`ep-bc3-tag ${v2?'ok':vs2?'warn':'miss'}`} title={v2?`配音：${v2.fileName||''}`:vs2?`需重导：${vs2.fileName||''}`:'未绑定配音'}>
+                                {v2?`配音：${(v2.fileName||'').slice(0,12)}`:vs2?'配音需重导':'缺配音'}
                               </span>
                               <span className={`ep-bc3-tag ${ud?'warn':'ok'}`}>{ud?'草稿未保存':'草稿已保存'}</span>
                             </div>
