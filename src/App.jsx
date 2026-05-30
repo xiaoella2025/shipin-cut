@@ -4003,290 +4003,278 @@ export default function App() {
               return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
             }
 
+            // ── build action items list for "must handle" zone
+            const mustItems=[]
+            const warnItems=[]
+            if(anomalySegs.length>0)                   mustItems.push(`${anomalySegs.length} 个片段存在异常（缺少源视频或时长为 0）`)
+            if(!ckVideosExist)                          mustItems.push('尚未导入任何视频素材')
+            if(!ckHasSegs||!ckDurOk)                   mustItems.push('当前方案无有效片段或时长为 0')
+            if(!ckVoiceHasFile&&ckVoiceRecorded)       warnItems.push(`语音文件「${voiceSrc?.fileName||voiceSrc?.name}」记录在案，但需要重新导入`)
+            if(!ckVoiceHasFile&&!ckVoiceRecorded)      warnItems.push('尚未导入最终语音文件（如需配音）')
+            if(!ckMuteOriginal&&ckVoiceRecorded)       warnItems.push('已记录最终语音，但原视频声音未关闭')
+            if(!ckJsonExported)                        warnItems.push('精修方案 JSON 尚未导出，建议先存档')
+            if(durDiff!==null&&durDiffAbs>=3)          warnItems.push(`视频（${fmt2(epDur)}）与语音（${fmt2(voiceDur)}）时长相差 ${fmt2(durDiffAbs)}`)
+
             return (
-              <div className="ep-view">
-                {/* ── Top bar ── */}
+              <div className="ep-view ep-view-v2">
+
+                {/* ══ TOP BAR ══ */}
                 <div className="ep-topbar">
                   <button className="ep-back-btn" onClick={()=>setSubStep('refine')}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
                     返回精修
                   </button>
-                  <span className="ep-title">导出准备检查</span>
-                  <span className="ep-comp-name">当前成品：{comp.name}</span>
-                  <div className={`ep-overall-badge ep-badge-${overallStatus}`}>
-                    {overallStatus==='ok'?'✓ 可以进入真实导出准备':overallStatus==='warn'?'⚠ 有警告，但可继续':'✗ 缺少关键内容，请先处理'}
-                  </div>
+                  <span className="ep-title">导出准备工作台</span>
+                  <span className="ep-comp-name">{comp.name}</span>
                 </div>
 
-                {/* ── Main scroll area ── */}
-                <div className="ep-body">
+                {/* ══ SCROLLABLE BODY ══ */}
+                <div className="ep-body ep-body-v2">
 
-                  {/* ── 1. 基础素材检查 ── */}
-                  <div className="ep-section">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">📦</span>
-                      <span className="ep-section-title">1 · 基础素材检查</span>
-                      <span className={`ep-section-badge ${ckCompExists&&ckHasSegs&&ckDurOk&&ckVideosExist?'ok':ckNoAnomalies?'warn':'err'}`}>
-                        {ckCompExists&&ckHasSegs&&ckDurOk&&ckVideosExist&&ckNoAnomalies?'通过':anomalySegs.length>0?'有异常':'通过'}
-                      </span>
+                  {/* ── 区域 1：顶部总览 ── */}
+                  <div className={`ep-hero ep-hero-${overallStatus}`}>
+                    <div className="ep-hero-left">
+                      <div className={`ep-hero-status-dot ep-dot-${overallStatus}`}/>
+                      <div className="ep-hero-text">
+                        <div className="ep-hero-status-label">
+                          {overallStatus==='ok'?'准备完成，可进入导出':overallStatus==='warn'?'有建议项，但可以继续':'缺少关键内容，请先处理'}
+                        </div>
+                        <div className="ep-hero-sub">{comp.name}</div>
+                      </div>
                     </div>
-                    <div className="ep-rows">
-                      <div className={`ep-row ${ckCompExists?'ok':'err'}`}><span className="ep-lbl">当前成品方案</span><span className="ep-val">{ckCompExists?`已选择 · ${comp.name}`:'未选择'}</span></div>
-                      <div className={`ep-row ${ckVideosExist?'ok':'err'}`}><span className="ep-lbl">源视频素材数量</span><span className="ep-val">{uploadedVideos.length} 个{!ckVideosExist&&' ⚠ 请先导入视频'}</span></div>
-                      <div className={`ep-row ${ckHasSegs?'ok':'err'}`}><span className="ep-lbl">最终参与片段</span><span className="ep-val">{activeSegs.length} 段{!ckHasSegs&&' ⚠ 无可用片段'}</span></div>
-                      <div className={`ep-row ${ckDurOk?'ok':'err'}`}><span className="ep-lbl">视频方案总时长</span><span className="ep-val">{fmt2(epDur)}{!ckDurOk&&' ⚠ 时长为 0'}</span></div>
-                      {hasEditSegs&&<div className="ep-row"><span className="ep-lbl">精剪模式小段数</span><span className="ep-val">{cutSegCount} 段（含已删除）</span></div>}
-                      <div className={`ep-row ${deletedEditCount+deletedBaseCount===0?'':'warn'}`}><span className="ep-lbl">已删除小段</span><span className="ep-val">{hasEditSegs?deletedEditCount:deletedBaseCount} 段</span></div>
-                      <div className={`ep-row ${missingVideoSegs.length===0?'ok':'err'}`}><span className="ep-lbl">缺少源视频片段</span><span className="ep-val">{missingVideoSegs.length===0?'无':`${missingVideoSegs.length} 个 ⚠`}</span></div>
-                      <div className={`ep-row ${shortSegs.length===0?'ok':'warn'}`}><span className="ep-lbl">时长过短片段（＜0.2s）</span><span className="ep-val">{shortSegs.length===0?'无':`${shortSegs.length} 个`}</span></div>
-                      <div className={`ep-row ${anomalySegs.length===0?'ok':'err'}`}><span className="ep-lbl">异常片段汇总</span><span className="ep-val">{anomalySegs.length===0?'0 个':'⚠ '+anomalySegs.length+' 个'}</span></div>
-                    </div>
-                  </div>
-
-                  {/* ── 2. 精修方案检查 ── */}
-                  <div className="ep-section">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">✂</span>
-                      <span className="ep-section-title">2 · 精修方案检查</span>
-                      <span className={`ep-section-badge ${ckJsonExported?'ok':'warn'}`}>{ckJsonExported?'已导出 JSON':'建议导出 JSON'}</span>
-                    </div>
-                    <div className="ep-rows">
-                      <div className={`ep-row ${rc.editSegs||rc.deletedSegIdxs?.length||speedCount?'ok':''}`}><span className="ep-lbl">剪辑模式</span><span className="ep-val">{hasEditSegs?'精剪模式（editSegs）':'基础模式（deletedSegIdxs）'}</span></div>
-                      {hasEditSegs&&<div className="ep-row ok"><span className="ep-lbl">切刀小段总数</span><span className="ep-val">{cutSegCount} 段</span></div>}
-                      {hasEditSegs&&<div className="ep-row"><span className="ep-lbl">已删除小段</span><span className="ep-val">{deletedEditCount} 段</span></div>}
-                      {!hasEditSegs&&<div className="ep-row"><span className="ep-lbl">整段删除</span><span className="ep-val">{deletedBaseCount} 段</span></div>}
-                      <div className={`ep-row ${speedCount?'':'ok'}`}><span className="ep-lbl">调速片段</span><span className="ep-val">{speedCount} 段</span></div>
-                      <div className="ep-row ok"><span className="ep-lbl">最终视频时长</span><span className="ep-val">{fmt2(epDur)}</span></div>
-                      <div className={`ep-row ${rc.savedAt?'ok':'warn'}`}><span className="ep-lbl">精修方案已保存</span><span className="ep-val">{rc.savedAt?`已保存 ${rc.savedAt.slice(11,16)}`:'未保存 ⚠'}</span></div>
-                      <div className={`ep-row ${ckJsonExported?'ok':'warn'}`}><span className="ep-lbl">精修方案 JSON 导出</span><span className="ep-val">{ckJsonExported?`已导出 ${rc.planExportedAt?.slice(11,16)}`:'未导出 — 建议先导出作为工程存档'}</span></div>
-                      {rc.planImportedAt&&<div className="ep-row ok"><span className="ep-lbl">上次导入时间</span><span className="ep-val">{rc.planImportedAt.slice(11,16)}</span></div>}
-                    </div>
-                  </div>
-
-                  {/* ── 3. 语音与音频检查 ── */}
-                  <div className="ep-section">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">🎙</span>
-                      <span className="ep-section-title">3 · 语音与音频检查</span>
-                      <span className={`ep-section-badge ${ckVoiceHasFile&&ckMuteOriginal?'ok':ckVoiceRecorded?'warn':'err'}`}>
-                        {ckVoiceHasFile&&ckMuteOriginal?'通过':ckVoiceHasFile?'已导入但原视频未静音':ckVoiceRecorded?'需要重新导入语音':'未导入语音'}
-                      </span>
-                    </div>
-                    <div className="ep-rows">
-                      <div className={`ep-row ${ckVoiceRecorded?'ok':'err'}`}><span className="ep-lbl">最终语音文件</span><span className="ep-val">{voiceSrc?.fileName||voiceSrc?.name||'未记录'}</span></div>
-                      <div className={`ep-row ${ckVoiceHasFile?'ok':ckVoiceRecorded?'warn':'err'}`}><span className="ep-lbl">语音导入状态</span><span className="ep-val">{ckVoiceHasFile?'已导入，可播放':ckVoiceRecorded?`需要重新导入 ${voiceSrc?.fileName||voiceSrc?.name||''}`:'未导入'}</span></div>
-                      <div className={`ep-row ${ckVoiceRecorded?'ok':''}`}><span className="ep-lbl">语音时长</span><span className="ep-val">{ckVoiceRecorded?fmt2(voiceDur):'—'}</span></div>
-                      <div className={`ep-row ${ckMuteOriginal?'ok':'warn'}`}><span className="ep-lbl">原视频声音</span><span className="ep-val">{ckMuteOriginal?'已关闭（推荐）':'未关闭 — 建议关闭，由最终语音替代'}</span></div>
-                      <div className="ep-row"><span className="ep-lbl">主音轨策略</span><span className="ep-val">{muteOriginal?'外部最终语音':'原视频音频保留'}</span></div>
-                      {durDiff!==null&&<div className={`ep-row ${ckDurClose?'ok':'warn'}`}>
-                        <span className="ep-lbl">时长差值</span>
-                        <span className="ep-val">{durDiffAbs<0.5?'基本一致':durDiff>0?`视频短 ${fmt2(durDiffAbs)}`:`视频长 ${fmt2(durDiffAbs)}`}</span>
-                      </div>}
-                      {!ckVoiceHasFile&&ckVoiceRecorded&&(
-                        <div className="ep-notice warn">方案中记录了最终语音文件：<b>{voiceSrc?.fileName||voiceSrc?.name}</b>。真实导出前需要重新导入同名语音文件。</div>
+                    <div className="ep-hero-pills">
+                      <div className="ep-hero-pill">
+                        <span className="ep-hero-pill-lbl">视频时长</span>
+                        <span className="ep-hero-pill-val">{fmt2(epDur)}</span>
+                      </div>
+                      <div className={`ep-hero-pill ${ckVoiceHasFile?'ok':ckVoiceRecorded?'warn':'miss'}`}>
+                        <span className="ep-hero-pill-lbl">最终语音</span>
+                        <span className="ep-hero-pill-val">{ckVoiceHasFile?voiceSrc?.fileName||'已导入':ckVoiceRecorded?'需重新导入':'未导入'}</span>
+                      </div>
+                      <div className={`ep-hero-pill ${ckJsonExported?'ok':'warn'}`}>
+                        <span className="ep-hero-pill-lbl">方案 JSON</span>
+                        <span className="ep-hero-pill-val">{ckJsonExported?`已导出 ${rc.planExportedAt?.slice(11,16)}`:'未导出'}</span>
+                      </div>
+                      <div className="ep-hero-pill">
+                        <span className="ep-hero-pill-lbl">参与片段</span>
+                        <span className="ep-hero-pill-val">{activeSegs.length} 段</span>
+                      </div>
+                      {(mustItems.length+warnItems.length)>0&&(
+                        <div className={`ep-hero-pill ${mustItems.length>0?'err':'warn'}`}>
+                          <span className="ep-hero-pill-lbl">待处理</span>
+                          <span className="ep-hero-pill-val">{mustItems.length+warnItems.length} 项</span>
+                        </div>
                       )}
                     </div>
                   </div>
 
-                  {/* ── 4. 字幕与文案检查 ── */}
-                  <div className="ep-section">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">📝</span>
-                      <span className="ep-section-title">4 · 字幕与文案检查</span>
-                      <span className={`ep-section-badge ${ckScriptExists?'ok':'warn'}`}>{ckScriptExists?'字幕稿已填写':'字幕稿缺失'}</span>
-                    </div>
-                    <div className="ep-rows">
-                      <div className={`ep-row ${ckScriptExists?'ok':'warn'}`}><span className="ep-lbl">字幕汇总稿</span><span className="ep-val">{ckScriptExists?`已填写，约 ${rc.summaryScript.trim().length} 字`:'未填写'}</span></div>
-                      <div className={`ep-row ${ckTitleExists?'ok':''}`}><span className="ep-lbl">最终标题</span><span className="ep-val">{ckTitleExists?cp.finalTitle:'未填写'}</span></div>
-                      <div className={`ep-row ${ckWechatExists?'ok':''}`}><span className="ep-lbl">公众号正文</span><span className="ep-val">{ckWechatExists?`已填写，约 ${cp.finalWechatBody.trim().length} 字`:'未填写'}</span></div>
-                      <div className={`ep-row ${ckXhsExists?'ok':''}`}><span className="ep-lbl">小红书正文</span><span className="ep-val">{ckXhsExists?`已填写，约 ${cp.finalXhs.trim().length} 字`:'未填写'}</span></div>
-                    </div>
-                  </div>
-
-                  {/* ── 5. 剪辑动作检查 ── */}
-                  <div className="ep-section">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">🎬</span>
-                      <span className="ep-section-title">5 · 剪辑动作汇总</span>
-                      <span className="ep-section-badge ok">信息</span>
-                    </div>
-                    <div className="ep-rows">
-                      <div className="ep-row ok"><span className="ep-lbl">剪辑模式</span><span className="ep-val">{hasEditSegs?'精剪模式':'基础删除/调速模式'}</span></div>
-                      {hasEditSegs&&<div className="ep-row"><span className="ep-lbl">切刀后小段总数</span><span className="ep-val">{cutSegCount} 段</span></div>}
-                      {hasEditSegs&&<div className="ep-row warn"><span className="ep-lbl">精剪已删除小段</span><span className="ep-val">{deletedEditCount} 段</span></div>}
-                      {!hasEditSegs&&<div className="ep-row"><span className="ep-lbl">整段删除</span><span className="ep-val">{deletedBaseCount} 段</span></div>}
-                      <div className="ep-row"><span className="ep-lbl">调速片段</span><span className="ep-val">{speedCount > 0 ? `${speedCount} 段` : '无'}</span></div>
-                      {speedEntries.map(([si,sp])=>(
-                        <div key={si} className="ep-row indent"><span className="ep-lbl">片段 {parseInt(si)+1}</span><span className="ep-val">× {sp}{sp<1?' （慢速）':sp>1?' （加速）':''}</span></div>
-                      ))}
-                      <div className="ep-row ok"><span className="ep-lbl">最终参与片段</span><span className="ep-val">{activeSegs.length} 段</span></div>
-                      <div className="ep-row ok"><span className="ep-lbl">最终视频时长</span><span className="ep-val">{fmt2(epDur)}</span></div>
-                    </div>
-                  </div>
-
-                  {/* ── 6. 导出设置 / 去重包装设置 (v0.8.2) ── */}
-                  <div className="ep-section">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">⚙</span>
-                      <span className="ep-section-title">6 · 导出设置 / 去重包装设置</span>
-                      <span className="ep-section-badge info">v0.9 执行</span>
-                    </div>
-                    <div className="ep-rows">
-                      <div className="ep-notice ok" style={{marginBottom:6}}>
-                        以下设置仅作为导出方案保存，当前版本不生成视频。v0.9 接入本地 FFmpeg 后，将按这些设置生成视频。
+                  {/* ── 区域 2：必须处理 / 建议处理 ── */}
+                  {(mustItems.length>0||warnItems.length>0)?(
+                    <div className="ep-action-zone">
+                      {mustItems.length>0&&(
+                        <div className="ep-az-block err">
+                          <div className="ep-az-head">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                            必须处理
+                          </div>
+                          {mustItems.map((m,i)=><div key={i} className="ep-az-item">{m}</div>)}
+                        </div>
+                      )}
+                      {warnItems.length>0&&(
+                        <div className="ep-az-block warn">
+                          <div className="ep-az-head">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            建议处理
+                          </div>
+                          {warnItems.map((m,i)=><div key={i} className="ep-az-item">{m}</div>)}
+                        </div>
+                      )}
+                      <div className="ep-az-btns">
+                        <button className="ep-az-btn" onClick={()=>setSubStep('refine')}>→ 返回精修页处理</button>
+                        {!ckJsonExported&&<button className="ep-az-btn accent" onClick={()=>exportRefinePlan(comp.id,comp)}>导出方案 JSON</button>}
+                        <button className="ep-az-btn subtle" onClick={()=>{ setSubStep('cut'); setTimeout(()=>setSubStep('export-prep'),0) }}>刷新检查</button>
                       </div>
                     </div>
+                  ):(
+                    <div className="ep-all-clear">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6ee7b7" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      当前没有关键缺失，可以检查导出设置后进行下一步。
+                    </div>
+                  )}
 
-                    {/* 画面包装 */}
-                    <div className="ep-subsection">
-                      <div className="ep-sub-head">画面包装 / 去重处理</div>
-                      <div className="ep-dedup-grid">
-                        {[['crop','裁剪边缘','◰'],['scale','轻微缩放','⊞'],['mirror','镜像翻转','⇔'],
-                          ['speed','变速处理','⏩'],['bgImage','背景底图','▣'],['picInPic','可见画中画','⧉'],
-                          ['subDistort','字幕扰动','T'],['endImage','片尾图片','⬜']].map(([k,label,ico])=>(
-                          <label key={k} className={`ep-dedup-chip ${dedup[k]?'on':''}`}>
-                            <input type="checkbox" checked={dedup[k]} onChange={()=>toggleDedup(k)}/>
-                            <span className="ep-dedup-ico">{ico}</span><span>{label}</span>
-                          </label>
-                        ))}
-                      </div>
+                  {/* ── 区域 3：导出设置（主操作区）── */}
+                  <div className="ep-card ep-settings-card">
+                    <div className="ep-card-head">
+                      <span className="ep-card-icon">⚙</span>
+                      <span className="ep-card-title">导出设置 / 去重包装</span>
+                      <span className="ep-card-badge">设置后写入方案 JSON · v0.9 执行</span>
                     </div>
 
-                    {/* 画面比例 & 混剪强度 */}
-                    <div className="ep-subsection">
-                      <div className="ep-sub-head">画面比例</div>
-                      <div className="ep-btn-row">
-                        {[['9:16','竖屏'],['1:1','方形'],['16:9','横屏']].map(([r,desc])=>(
-                          <button key={r} className={`ep-opt-btn ${ratio===r?'active':''}`} onClick={()=>setRatio(r)}>{r} <small>{desc}</small></button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="ep-subsection">
-                      <div className="ep-sub-head">混剪强度</div>
-                      <div className="ep-btn-row">
-                        {[['light','轻度'],['medium','中度'],['strong','强力']].map(([k,label])=>(
-                          <button key={k} className={`ep-opt-btn ${intensity===k?'active':''}`} onClick={()=>setIntensity(k)}>{label}</button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* 输出规格 */}
-                    <div className="ep-subsection">
-                      <div className="ep-sub-head">输出规格</div>
-                      <div className="ep-spec-grid">
-                        <div className="ep-spec-row">
-                          <span className="ep-spec-lbl">分辨率</span>
-                          <div className="ep-btn-row">
-                            {['720p','1080p'].map(r=><button key={r} className={`ep-opt-btn ${exportRes===r?'active':''}`} onClick={()=>setExportRes(r)}>{r}</button>)}
+                    <div className="ep-settings-grid">
+                      {/* 输出规格 */}
+                      <div className="ep-sg-block">
+                        <div className="ep-sg-title">输出规格</div>
+                        <div className="ep-sg-row">
+                          <span className="ep-sg-lbl">画面比例</span>
+                          <div className="ep-sg-btns">
+                            {[['9:16','竖屏'],['1:1','方形'],['16:9','横屏']].map(([r,desc])=>(
+                              <button key={r} className={`ep-sg-btn ${ratio===r?'active':''}`} onClick={()=>setRatio(r)}>{r}<small>{desc}</small></button>
+                            ))}
                           </div>
                         </div>
-                        <div className="ep-spec-row">
-                          <span className="ep-spec-lbl">帧率</span>
-                          <div className="ep-btn-row">
-                            {['24fps','30fps','60fps'].map(f=><button key={f} className={`ep-opt-btn ${exportFps===f?'active':''}`} onClick={()=>setExportFps(f)}>{f}</button>)}
+                        <div className="ep-sg-row">
+                          <span className="ep-sg-lbl">分辨率</span>
+                          <div className="ep-sg-btns">
+                            {['720p','1080p'].map(r=><button key={r} className={`ep-sg-btn ${exportRes===r?'active':''}`} onClick={()=>setExportRes(r)}>{r}</button>)}
+                          </div>
+                        </div>
+                        <div className="ep-sg-row">
+                          <span className="ep-sg-lbl">帧率</span>
+                          <div className="ep-sg-btns">
+                            {['24fps','30fps','60fps'].map(f=><button key={f} className={`ep-sg-btn ${exportFps===f?'active':''}`} onClick={()=>setExportFps(f)}>{f}</button>)}
+                          </div>
+                        </div>
+                        <div className="ep-sg-row">
+                          <span className="ep-sg-lbl">混剪强度</span>
+                          <div className="ep-sg-btns">
+                            {[['light','轻度'],['medium','中度'],['strong','强力']].map(([k,l])=>(
+                              <button key={k} className={`ep-sg-btn ${intensity===k?'active':''}`} onClick={()=>setIntensity(k)}>{l}</button>
+                            ))}
                           </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* 音频设置 */}
-                    <div className="ep-subsection">
-                      <div className="ep-sub-head">音频设置</div>
-                      <div className="ep-toggle-row">
-                        <label className={`ep-toggle-label ${keepAudio?'on':''}`}>
-                          <input type="checkbox" checked={keepAudio} onChange={()=>setKeepAudio(v=>!v)} style={{display:'none'}}/>
-                          <span className={`ep-toggle-pill ${keepAudio?'on':''}`}/>
-                          保留原声
-                        </label>
-                        <label className={`ep-toggle-label ${addMusic?'on':''}`}>
-                          <input type="checkbox" checked={addMusic} onChange={()=>setAddMusic(v=>!v)} style={{display:'none'}}/>
-                          <span className={`ep-toggle-pill ${addMusic?'on':''}`}/>
-                          背景音乐
-                        </label>
+                      {/* 画面去重 */}
+                      <div className="ep-sg-block">
+                        <div className="ep-sg-title">画面去重处理 <small>({Object.values(dedup).filter(Boolean).length}/8 已启用)</small></div>
+                        <div className="ep-sg-dedup">
+                          {[['crop','裁剪边缘','◰'],['scale','轻微缩放','⊞'],['mirror','镜像翻转','⇔'],
+                            ['speed','变速处理','⏩'],['bgImage','背景底图','▣'],['picInPic','可见画中画','⧉'],
+                            ['subDistort','字幕扰动','T'],['endImage','片尾图片','⬜']].map(([k,label,ico])=>(
+                            <label key={k} className={`ep-dedup-chip ${dedup[k]?'on':''}`}>
+                              <input type="checkbox" checked={dedup[k]} onChange={()=>toggleDedup(k)}/>
+                              <span className="ep-dedup-ico">{ico}</span><span>{label}</span>
+                            </label>
+                          ))}
+                        </div>
                       </div>
-                    </div>
 
-                    {/* 字幕包装 */}
-                    <div className="ep-subsection">
-                      <div className="ep-sub-head">字幕包装</div>
-                      <div className="ep-toggle-row">
-                        <label className={`ep-toggle-label ${autoSub?'on':''}`}>
-                          <input type="checkbox" checked={autoSub} onChange={()=>setAutoSub(v=>!v)} style={{display:'none'}}/>
-                          <span className={`ep-toggle-pill ${autoSub?'on':''}`}/>
-                          自动字幕
-                        </label>
-                      </div>
-                      <div className="ep-spec-row" style={{marginTop:6}}>
-                        <span className="ep-spec-lbl">字幕位置</span>
-                        <select className="ep-select" value={subPos} onChange={e=>setSubPos(e.target.value)}>
-                          <option value="bottom">底部</option>
-                          <option value="middle">中部</option>
-                          <option value="top">顶部</option>
-                        </select>
+                      {/* 音频 & 字幕 */}
+                      <div className="ep-sg-block">
+                        <div className="ep-sg-title">音频 & 字幕</div>
+                        <div className="ep-sg-toggles">
+                          {[['keepAudio','保留原声',keepAudio,()=>setKeepAudio(v=>!v)],
+                            ['addMusic','背景音乐',addMusic,()=>setAddMusic(v=>!v)],
+                            ['autoSub','自动字幕',autoSub,()=>setAutoSub(v=>!v)]
+                          ].map(([k,label,val,toggle])=>(
+                            <label key={k} className={`ep-toggle-label ${val?'on':''}`} onClick={toggle}>
+                              <span className={`ep-toggle-pill ${val?'on':''}`}/>
+                              {label}
+                            </label>
+                          ))}
+                          <div className="ep-sg-row" style={{marginTop:4}}>
+                            <span className="ep-sg-lbl">字幕位置</span>
+                            <select className="ep-select" value={subPos} onChange={e=>setSubPos(e.target.value)}>
+                              <option value="bottom">底部</option>
+                              <option value="middle">中部</option>
+                              <option value="top">顶部</option>
+                            </select>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* ── 7. 导出风险提示 ── */}
-                  <div className="ep-section">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">⚠</span>
-                      <span className="ep-section-title">7 · 导出风险提示</span>
-                      <span className={`ep-section-badge ${overallStatus==='ok'?'ok':overallStatus==='warn'?'warn':'err'}`}>
-                        {overallStatus==='ok'?'无阻断风险':overallStatus==='warn'?'有建议项':'有需要处理项'}
+                  {/* ── 区域 4：详细检查（折叠）── */}
+                  <details className="ep-details-wrap">
+                    <summary className="ep-details-summary">
+                      <span>详细检查报告</span>
+                      <span className={`ep-det-badge ep-badge-${overallStatus}`}>
+                        {overallStatus==='ok'?'全部通过':overallStatus==='warn'?`${warnItems.length} 项建议`:`${mustItems.length} 项待处理`}
                       </span>
-                    </div>
-                    <div className="ep-rows">
-                      {!ckVoiceHasFile&&ckVoiceRecorded&&<div className="ep-notice warn">语音文件「{voiceSrc?.fileName||voiceSrc?.name}」需要重新导入，真实导出前必须完成。</div>}
-                      {!ckVoiceHasFile&&!ckVoiceRecorded&&<div className="ep-notice warn">尚未导入最终语音文件。如不需要配音可忽略。</div>}
-                      {!ckMuteOriginal&&ckVoiceRecorded&&<div className="ep-notice warn">导入了最终语音，但原视频声音未关闭。建议在精修页语音轨道中关闭原视频声音。</div>}
-                      {!ckJsonExported&&<div className="ep-notice warn">精修方案 JSON 尚未导出。建议先导出作为工程存档，防止浏览器刷新丢失方案。</div>}
-                      {durDiff!==null&&durDiffAbs>=3&&<div className="ep-notice warn">视频方案时长（{fmt2(epDur)}）与语音时长（{fmt2(voiceDur)}）相差 {fmt2(durDiffAbs)}，请确认是否合理。</div>}
-                      {anomalySegs.length>0&&<div className="ep-notice err">{anomalySegs.length} 个片段存在异常（缺少源视频或时长为 0），真实导出可能失败。</div>}
-                      {allCritical&&allWarnings&&<div className="ep-notice ok">关键项和建议项均通过，可以进入真实导出准备阶段。</div>}
-                      {allCritical&&!allWarnings&&<div className="ep-notice ok">关键项已通过，有部分建议项可优化，视需求决定是否处理后再导出。</div>}
-                    </div>
-                  </div>
+                    </summary>
+                    <div className="ep-details-body">
 
-                  {/* ── 7. 后续遗留任务提示 ── */}
-                  <div className="ep-section ep-section-todo">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">📌</span>
-                      <span className="ep-section-title">8 · 后续遗留整理任务</span>
-                      <span className="ep-section-badge info">规划中</span>
-                    </div>
-                    <div className="ep-rows">
-                      <div className="ep-todo-item">
-                        <div className="ep-todo-ver">v0.8.1</div>
-                        <div className="ep-todo-body">
-                          <div className="ep-todo-title">第一页素材入口整理</div>
-                          <div className="ep-todo-desc">当前第一页导入入口较多，需统一梳理：视频素材入口保留在第一页；字幕入口说明清楚（导入已识别字幕 JSON / 本地批量识别）；最终语音和精修方案 JSON 不放第一页主入口，分别移至精修页和导出准备页。第一页应成为清晰的素材入口页。</div>
+                      {/* 基础素材 */}
+                      <div className="ep-det-section">
+                        <div className="ep-det-head">
+                          <span>基础素材</span>
+                          <span className={`ep-det-badge-sm ${ckCompExists&&ckHasSegs&&ckDurOk&&ckVideosExist&&ckNoAnomalies?'ok':anomalySegs.length>0?'err':'warn'}`}>
+                            {ckCompExists&&ckHasSegs&&ckDurOk&&ckVideosExist&&ckNoAnomalies?'通过':anomalySegs.length>0?'有异常':'注意'}
+                          </span>
+                        </div>
+                        <div className="ep-det-rows">
+                          <div className={`ep-det-row ${ckVideosExist?'ok':'err'}`}><span>源视频</span><span>{uploadedVideos.length} 个</span></div>
+                          <div className={`ep-det-row ${ckHasSegs?'ok':'err'}`}><span>参与片段</span><span>{activeSegs.length} 段</span></div>
+                          <div className={`ep-det-row ${ckDurOk?'ok':'err'}`}><span>视频总时长</span><span>{fmt2(epDur)}</span></div>
+                          <div className={`ep-det-row ${missingVideoSegs.length===0?'ok':'err'}`}><span>缺少源视频</span><span>{missingVideoSegs.length===0?'无':'⚠ '+missingVideoSegs.length+' 个'}</span></div>
+                          <div className={`ep-det-row ${anomalySegs.length===0?'ok':'err'}`}><span>异常片段</span><span>{anomalySegs.length===0?'无':'⚠ '+anomalySegs.length+' 个'}</span></div>
                         </div>
                       </div>
-                      <div className="ep-todo-item">
-                        <div className="ep-todo-ver">v0.8.2</div>
-                        <div className="ep-todo-body">
-                          <div className="ep-todo-title">第二页导出/去重按钮归位</div>
-                          <div className="ep-todo-desc">当前第二页（字幕分段/组合方案）中仍有裁剪边缘、轻微缩放、镜像翻转、变速处理、背景底图、画中画、字幕扰动、片尾图片、分辨率、帧率、音频、字幕位置等导出相关按钮。这些应后移至导出设置页。字幕分段页只负责字幕/分段；组合方案页只负责生成/预览/替换；精修页只负责最终字幕/语音/切刀；导出设置页统一负责所有导出参数和去重处理。</div>
-                        </div>
-                      </div>
-                      <div className="ep-todo-item">
-                        <div className="ep-todo-ver">v0.9</div>
-                        <div className="ep-todo-body">
-                          <div className="ep-todo-title">真实导出（FFmpeg 拼接）</div>
-                          <div className="ep-todo-desc">完成导出准备检查后，引入 FFmpeg WASM 或本地服务端，执行：片段拼接、调速、音轨合并（最终语音替换原视频音频）、字幕烧录、导出 MP4。本阶段不实现。</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* ── 8. 底部操作 ── */}
-                  <div className="ep-section ep-actions-section">
-                    <div className="ep-section-head">
-                      <span className="ep-section-icon">▶</span>
-                      <span className="ep-section-title">9 · 下一步操作</span>
+                      {/* 精修方案 */}
+                      <div className="ep-det-section">
+                        <div className="ep-det-head">
+                          <span>精修方案</span>
+                          <span className={`ep-det-badge-sm ${ckJsonExported?'ok':'warn'}`}>{ckJsonExported?'JSON 已导出':'建议导出'}</span>
+                        </div>
+                        <div className="ep-det-rows">
+                          <div className="ep-det-row"><span>剪辑模式</span><span>{hasEditSegs?'精剪模式':'基础模式'}</span></div>
+                          <div className="ep-det-row"><span>删除小段</span><span>{hasEditSegs?deletedEditCount:deletedBaseCount} 段</span></div>
+                          <div className="ep-det-row"><span>调速片段</span><span>{speedCount} 段</span></div>
+                          <div className={`ep-det-row ${rc.savedAt?'ok':'warn'}`}><span>方案已保存</span><span>{rc.savedAt?`${rc.savedAt.slice(11,16)}`:'未保存'}</span></div>
+                          <div className={`ep-det-row ${ckJsonExported?'ok':'warn'}`}><span>JSON 导出</span><span>{ckJsonExported?`${rc.planExportedAt?.slice(11,16)}`:'未导出'}</span></div>
+                        </div>
+                      </div>
+
+                      {/* 语音与音频 */}
+                      <div className="ep-det-section">
+                        <div className="ep-det-head">
+                          <span>语音与音频</span>
+                          <span className={`ep-det-badge-sm ${ckVoiceHasFile&&ckMuteOriginal?'ok':ckVoiceRecorded?'warn':'err'}`}>
+                            {ckVoiceHasFile&&ckMuteOriginal?'通过':ckVoiceHasFile?'未静音':ckVoiceRecorded?'需重新导入':'未导入'}
+                          </span>
+                        </div>
+                        <div className="ep-det-rows">
+                          <div className={`ep-det-row ${ckVoiceRecorded?'ok':'err'}`}><span>语音文件</span><span>{voiceSrc?.fileName||voiceSrc?.name||'未记录'}</span></div>
+                          <div className={`ep-det-row ${ckVoiceHasFile?'ok':ckVoiceRecorded?'warn':'err'}`}><span>导入状态</span><span>{ckVoiceHasFile?'已导入':ckVoiceRecorded?'需重新导入':'未导入'}</span></div>
+                          <div className="ep-det-row"><span>语音时长</span><span>{ckVoiceRecorded?fmt2(voiceDur):'—'}</span></div>
+                          <div className={`ep-det-row ${ckMuteOriginal?'ok':'warn'}`}><span>原视频声音</span><span>{ckMuteOriginal?'已关闭':'未关闭'}</span></div>
+                          {durDiff!==null&&<div className={`ep-det-row ${ckDurClose?'ok':'warn'}`}><span>时长差值</span><span>{durDiffAbs<0.5?'基本一致':durDiff>0?`视频短 ${fmt2(durDiffAbs)}`:`视频长 ${fmt2(durDiffAbs)}`}</span></div>}
+                        </div>
+                      </div>
+
+                      {/* 字幕与文案 */}
+                      <div className="ep-det-section">
+                        <div className="ep-det-head">
+                          <span>字幕与文案</span>
+                          <span className={`ep-det-badge-sm ${ckScriptExists?'ok':'warn'}`}>{ckScriptExists?'字幕稿已填写':'字幕稿缺失'}</span>
+                        </div>
+                        <div className="ep-det-rows">
+                          <div className={`ep-det-row ${ckScriptExists?'ok':'warn'}`}><span>字幕汇总稿</span><span>{ckScriptExists?`约 ${rc.summaryScript.trim().length} 字`:'未填写'}</span></div>
+                          <div className={`ep-det-row ${ckTitleExists?'ok':''}`}><span>最终标题</span><span>{ckTitleExists?cp.finalTitle:'未填写'}</span></div>
+                          <div className={`ep-det-row ${ckWechatExists?'ok':''}`}><span>公众号正文</span><span>{ckWechatExists?`约 ${cp.finalWechatBody.trim().length} 字`:'未填写'}</span></div>
+                          <div className={`ep-det-row ${ckXhsExists?'ok':''}`}><span>小红书正文</span><span>{ckXhsExists?`约 ${cp.finalXhs.trim().length} 字`:'未填写'}</span></div>
+                        </div>
+                      </div>
+
+                      {/* 剪辑动作 */}
+                      <div className="ep-det-section">
+                        <div className="ep-det-head"><span>剪辑动作</span><span className="ep-det-badge-sm ok">信息</span></div>
+                        <div className="ep-det-rows">
+                          <div className="ep-det-row"><span>模式</span><span>{hasEditSegs?'精剪':'基础删除/调速'}</span></div>
+                          {hasEditSegs&&<div className="ep-det-row"><span>切刀小段</span><span>{cutSegCount} 段</span></div>}
+                          <div className="ep-det-row"><span>调速</span><span>{speedCount>0?`${speedCount} 段`:'无'}</span></div>
+                          <div className="ep-det-row ok"><span>最终片段</span><span>{activeSegs.length} 段 · {fmt2(epDur)}</span></div>
+                        </div>
+                      </div>
+
                     </div>
-                    <div className="ep-action-row">
+                  </details>
+
+                  {/* ── 底部操作 ── */}
+                  <div className="ep-footer-bar">
+                    <div className="ep-footer-left">
                       <button className="ep-act-btn secondary" onClick={()=>setSubStep('refine')}>
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
                         返回精修页
@@ -4303,13 +4291,24 @@ export default function App() {
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
                         刷新检查
                       </button>
-                      <button className="ep-act-btn disabled" disabled title="真实导出将在 v0.9 实现">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                        进入真实导出
-                        <span className="ep-act-btn-sub">v0.9 实现</span>
-                      </button>
                     </div>
+                    <button className="ep-act-btn disabled" disabled title="真实导出将在 v0.9 实现">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      进入真实导出
+                      <span className="ep-act-btn-sub">v0.9 实现</span>
+                    </button>
                   </div>
+
+                  {/* ── 路线备注（折叠，底部最小化）── */}
+                  <details className="ep-roadmap-wrap">
+                    <summary className="ep-roadmap-summary">开发路线备注</summary>
+                    <div className="ep-roadmap-body">
+                      <span className="ep-rm-item done">v0.8.1 第一页素材入口整理 ✓</span>
+                      <span className="ep-rm-item done">v0.8.2 第二页导出/去重按钮归位 ✓</span>
+                      <span className="ep-rm-item done">v0.8.3 导出准备页操作化改造 ✓</span>
+                      <span className="ep-rm-item todo">v0.9 本地 FFmpeg 真实导出（待开发）</span>
+                    </div>
+                  </details>
 
                 </div>
               </div>
