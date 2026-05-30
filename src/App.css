@@ -11355,3 +11355,70 @@ input[type=range] {
   font-size: 10.5px;
   color: #8fca8f;
 }
+
+/* ── v0.9.1 网页一键导出 ── */
+.ep-export-main-area {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ep-export-main-btn {
+  background: #1a6b3a !important;
+  border: 1px solid #2ea05a !important;
+  color: #c8f0d8 !important;
+  font-size: 13px !important;
+  padding: 7px 16px !important;
+  border-radius: 8px !important;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ep-export-main-btn:hover:not(:disabled) {
+  background: #226e42 !important;
+}
+.ep-export-main-btn:disabled,
+.ep-export-main-btn.loading {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.ep-export-status-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: center;
+  min-height: 32px;
+}
+.ep-export-hint-text {
+  font-size: 11px;
+  color: #7a9a7a;
+  line-height: 1.4;
+}
+.ep-export-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.ep-export-status svg { flex-shrink: 0; margin-top: 2px; }
+.ep-export-status.loading { color: #9dbfad; }
+.ep-export-status.success { color: #6ecb8a; }
+.ep-export-status.error   { color: #e07070; }
+.ep-export-reset-btn {
+  background: none;
+  border: 1px solid #3a3a3a;
+  color: #888;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.ep-export-reset-btn:hover { border-color: #666; color: #bbb; }
+@keyframes ep-spin { to { transform: rotate(360deg); } }
+.ep-spin { animation: ep-spin 1.2s linear infinite; }

@@ -1055,6 +1055,10 @@ export default function App() {
   // ── export-prep selected comp (v0.8.3-hotfix) ──
   const [epSelCompId, setEpSelCompId]           = useState(null)
 
+  // ── export-prep local export service (v0.9.1) ──
+  const [epExportStatus, setEpExportStatus]     = useState('idle') // 'idle'|'loading'|'success'|'error'
+  const [epExportMsg, setEpExportMsg]           = useState('')
+
   // ── step-2 refine (v0.7) ──
   const [refineCompId, setRefineCompId]         = useState(null)
   const [refineMarks, setRefineMarks]           = useState({})      // {compId:[{id,type,targetType,segIdx,subIdx,compStart,compEnd}]}
@@ -2085,6 +2089,97 @@ export default function App() {
     URL.revokeObjectURL(url)
     setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), planExportedAt: now } }))
     showToast('方案 JSON 已导出')
+  }
+
+  // v0.9.1: POST 当前草稿到本地导出服务
+  async function exportToLocalService(compId, comp) {
+    if (!compId || !comp) return
+    const rc = defaultRcFor(refinedComps[compId])
+    const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
+    const { segments: derivedSegs, totalDuration } = hasEditSegs
+      ? buildEditTimeline(rc.editSegs)
+      : buildDerivedTimeline(comp, rc.deletedSegIdxs, rc.speedMap)
+    const voiceSrc = rc.voice || rc.voiceMeta || null
+    const exportedVoice = voiceSrc ? {
+      fileName: voiceSrc.fileName || voiceSrc.name || '',
+      fileType: voiceSrc.fileType || '',
+      duration: voiceSrc.duration || 0,
+      importedAt: voiceSrc.importedAt || '',
+      source: voiceSrc.source || 'external',
+    } : null
+    const voiceDuration = voiceSrc?.duration ?? 0
+    const durationDiff = voiceSrc ? (voiceDuration - totalDuration) : null
+    const now = new Date().toISOString()
+    const payload = {
+      version: '0.9.1',
+      type: 'refine-plan',
+      exportedAt: now,
+      compositionId: compId,
+      compositionName: comp.name,
+      summaryScript: rc.summaryScript,
+      copywriting: rc.copywriting,
+      audioPolicy: rc.audioPolicy,
+      deletedSegIdxs: rc.deletedSegIdxs,
+      speedMap: rc.speedMap,
+      editSegs: rc.editSegs,
+      voice: exportedVoice,
+      exportSettings: {
+        aspectRatio: ratio, resolution: exportRes, fps: exportFps,
+        cropEdge: dedup.crop||false, slightZoom: dedup.scale||false,
+        mirrorFlip: dedup.mirror||false, speedProcess: dedup.speed||false,
+        backgroundBase: dedup.bgImage||false, visiblePip: dedup.picInPic||false,
+        subtitleJitter: dedup.subDistort||false, endCardImage: dedup.endImage||false,
+        keepOriginalAudio: keepAudio, backgroundMusic: addMusic,
+        autoSubtitle: autoSub, subtitlePosition: subPos, mixStrength: intensity,
+      },
+      sourceVideos: uploadedVideos.map((v, idx) => ({
+        index: idx, fileName: v.name, duration: v.dur,
+      })),
+      derivedTimeline: derivedSegs.map(ds => ({
+        esId: ds.esId ?? null, segIdx: ds.segIdx ?? null,
+        label: ds.seg.label, type: ds.seg.type,
+        videoIndex: ds.seg.videoIndex,
+        startSec: ds.seg.startSec, endSec: ds.seg.endSec,
+        speed: ds.speed, compStart: ds.compStart, compEnd: ds.compEnd,
+        actualDur: ds.actualDur,
+      })),
+      totalDuration,
+      voiceDuration: voiceSrc ? voiceDuration : null,
+      durationDiff,
+    }
+    setEpExportStatus('loading')
+    setEpExportMsg('正在生成成品视频，请稍候...')
+    let result
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 10 * 60 * 1000) // 10 min
+      const resp = await fetch('http://127.0.0.1:8765/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+      result = await resp.json()
+    } catch (e) {
+      const isConnRefused = e instanceof TypeError || (e.name === 'AbortError' && false)
+      setEpExportStatus('error')
+      if (isConnRefused && !(e.name === 'AbortError')) {
+        setEpExportMsg('本地导出服务未启动。请先双击「启动本地导出服务.bat」，然后再点击「导出成品视频」。')
+      } else if (e.name === 'AbortError') {
+        setEpExportMsg('请求超时（超过10分钟），请检查服务窗口日志。')
+      } else {
+        setEpExportMsg(`网络错误：${e.message}`)
+      }
+      return
+    }
+    if (result.ok) {
+      setEpExportStatus('success')
+      setEpExportMsg(result.message || '生成成功！成品视频已保存到 export_workspace/output/')
+    } else {
+      setEpExportStatus('error')
+      setEpExportMsg(result.error || '生成失败，请查看服务窗口日志。')
+    }
   }
 
   // v0.7.6: Import refine plan from JSON file
@@ -4384,17 +4479,42 @@ export default function App() {
                         导出剪辑草稿
                       </button>
                     </div>
-                    <div className="ep-export-v9-hint">
-                      <button className="ep-act-btn" onClick={()=>exportRefinePlan(selComp.id,selComp)}>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        导出草稿 JSON
+                    <div className="ep-export-main-area">
+                      <button
+                        className={`ep-act-btn ep-export-main-btn${epExportStatus==='loading'?' loading':''}`}
+                        disabled={epExportStatus==='loading'}
+                        onClick={()=>exportToLocalService(selComp.id,selComp)}
+                      >
+                        {epExportStatus==='loading'
+                          ? <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="ep-spin"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>生成中...</>
+                          : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>导出成品视频</>
+                        }
                       </button>
-                      <span className="ep-v9-arrow">→</span>
-                      <span className="ep-v9-step">放入 export_workspace/drafts/</span>
-                      <span className="ep-v9-arrow">→</span>
-                      <span className="ep-v9-step">双击 <code>启动生成视频.bat</code></span>
-                      <span className="ep-v9-arrow">→</span>
-                      <span className="ep-v9-step">export_workspace/output/ 取成品</span>
+                      <div className="ep-export-status-col">
+                        {epExportStatus==='idle' && (
+                          <span className="ep-export-hint-text">
+                            需先双击「启动本地导出服务.bat」 · 原视频放 videos/ · 配音放 audio/
+                          </span>
+                        )}
+                        {epExportStatus==='loading' && (
+                          <span className="ep-export-status loading">正在生成成品视频，请稍候...</span>
+                        )}
+                        {epExportStatus==='success' && (
+                          <span className="ep-export-status success">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                            {epExportMsg}
+                          </span>
+                        )}
+                        {epExportStatus==='error' && (
+                          <span className="ep-export-status error">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                            {epExportMsg}
+                          </span>
+                        )}
+                        {epExportStatus!=='idle' && (
+                          <button className="ep-export-reset-btn" onClick={()=>{setEpExportStatus('idle');setEpExportMsg('')}}>重置</button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -4405,6 +4525,7 @@ export default function App() {
                       <span className="ep-rm-item done">v0.8.1 第一页素材入口整理：已完成</span>
                       <span className="ep-rm-item done">v0.8.2 第二页导出/去重按钮归位：已完成</span>
                       <span className="ep-rm-item done">v0.9 本地生成成品视频：export_video.py + 启动生成视频.bat 已完成</span>
+                      <span className="ep-rm-item done">v0.9.1 网页一键导出：本地服务 + 导出成品视频按钮 已完成</span>
                     </div>
                   </details>
 
