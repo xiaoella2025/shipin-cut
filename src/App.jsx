@@ -2540,17 +2540,17 @@ export default function App() {
           <div className="s1-bar">
             <button className="s1-upload-btn" onClick={handleImportClick}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              选择本地视频文件
+              导入视频素材
             </button>
             {uploadedVideos.length>0&&<span className="s1-count">已导入 <strong>{uploadedVideos.length}</strong> 个视频 · 总时长 {fmt(totalDuration)}</span>}
-            <span className="s1-hint">支持 MP4 · MOV · AVI · 多选 · 不上传服务器</span>
+            <span className="s1-hint">支持 MP4 · MOV · AVI · 多选 · 仅本地处理，不上传服务器</span>
           </div>
           <div className="s1-content">
             {uploadedVideos.length===0?(
               <div className="s1-empty" onClick={handleImportClick}>
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.2"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
-                <p>点击选择本地视频文件，或拖拽到这里</p>
-                <span>支持多选 · 文件仅在本地处理，不会上传到任何服务器</span>
+                <p>点击或拖拽导入本地视频文件</p>
+                <span>支持多选 · 仅在本地处理，不会上传到任何服务器</span>
               </div>
             ):(
               <div className="s1-video-grid">
@@ -2577,22 +2577,55 @@ export default function App() {
                 </div>
               </div>
             )}
-            <div className="s1-other-assets">
-              <div className="s1-other-title">其他素材（后续版本接入）</div>
-              <div className="s1-other-row">
-                {[{icon:'🖼',label:'图片 / 贴图',sub:'3 个预置',tip:'图片上传将在后续版本接入'},{icon:'🎵',label:'音乐 / 音效',sub:'背景音乐.mp3',tip:'音频上传将在后续版本接入'},{icon:'T',label:'字幕 / 文案',sub:'3 条预置',tip:'字幕上传将在后续版本接入'}].map(({icon,label,sub,tip})=>(
-                  <div key={label} className="s1-other-item" onClick={()=>showToast(tip)}>
-                    <span className="s1-other-icon">{icon}</span>
-                    <div><div className="s1-other-label">{label}</div><div className="s1-other-sub">{sub}</div></div>
-                    <span className="s1-other-badge">模拟</span>
+            {/* v0.8.1: 素材说明指引，明确每类素材在哪一步处理 */}
+            <div className="s1-guide">
+              <div className="s1-guide-title">各类素材在哪里处理？</div>
+              <div className="s1-guide-grid">
+
+                <div className="s1-guide-card s1-gc-here">
+                  <div className="s1-guide-card-head">
+                    <span className="s1-guide-icon">🎬</span>
+                    <span className="s1-guide-label">视频素材</span>
+                    <span className="s1-guide-step-tag s1-tag-here">当前页</span>
                   </div>
-                ))}
+                  <div className="s1-guide-desc">在这里导入要参与混剪的原始视频文件。后续字幕识别、分段、组合方案、精修和导出都基于这些视频。</div>
+                </div>
+
+                <div className="s1-guide-card s1-gc-next">
+                  <div className="s1-guide-card-head">
+                    <span className="s1-guide-icon">📄</span>
+                    <span className="s1-guide-label">字幕 JSON</span>
+                    <span className="s1-guide-step-tag s1-tag-next">第二步</span>
+                  </div>
+                  <div className="s1-guide-desc">字幕用于理解视频内容、分段和生成组合方案。在字幕处理页可导入已识别好的字幕 JSON，或通过本地识别工具（tools/whisper）生成字幕。</div>
+                  <div className="s1-guide-note">注意：字幕 JSON ≠ 精修方案 JSON，两者格式和用途不同。</div>
+                </div>
+
+                <div className="s1-guide-card s1-gc-later">
+                  <div className="s1-guide-card-head">
+                    <span className="s1-guide-icon">🎙</span>
+                    <span className="s1-guide-label">最终语音 / 配音</span>
+                    <span className="s1-guide-step-tag s1-tag-later">精修页</span>
+                  </div>
+                  <div className="s1-guide-desc">最终语音不在这里导入。请先完成字幕和文案，再进入精修页的「最终语音轨道」区域，导入外部生成的配音文件。精修页会自动对比视频时长与语音时长。</div>
+                </div>
+
+                <div className="s1-guide-card s1-gc-later">
+                  <div className="s1-guide-card-head">
+                    <span className="s1-guide-icon">📦</span>
+                    <span className="s1-guide-label">精修方案 JSON</span>
+                    <span className="s1-guide-step-tag s1-tag-later">精修页 / 导出准备</span>
+                  </div>
+                  <div className="s1-guide-desc">精修方案 JSON 是后期工程存档，保存了字幕稿、文案、剪辑记录和语音记录。请在精修页或导出准备页进行导入 / 导出，不在这里操作。</div>
+                  <div className="s1-guide-note">注意：精修方案 JSON ≠ 字幕 JSON，导入时请区分。</div>
+                </div>
+
               </div>
             </div>
           </div>
           <div className="step-footer">
             <div/>
-            <button className={`step-next-btn ${uploadedVideos.length===0?'disabled':''}`} onClick={()=>uploadedVideos.length===0?showToast('请先上传视频素材'):setStep(2)}>
+            <button className={`step-next-btn ${uploadedVideos.length===0?'disabled':''}`} onClick={()=>uploadedVideos.length===0?showToast('请先导入视频素材'):setStep(2)}>
               下一步：字幕识别与分段
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
             </button>
