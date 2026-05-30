@@ -2019,7 +2019,7 @@ export default function App() {
     const durationDiff = voiceSrc ? (voiceDuration - totalDuration) : null
     const now = new Date().toISOString()
     const payload = {
-      version: '0.7.6-hotfix',
+      version: '0.8.2',
       type: 'refine-plan',
       exportedAt: now,
       compositionId: compId,
@@ -2031,6 +2031,25 @@ export default function App() {
       speedMap: rc.speedMap,
       editSegs: rc.editSegs,
       voice: exportedVoice,
+      // v0.8.2: export settings (saved for v0.9 FFmpeg execution)
+      exportSettings: {
+        aspectRatio: ratio,
+        resolution: exportRes,
+        fps: exportFps,
+        cropEdge: dedup.crop||false,
+        slightZoom: dedup.scale||false,
+        mirrorFlip: dedup.mirror||false,
+        speedProcess: dedup.speed||false,
+        backgroundBase: dedup.bgImage||false,
+        visiblePip: dedup.picInPic||false,
+        subtitleJitter: dedup.subDistort||false,
+        endCardImage: dedup.endImage||false,
+        keepOriginalAudio: keepAudio,
+        backgroundMusic: addMusic,
+        autoSubtitle: autoSub,
+        subtitlePosition: subPos,
+        mixStrength: intensity,
+      },
       derivedTimeline: derivedSegs.map(ds => ({
         esId: ds.esId ?? null,
         segIdx: ds.segIdx ?? null,
@@ -2119,6 +2138,29 @@ export default function App() {
           }
         }
       })
+      // v0.8.2: restore exportSettings global state if present
+      const es = data.exportSettings
+      if (es) {
+        if (es.aspectRatio) setRatio(es.aspectRatio)
+        if (es.resolution)  setExportRes(es.resolution)
+        if (es.fps)         setExportFps(es.fps)
+        if (es.mixStrength) setIntensity(es.mixStrength)
+        if (typeof es.keepOriginalAudio === 'boolean') setKeepAudio(es.keepOriginalAudio)
+        if (typeof es.backgroundMusic   === 'boolean') setAddMusic(es.backgroundMusic)
+        if (typeof es.autoSubtitle      === 'boolean') setAutoSub(es.autoSubtitle)
+        if (es.subtitlePosition) setSubPos(es.subtitlePosition)
+        setDedup(prev => ({
+          ...prev,
+          crop:       typeof es.cropEdge        === 'boolean' ? es.cropEdge        : prev.crop,
+          scale:      typeof es.slightZoom      === 'boolean' ? es.slightZoom      : prev.scale,
+          mirror:     typeof es.mirrorFlip      === 'boolean' ? es.mirrorFlip      : prev.mirror,
+          speed:      typeof es.speedProcess    === 'boolean' ? es.speedProcess    : prev.speed,
+          bgImage:    typeof es.backgroundBase  === 'boolean' ? es.backgroundBase  : prev.bgImage,
+          picInPic:   typeof es.visiblePip      === 'boolean' ? es.visiblePip      : prev.picInPic,
+          subDistort: typeof es.subtitleJitter  === 'boolean' ? es.subtitleJitter  : prev.subDistort,
+          endImage:   typeof es.endCardImage    === 'boolean' ? es.endCardImage    : prev.endImage,
+        }))
+      }
       if (normalizedVoiceMeta?.fileName) {
         showToast(`方案已导入，语音文件「${normalizedVoiceMeta.fileName}」需重新选择。`)
       } else {
@@ -4082,11 +4124,114 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* ── 6. 导出风险提示 ── */}
+                  {/* ── 6. 导出设置 / 去重包装设置 (v0.8.2) ── */}
+                  <div className="ep-section">
+                    <div className="ep-section-head">
+                      <span className="ep-section-icon">⚙</span>
+                      <span className="ep-section-title">6 · 导出设置 / 去重包装设置</span>
+                      <span className="ep-section-badge info">v0.9 执行</span>
+                    </div>
+                    <div className="ep-rows">
+                      <div className="ep-notice ok" style={{marginBottom:6}}>
+                        以下设置仅作为导出方案保存，当前版本不生成视频。v0.9 接入本地 FFmpeg 后，将按这些设置生成视频。
+                      </div>
+                    </div>
+
+                    {/* 画面包装 */}
+                    <div className="ep-subsection">
+                      <div className="ep-sub-head">画面包装 / 去重处理</div>
+                      <div className="ep-dedup-grid">
+                        {[['crop','裁剪边缘','◰'],['scale','轻微缩放','⊞'],['mirror','镜像翻转','⇔'],
+                          ['speed','变速处理','⏩'],['bgImage','背景底图','▣'],['picInPic','可见画中画','⧉'],
+                          ['subDistort','字幕扰动','T'],['endImage','片尾图片','⬜']].map(([k,label,ico])=>(
+                          <label key={k} className={`ep-dedup-chip ${dedup[k]?'on':''}`}>
+                            <input type="checkbox" checked={dedup[k]} onChange={()=>toggleDedup(k)}/>
+                            <span className="ep-dedup-ico">{ico}</span><span>{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 画面比例 & 混剪强度 */}
+                    <div className="ep-subsection">
+                      <div className="ep-sub-head">画面比例</div>
+                      <div className="ep-btn-row">
+                        {[['9:16','竖屏'],['1:1','方形'],['16:9','横屏']].map(([r,desc])=>(
+                          <button key={r} className={`ep-opt-btn ${ratio===r?'active':''}`} onClick={()=>setRatio(r)}>{r} <small>{desc}</small></button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="ep-subsection">
+                      <div className="ep-sub-head">混剪强度</div>
+                      <div className="ep-btn-row">
+                        {[['light','轻度'],['medium','中度'],['strong','强力']].map(([k,label])=>(
+                          <button key={k} className={`ep-opt-btn ${intensity===k?'active':''}`} onClick={()=>setIntensity(k)}>{label}</button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 输出规格 */}
+                    <div className="ep-subsection">
+                      <div className="ep-sub-head">输出规格</div>
+                      <div className="ep-spec-grid">
+                        <div className="ep-spec-row">
+                          <span className="ep-spec-lbl">分辨率</span>
+                          <div className="ep-btn-row">
+                            {['720p','1080p'].map(r=><button key={r} className={`ep-opt-btn ${exportRes===r?'active':''}`} onClick={()=>setExportRes(r)}>{r}</button>)}
+                          </div>
+                        </div>
+                        <div className="ep-spec-row">
+                          <span className="ep-spec-lbl">帧率</span>
+                          <div className="ep-btn-row">
+                            {['24fps','30fps','60fps'].map(f=><button key={f} className={`ep-opt-btn ${exportFps===f?'active':''}`} onClick={()=>setExportFps(f)}>{f}</button>)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 音频设置 */}
+                    <div className="ep-subsection">
+                      <div className="ep-sub-head">音频设置</div>
+                      <div className="ep-toggle-row">
+                        <label className={`ep-toggle-label ${keepAudio?'on':''}`}>
+                          <input type="checkbox" checked={keepAudio} onChange={()=>setKeepAudio(v=>!v)} style={{display:'none'}}/>
+                          <span className={`ep-toggle-pill ${keepAudio?'on':''}`}/>
+                          保留原声
+                        </label>
+                        <label className={`ep-toggle-label ${addMusic?'on':''}`}>
+                          <input type="checkbox" checked={addMusic} onChange={()=>setAddMusic(v=>!v)} style={{display:'none'}}/>
+                          <span className={`ep-toggle-pill ${addMusic?'on':''}`}/>
+                          背景音乐
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* 字幕包装 */}
+                    <div className="ep-subsection">
+                      <div className="ep-sub-head">字幕包装</div>
+                      <div className="ep-toggle-row">
+                        <label className={`ep-toggle-label ${autoSub?'on':''}`}>
+                          <input type="checkbox" checked={autoSub} onChange={()=>setAutoSub(v=>!v)} style={{display:'none'}}/>
+                          <span className={`ep-toggle-pill ${autoSub?'on':''}`}/>
+                          自动字幕
+                        </label>
+                      </div>
+                      <div className="ep-spec-row" style={{marginTop:6}}>
+                        <span className="ep-spec-lbl">字幕位置</span>
+                        <select className="ep-select" value={subPos} onChange={e=>setSubPos(e.target.value)}>
+                          <option value="bottom">底部</option>
+                          <option value="middle">中部</option>
+                          <option value="top">顶部</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── 7. 导出风险提示 ── */}
                   <div className="ep-section">
                     <div className="ep-section-head">
                       <span className="ep-section-icon">⚠</span>
-                      <span className="ep-section-title">6 · 导出风险提示</span>
+                      <span className="ep-section-title">7 · 导出风险提示</span>
                       <span className={`ep-section-badge ${overallStatus==='ok'?'ok':overallStatus==='warn'?'warn':'err'}`}>
                         {overallStatus==='ok'?'无阻断风险':overallStatus==='warn'?'有建议项':'有需要处理项'}
                       </span>
@@ -4107,7 +4252,7 @@ export default function App() {
                   <div className="ep-section ep-section-todo">
                     <div className="ep-section-head">
                       <span className="ep-section-icon">📌</span>
-                      <span className="ep-section-title">7 · 后续遗留整理任务</span>
+                      <span className="ep-section-title">8 · 后续遗留整理任务</span>
                       <span className="ep-section-badge info">规划中</span>
                     </div>
                     <div className="ep-rows">
@@ -4139,7 +4284,7 @@ export default function App() {
                   <div className="ep-section ep-actions-section">
                     <div className="ep-section-head">
                       <span className="ep-section-icon">▶</span>
-                      <span className="ep-section-title">8 · 下一步操作</span>
+                      <span className="ep-section-title">9 · 下一步操作</span>
                     </div>
                     <div className="ep-action-row">
                       <button className="ep-act-btn secondary" onClick={()=>setSubStep('refine')}>
@@ -4241,61 +4386,6 @@ export default function App() {
                 })}
               </div>
 
-              {totalSelectedSegs>0&&(
-                <div className="s2-left-config">
-                  <div className="s2-left-config-head">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
-                    混剪配置
-                    <span className="s2-left-config-cnt">{totalSelectedSegs} 片段</span>
-                  </div>
-                  <div className="s2-section">
-                    <div className="r-section-title"><span className="r-title-dot" style={{'--dot-c':'#6366f1'}}/>视频比例</div>
-                    {ratioBlock}
-                  </div>
-                  <div className="s2-section">
-                    <div className="r-section-title"><span className="r-title-dot" style={{'--dot-c':'#8b5cf6'}}/>混剪强度</div>
-                    {intensityBlock}
-                  </div>
-                  <div className="s2-section">
-                    <div className="r-section-title"><span className="r-title-dot" style={{'--dot-c':'#ec4899'}}/>去重方式<span className="r-title-count">{dedupSelected}/8</span></div>
-                    {dedupBlock}
-                  </div>
-                  <div className="s2-section">
-                    <div className="r-section-title"><span className="r-title-dot" style={{'--dot-c':'#06b6d4'}}/>导出设置</div>
-                    <div className="export-grid">
-                      <div className="export-row"><span className="export-label">分辨率</span><div className="btn-row">{['720p','1080p'].map(r=><button key={r} className={`opt-btn ${exportRes===r?'active':''}`} onClick={()=>setExportRes(r)}>{r}</button>)}</div></div>
-                      <div className="export-row"><span className="export-label">帧率</span><div className="btn-row">{['24fps','30fps','60fps'].map(f=><button key={f} className={`opt-btn ${exportFps===f?'active':''}`} onClick={()=>setExportFps(f)}>{f}</button>)}</div></div>
-                    </div>
-                  </div>
-                  <div className="s2-section">
-                    <div className="r-section-title"><span className="r-title-dot" style={{'--dot-c':'#10b981'}}/>音频</div>
-                    <div className="settings-col">
-                      <div className="setting-row"><span>保留原声</span><Toggle on={keepAudio} onToggle={()=>setKeepAudio(v=>!v)}/></div>
-                      <div className="setting-row"><span>背景音乐</span><Toggle on={addMusic} onToggle={()=>setAddMusic(v=>!v)}/></div>
-                    </div>
-                  </div>
-                  <div className="s2-section">
-                    <div className="r-section-title"><span className="r-title-dot" style={{'--dot-c':'#f59e0b'}}/>字幕</div>
-                    <div className="settings-col">
-                      <div className="setting-row"><span>自动字幕</span><Toggle on={autoSub} onToggle={()=>setAutoSub(v=>!v)}/></div>
-                      <div className="setting-row"><span>位置</span><select value={subPos} onChange={e=>setSubPos(e.target.value)}><option value="bottom">底部</option><option value="middle">中部</option><option value="top">顶部</option></select></div>
-                    </div>
-                  </div>
-                  {isGenerated&&(
-                    <div className="s2s-result-card">
-                      <div className="s2s-result-check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
-                      <div className="s2s-result-info">
-                        <span className="s2s-result-title">方案已生成 · {compositions.length} 个</span>
-                        <span className="s2s-result-sub">{totalSelectedSegs} 片段</span>
-                      </div>
-                      <button className="s2s-regen-btn" onClick={handleGenerate}>
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
-                        重新
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* RIGHT: main work area */}
