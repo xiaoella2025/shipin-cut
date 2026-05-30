@@ -11324,3 +11324,34 @@ input[type=range] {
   padding: 5px 10px;
   border-radius: 6px;
 }
+
+/* ── v0.9 export workflow hint ── */
+.ep-export-v9-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  background: #1a2a1a;
+  border: 1px solid #2e5c2e;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 11px;
+}
+.ep-v9-arrow {
+  color: #5cb85c;
+  font-weight: bold;
+  font-size: 12px;
+}
+.ep-v9-step {
+  color: #aed8a0;
+  white-space: nowrap;
+}
+.ep-v9-step code {
+  background: #0d1f0d;
+  border: 1px solid #3a6b3a;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: monospace;
+  font-size: 10.5px;
+  color: #8fca8f;
+}

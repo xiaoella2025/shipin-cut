@@ -19,3 +19,15 @@ local-output/subtitles/*
 # whisper.cpp 工具和模型（不提交）
 tools/*
 !tools/.gitkeep
+!tools/export_video.py
+
+# export_workspace 中的实际媒体文件不提交，只保留目录结构
+export_workspace/videos/*
+!export_workspace/videos/.gitkeep
+export_workspace/audio/*
+!export_workspace/audio/.gitkeep
+export_workspace/output/*
+!export_workspace/output/.gitkeep
+export_workspace/temp/*
+!export_workspace/temp/.gitkeep
+export_workspace/drafts/*.json

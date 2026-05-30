@@ -1,0 +1,67 @@
+shipin-cut v0.9  本地成品视频导出说明
+==========================================
+
+一、准备工作（只需做一次）
+----------------------------
+1. 安装 Python 3.8+
+   下载: https://www.python.org/downloads/
+   安装时勾选 "Add Python to PATH"
+
+2. 安装 FFmpeg
+   下载: https://ffmpeg.org/download.html  （Windows 推荐 gyan.dev 版本）
+   解压后将 bin 目录加入系统 PATH
+   验证: 打开命令行输入 ffmpeg -version 有输出即表示成功
+
+
+二、每次导出的步骤
+-------------------
+步骤 1  在网页上完成精修，点击「导出草稿 JSON」
+        → 将下载的 .json 文件放入  export_workspace/drafts/
+
+步骤 2  将对应的原始素材视频放入  export_workspace/videos/
+        文件名必须与导出 JSON 中 sourceVideos[].fileName 一致
+        （即你上传到网页时的原始文件名）
+
+步骤 3  如果有配音文件，将其放入  export_workspace/audio/
+        文件名必须与导出 JSON 中 voice.fileName 一致
+
+步骤 4  双击  启动生成视频.bat
+        脚本会自动读取 drafts/ 中最新的 JSON，处理完成后
+        成品 MP4 输出到  export_workspace/output/
+
+
+三、目录结构说明
+-----------------
+export_workspace/
+  drafts/   ← 放从网页导出的 .json 草稿文件
+  videos/   ← 放原始素材视频（文件名必须与草稿一致）
+  audio/    ← 放配音音频文件（mp3/wav/m4a 均可）
+  output/   ← 生成的成品 MP4 保存在这里
+  temp/     ← 临时文件，生成完自动清理，不用管
+
+
+四、高级用法
+--------------
+指定某个草稿文件：
+  python tools/export_video.py "export_workspace/drafts/你的草稿.json"
+
+
+五、常见问题
+--------------
+Q: 提示"找不到素材视频"
+A: 检查 export_workspace/videos/ 中的文件名是否与草稿 JSON 里
+   sourceVideos[].fileName 完全一致（包括扩展名大小写）
+
+Q: 生成的视频没有声音
+A: 确认配音文件名与草稿 JSON 里 voice.fileName 一致，
+   并放入了 export_workspace/audio/
+
+Q: FFmpeg 报错
+A: 运行 ffmpeg -version 确认 FFmpeg 版本 >= 4.0
+
+
+六、注意事项
+--------------
+- 原始视频文件不会被修改，所有操作读取原文件后写到 output/
+- temp/ 目录中的临时片段在生成完成后自动删除
+- 每次生成的文件名含时间戳，不会互相覆盖

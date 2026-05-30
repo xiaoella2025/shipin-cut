@@ -2053,6 +2053,11 @@ export default function App() {
         subtitlePosition: subPos,
         mixStrength: intensity,
       },
+      sourceVideos: uploadedVideos.map((v, idx) => ({
+        index: idx,
+        fileName: v.name,
+        duration: v.dur,
+      })),
       derivedTimeline: derivedSegs.map(ds => ({
         esId: ds.esId ?? null,
         segIdx: ds.segIdx ?? null,
@@ -4379,11 +4384,18 @@ export default function App() {
                         导出剪辑草稿
                       </button>
                     </div>
-                    <button className="ep-act-btn disabled" disabled title="真实导出将在 v0.9 实现">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                      进入成品视频导出
-                      <span className="ep-act-btn-sub">v0.9 实现</span>
-                    </button>
+                    <div className="ep-export-v9-hint">
+                      <button className="ep-act-btn" onClick={()=>exportRefinePlan(selComp.id,selComp)}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        导出草稿 JSON
+                      </button>
+                      <span className="ep-v9-arrow">→</span>
+                      <span className="ep-v9-step">放入 export_workspace/drafts/</span>
+                      <span className="ep-v9-arrow">→</span>
+                      <span className="ep-v9-step">双击 <code>启动生成视频.bat</code></span>
+                      <span className="ep-v9-arrow">→</span>
+                      <span className="ep-v9-step">export_workspace/output/ 取成品</span>
+                    </div>
                   </div>
 
                   {/* ── 开发备注（折叠）── */}
@@ -4392,7 +4404,7 @@ export default function App() {
                     <div className="ep-roadmap-body">
                       <span className="ep-rm-item done">v0.8.1 第一页素材入口整理：已完成</span>
                       <span className="ep-rm-item done">v0.8.2 第二页导出/去重按钮归位：已完成</span>
-                      <span className="ep-rm-item todo">v0.9 本地生成成品视频：待开发</span>
+                      <span className="ep-rm-item done">v0.9 本地生成成品视频：export_video.py + 启动生成视频.bat 已完成</span>
                     </div>
                   </details>
 
