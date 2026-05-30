@@ -11270,3 +11270,57 @@ input[type=range] {
 }
 .ep-ss-lbl { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
 .ep-ss-toggles-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+
+/* ── v0.8.3-hotfix-3: right settings panel – larger font & buttons ────────── */
+
+.ep-settings-panel-wrap .ep-section-note {
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+/* Group titles */
+.ep-settings-panel-wrap .ep-ss-group { margin-bottom: 18px; }
+.ep-settings-panel-wrap .ep-ss-group:last-child { margin-bottom: 0; }
+.ep-settings-panel-wrap .ep-ss-group-title {
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+/* Row layout */
+.ep-settings-panel-wrap .ep-ss-row { gap: 8px; margin-bottom: 8px; }
+.ep-settings-panel-wrap .ep-ss-lbl { font-size: 13px; min-width: 56px; }
+
+/* Spec & mode buttons */
+.ep-settings-panel-wrap .ep-sg-btns { gap: 7px; }
+.ep-settings-panel-wrap .ep-sg-btn {
+  font-size: 13px;
+  padding: 6px 13px;
+  border-radius: 6px;
+}
+.ep-settings-panel-wrap .ep-sg-btn small {
+  font-size: 11px;
+  margin-left: 3px;
+}
+
+/* Dedup chips */
+.ep-settings-panel-wrap .ep-sg-dedup { gap: 7px; }
+.ep-settings-panel-wrap .ep-dedup-chip {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  gap: 5px;
+}
+
+/* Toggle switches */
+.ep-settings-panel-wrap .ep-ss-toggles-row { gap: 18px; margin-bottom: 6px; }
+.ep-settings-panel-wrap .ep-toggle-label {
+  font-size: 14px;
+  gap: 8px;
+}
+
+/* Subtitle position select */
+.ep-settings-panel-wrap .ep-select {
+  font-size: 13px;
+  padding: 5px 10px;
+  border-radius: 6px;
+}
