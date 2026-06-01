@@ -1857,6 +1857,7 @@ export default function App() {
   function enterRefine(compId) {
     stopCompPlay()
     const aud=refineVoiceRef.current; if(aud) aud.pause()
+    setRefineVoicePos(0)
     setRefineCompId(compId)
     setRefinePrevPos(0)
     setRefineIsPlaying(false); refineIsPlayingRef.current=false
@@ -3769,7 +3770,7 @@ export default function App() {
                               const vid=refinePrevRef.current
                               if(vid&&vid.readyState>=2) vid.currentTime=seekT
                               const aud=refineVoiceRef.current
-                              if(aud&&aud.src) aud.currentTime=derivedPos
+                              if(aud&&aud.src){ aud.currentTime=derivedPos; setRefineVoicePos(derivedPos) }
                             }
                           }
                           updateFromClientX(e.clientX)
@@ -3843,6 +3844,34 @@ export default function App() {
                               refineVoicePlaying?a.pause():a.play().catch(()=>{})
                             }}>{refineVoicePlaying?'⏸ 暂停':'▶ 播放配音'}</button>
                             <span className="refine-vt-pos">{fmt(refineVoicePos)} / {fmt(voiceDur)}</span>
+                          </div>
+                          <div className="refine-vt-progress-row">
+                            <input
+                              type="range"
+                              className="refine-vt-progress"
+                              min="0"
+                              max={voiceDur > 0 ? voiceDur : 1}
+                              step="0.05"
+                              value={Math.min(refineVoicePos, voiceDur > 0 ? voiceDur : 1)}
+                              onMouseDown={()=>stopRefinePlay()}
+                              onChange={e=>{
+                                const t=parseFloat(e.target.value)
+                                const aud=refineVoiceRef.current
+                                if(aud) aud.currentTime=t
+                                setRefineVoicePos(t)
+                                setRefinePrevPos(t)
+                                const ds=derivedSegs.find(s=>t>=s.compStart&&t<s.compEnd)||derivedSegs[derivedSegs.length-1]
+                                if(ds){
+                                  if(hasEditSegs) setRefineSelEsId(ds.esId)
+                                  else setRefineSelSeg(ds.segIdx)
+                                  const offsetInSeg=(t-ds.compStart)*ds.speed
+                                  const seekT=ds.seg.startSec+Math.min(Math.max(0,offsetInSeg),ds.seg.endSec-ds.seg.startSec-0.01)
+                                  refinePrevSeekRef.current=seekT
+                                  const vid=refinePrevRef.current
+                                  if(vid&&vid.readyState>=2) vid.currentTime=seekT
+                                }
+                              }}
+                            />
                           </div>
                           <div className={`refine-vt-diff${Math.abs(durDiff)<0.5?' ok':durDiff>0?' short':' long'}`}>
                             <span className="refine-vt-diff-item">视频方案时长 <b>{fmt(derivedDur)}</b></span>
@@ -4056,7 +4085,7 @@ export default function App() {
                                 const vid=refinePrevRef.current
                                 if(vid&&vid.readyState>=2) vid.currentTime=seekT
                                 const aud=refineVoiceRef.current
-                                if(aud&&aud.src) aud.currentTime=cs
+                                if(aud&&aud.src){ aud.currentTime=cs; setRefineVoicePos(cs) }
                               }
                             }}>
                             <div className="refine-sub-time">{fmt(sub.compStart)}</div>
