@@ -9397,6 +9397,12 @@ input[type=range] {
   font-style: italic;
   padding: 2px 0;
 }
+.refine-vt-sync-hint {
+  font-size: 10.5px;
+  color: rgba(255,255,255,.28);
+  margin-top: 4px;
+  font-style: italic;
+}
 
 /* ---- timeline section ---- */
 .refine-tl-section {

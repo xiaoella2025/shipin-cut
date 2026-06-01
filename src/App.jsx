@@ -1856,6 +1856,7 @@ export default function App() {
   // ── v0.7 refine functions ──
   function enterRefine(compId) {
     stopCompPlay()
+    const aud=refineVoiceRef.current; if(aud) aud.pause()
     setRefineCompId(compId)
     setRefinePrevPos(0)
     setRefineIsPlaying(false); refineIsPlayingRef.current=false
@@ -1897,6 +1898,9 @@ export default function App() {
       refinePrevSeekRef.current=seekTime
       const vid=refinePrevRef.current
       if (vid) { vid.currentTime=seekTime; vid.play().catch(()=>{}) }
+      // sync voice
+      const aud=refineVoiceRef.current
+      if(aud&&aud.src){ aud.currentTime=atEnd?0:Math.max(0,currentPos); aud.play().catch(()=>{}) }
       return
     }
 
@@ -1928,10 +1932,14 @@ export default function App() {
     refinePrevSeekRef.current=seekTime
     const vid=refinePrevRef.current
     if (vid) { vid.currentTime=seekTime; vid.play().catch(()=>{}) }
+    // sync voice
+    const aud=refineVoiceRef.current
+    if(aud&&aud.src){ aud.currentTime=atEnd?0:Math.max(0,currentPos); aud.play().catch(()=>{}) }
   }
 
   function stopRefinePlay() {
     const vid=refinePrevRef.current; if(vid) vid.pause()
+    const aud=refineVoiceRef.current; if(aud) aud.pause()
     setRefineIsPlaying(false); refineIsPlayingRef.current=false
     setRefineVidPlaying(false)
   }
@@ -3508,12 +3516,16 @@ export default function App() {
                                   const esIdx=refinePlayEsIdxRef.current
                                   const s=etl.segments[esIdx]; if(!s) return
                                   const offsetInSeg=(vid.currentTime-s.seg.startSec)/s.speed
-                                  setRefinePrevPos(s.compStart+Math.max(0,offsetInSeg))
+                                  const compPos2=s.compStart+Math.max(0,offsetInSeg)
+                                  setRefinePrevPos(compPos2)
                                   setRefineSelEsId(s.esId)
+                                  // voice drift correction
+                                  const aud2=refineVoiceRef.current
+                                  if(aud2&&aud2.src&&!aud2.paused&&Math.abs(aud2.currentTime-compPos2)>0.3) aud2.currentTime=compPos2
                                   if(vid.currentTime>=s.seg.endSec-0.15){
                                     const nextEsIdx=esIdx+1
                                     if(nextEsIdx>=etl.segments.length){
-                                      vid.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成')
+                                      vid.pause(); if(aud2) aud2.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成')
                                     } else {
                                       const nextS=etl.segments[nextEsIdx]
                                       refinePlayEsIdxRef.current=nextEsIdx
@@ -3537,12 +3549,15 @@ export default function App() {
                                 const posInComp=(dsEntry?.compStart||0)+Math.max(0,offsetInSeg)
                                 setRefinePrevPos(posInComp)
                                 setRefineSelSeg(segIdx)
+                                // voice drift correction
+                                const aud3=refineVoiceRef.current
+                                if(aud3&&aud3.src&&!aud3.paused&&Math.abs(aud3.currentTime-posInComp)>0.3) aud3.currentTime=posInComp
                                 if(vid.currentTime>=seg2.endSec-0.15){
                                   const activeIdxs2=c2.segments.map((_,i)=>i).filter(i=>!deletedNow.includes(i))
                                   const curActivePos=activeIdxs2.indexOf(segIdx)
                                   const nextSegIdx=curActivePos>=0&&curActivePos<activeIdxs2.length-1?activeIdxs2[curActivePos+1]:-1
                                   if(nextSegIdx<0){
-                                    vid.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成')
+                                    vid.pause(); if(aud3) aud3.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成')
                                   } else {
                                     const nextSeg2=c2.segments[nextSegIdx]
                                     refinePlaySegIdxRef.current=nextSegIdx; setRefinePlaySegIdx(nextSegIdx)
@@ -3555,7 +3570,7 @@ export default function App() {
                                 if(!refineIsPlayingRef.current) return
                                 if(refineEditTimelineRef.current){
                                   const nextIdx=refinePlayEsIdxRef.current+1
-                                  if(nextIdx>=refineEditTimelineRef.current.segments.length){ setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成') }
+                                  if(nextIdx>=refineEditTimelineRef.current.segments.length){ refineVoiceRef.current?.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成') }
                                   return
                                 }
                                 const c2=compositionsRef.current.find(x=>x.id===refinePlayCompIdRef.current); if(!c2) return
@@ -3563,7 +3578,7 @@ export default function App() {
                                 const deletedNow=rcNow.deletedSegIdxs||[]
                                 const activeIdxs2=c2.segments.map((_,i)=>i).filter(i=>!deletedNow.includes(i))
                                 const curPos2=activeIdxs2.indexOf(refinePlaySegIdxRef.current)
-                                if(curPos2<0||curPos2>=activeIdxs2.length-1){ setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成') }
+                                if(curPos2<0||curPos2>=activeIdxs2.length-1){ refineVoiceRef.current?.pause(); setRefineIsPlaying(false); refineIsPlayingRef.current=false; showToast('播放完成') }
                               }}
                             />
                           ):(
@@ -3753,6 +3768,8 @@ export default function App() {
                               refinePrevSeekRef.current=seekT
                               const vid=refinePrevRef.current
                               if(vid&&vid.readyState>=2) vid.currentTime=seekT
+                              const aud=refineVoiceRef.current
+                              if(aud&&aud.src) aud.currentTime=derivedPos
                             }
                           }
                           updateFromClientX(e.clientX)
@@ -3832,13 +3849,14 @@ export default function App() {
                             <span className="refine-vt-diff-item">本条配音时长 <b>{fmt(voiceDur)}</b></span>
                             <span className="refine-vt-diff-item">差值：<b>{durDiffStr}</b></span>
                           </div>
+                          <div className="refine-vt-sync-hint">点击上方播放按钮时，视频与本条配音同步播放</div>
                         </div>
                       ):voiceMeta?.fileName?(
                         <div className="refine-vt-empty refine-vt-need-reimport">
                           方案中记录了 <b>{voiceMeta.fileName}</b>（{fmt(voiceMeta.duration||0)}）。请重新导入同名配音文件以恢复预览。
                         </div>
                       ):(
-                        <div className="refine-vt-empty">导入本条成品的配音后，可在此对比视频时长和配音时长</div>
+                        <div className="refine-vt-empty">导入本条成品的配音后，可在此对比视频时长和配音时长。<br/>点击上方播放按钮时，视频与本条配音会同步播放。</div>
                       )}
                     </div>
 
@@ -4037,6 +4055,8 @@ export default function App() {
                                 refinePrevSeekRef.current=seekT
                                 const vid=refinePrevRef.current
                                 if(vid&&vid.readyState>=2) vid.currentTime=seekT
+                                const aud=refineVoiceRef.current
+                                if(aud&&aud.src) aud.currentTime=cs
                               }
                             }}>
                             <div className="refine-sub-time">{fmt(sub.compStart)}</div>
