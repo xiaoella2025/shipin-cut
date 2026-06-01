@@ -1083,6 +1083,7 @@ export default function App() {
   const [refineVoicePos, setRefineVoicePos]         = useState(0)
   const [refineSelEsId, setRefineSelEsId]           = useState(null)  // selected edit-seg id (v0.7.4)
   const [refineTrimState, setRefineTrimState]       = useState(null)  // v0.7.5 trim drag preview: {esId,edge,previewStartSec,previewEndSec}
+  const [refineSubTab, setRefineSubTab]   = useState('script') // v0.9.5: 'script'|'subs'
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1128,6 +1129,9 @@ export default function App() {
   const [subBgOpacity, setSubBgOpacity]     = useState(0.5)
   const [subPosition, setSubPosition]       = useState('bottom') // 'bottom'|'lower'|'middle'|'top'
   const [subMarginV, setSubMarginV]         = useState(60)
+  // v0.9.5: background music
+  const [bgmFile, setBgmFile]       = useState(null)  // {fileName, originalName, storedFileName, synced, duration}
+  const [bgmVolume, setBgmVolume]   = useState(0.18)
   const [dedup, setDedup] = useState({
     crop:true, scale:true, mirror:false, speed:true,
     bgImage:false, picInPic:false, subDistort:false, endImage:true,
@@ -2074,6 +2078,7 @@ export default function App() {
       importReport:null,        // v0.7.6-hotfix: integrity report after import
       finalSubtitles: null,         // v0.9.4: [{id,start,end,text}] user-edited per-comp subtitles
       finalSubtitlesSavedAt: null,  // v0.9.4: timestamp when finalSubtitles was saved
+      reframe: null,  // v0.9.5: {enabled,aspect,scale,offsetX,offsetY} per-comp
       ...(existing||{}),
     }
   }
@@ -2152,6 +2157,64 @@ export default function App() {
   function saveFinalSubtitles(compId) {
     updateRefinedComp(compId, {finalSubtitlesSavedAt: new Date().toISOString()})
     showToast('成品字幕已保存')
+  }
+
+  // v0.9.5: per-comp reframe helpers
+  function getCompReframe(compId) {
+    const rc = defaultRcFor(refinedComps[compId])
+    return rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 }
+  }
+  function setCompReframe(compId, updates) {
+    updateRefinedComp(compId, { reframe: { ...getCompReframe(compId), ...updates } })
+  }
+
+  // v0.9.5: subtitle edit helpers for refine page
+  function mergeSub(compId, subId) {
+    setRefinedComps(prev => {
+      const rc = prev[compId] || {}
+      const subs = [...(rc.finalSubtitles || [])]
+      const idx = subs.findIndex(s => s.id === subId)
+      if (idx <= 0) return prev
+      const merged = {
+        ...subs[idx - 1],
+        end: subs[idx].end,
+        text: subs[idx - 1].text + subs[idx].text,
+      }
+      subs.splice(idx - 1, 2, merged)
+      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs } }
+    })
+  }
+  function splitSub(compId, subId, text1, text2) {
+    setRefinedComps(prev => {
+      const rc = prev[compId] || {}
+      const subs = [...(rc.finalSubtitles || [])]
+      const idx = subs.findIndex(s => s.id === subId)
+      if (idx < 0) return prev
+      const orig = subs[idx]
+      const mid = (orig.start + orig.end) / 2
+      const s1 = { ...orig, end: mid, text: text1, id: orig.id + '_a' }
+      const s2 = { id: orig.id + '_b', start: mid, end: orig.end, text: text2 }
+      subs.splice(idx, 1, s1, s2)
+      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs } }
+    })
+  }
+  function addSubNewline(compId, subId) {
+    setRefinedComps(prev => {
+      const rc = prev[compId] || {}
+      const subs = (rc.finalSubtitles || []).map(s =>
+        s.id === subId ? { ...s, text: s.text + '\n' } : s
+      )
+      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs } }
+    })
+  }
+  function adjustSubTime(compId, subId, field, delta) {
+    setRefinedComps(prev => {
+      const rc = prev[compId] || {}
+      const subs = (rc.finalSubtitles || []).map(s =>
+        s.id === subId ? { ...s, [field]: Math.max(0, +(s[field] + delta).toFixed(1)) } : s
+      )
+      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs } }
+    })
   }
 
   function toggleDeleteSeg(compId, segIdx) {
@@ -2242,8 +2305,9 @@ export default function App() {
         coverOriginalSub: coverOrigSub,
         coverOrigSubHeight: coverOrigSubHeight,
         origSubMode: origSubMode,
-        reframe: { enabled: reframeEnabled, aspect: reframeAspect, scale: reframeScale, offsetX: reframeOffsetX, offsetY: reframeOffsetY },
+        reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
         subtitleStyle: { fontFamily: subFontFamily, fontSize: subFontSize, color: subColor, outline: subOutline, outlineColor: subOutlineColor, outlineWidth: subOutlineWidth, background: subBg, backgroundOpacity: subBgOpacity, position: subPosition, marginV: subMarginV },
+        bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx,
@@ -2328,8 +2392,9 @@ export default function App() {
         autoSubtitle: autoSub, subtitlePosition: subPos, mixStrength: intensity,
         burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
         origSubMode: origSubMode,
-        reframe: { enabled: reframeEnabled, aspect: reframeAspect, scale: reframeScale, offsetX: reframeOffsetX, offsetY: reframeOffsetY },
+        reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
         subtitleStyle: { fontFamily: subFontFamily, fontSize: subFontSize, color: subColor, outline: subOutline, outlineColor: subOutlineColor, outlineWidth: subOutlineWidth, background: subBg, backgroundOpacity: subBgOpacity, position: subPosition, marginV: subMarginV },
+        bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx, fileName: v.storedFileName || v.name, originalName: v.name,
@@ -3693,7 +3758,7 @@ export default function App() {
                           if(refineIsPlayingRef.current) stopRefinePlay()
                           else if(refineVidPlaying) vid.pause()
                           else startRefinePlay(comp)
-                        }}>
+                        }} style={(()=>{const rf=getCompReframe(comp.id);return rf.enabled&&rf.aspect&&rf.aspect!=='保留原比例'?{aspectRatio:String(REFRAME_ASPECTS.find(a=>a.key===rf.aspect)?.ratio||'auto'),overflow:'hidden'}:{}})()}>
                           {curVid?(
                             <video
                               ref={refinePrevRef}
@@ -3703,6 +3768,7 @@ export default function App() {
                               playsInline
                               muted={muteOriginal}
                               className="refine-video"
+                              style={(()=>{const rf=getCompReframe(comp.id);return rf.enabled?{transform:`scale(${rf.scale}) translate(${(rf.offsetX*100/rf.scale).toFixed(1)}%, ${(-rf.offsetY*100/rf.scale).toFixed(1)}%)`,transformOrigin:'center center'}:{}})()}
                               onPlay={()=>setRefineVidPlaying(true)}
                               onPause={()=>setRefineVidPlaying(false)}
                               onLoadedMetadata={()=>{
@@ -3813,10 +3879,72 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* Col 3: Summary script */}
-                      <div className="refine-sc">
+                      {/* Col 2b: Canvas framing (画面取景) */}
+                      <div className="refine-reframe">
                         <div className="refine-col-head">
-                          <span>字幕汇总稿</span>
+                          <span>画面取景</span>
+                          {(()=>{const rf=getCompReframe(comp.id);return rf.enabled?<span className="refine-save-status saved">{rf.aspect} · {Math.round(rf.scale*100)}%</span>:<span className="refine-save-status">未启用</span>})()}
+                        </div>
+                        {(()=>{
+                          const rf = getCompReframe(comp.id)
+                          return (<>
+                            <div className="refine-rf-toggle-row">
+                              <label className={`ep-toggle-label ${rf.enabled?'on':''}`} onClick={()=>setCompReframe(comp.id,{enabled:!rf.enabled})}>
+                                <span className={`ep-toggle-pill ${rf.enabled?'on':''}`}/>
+                                {rf.enabled?'取景已开启':'开启取景模式'}
+                              </label>
+                              {rf.enabled&&<button className="refine-tb-btn" onClick={()=>setCompReframe(comp.id,{enabled:false,aspect:'保留原比例',scale:1.0,offsetX:0,offsetY:0})}>重置</button>}
+                            </div>
+                            {rf.enabled&&(<>
+                              <div className="refine-rf-aspects">
+                                {[{key:'保留原比例',label:'原比例'},{key:'16:9',label:'16:9'},{key:'4:3',label:'4:3'},{key:'3:4',label:'3:4'},{key:'9:16',label:'9:16'},{key:'1:1',label:'1:1'},{key:'2:1',label:'2:1'},{key:'2.35:1',label:'2.35:1'}].map(a=>(
+                                  <button key={a.key} className={`ep-sg-btn ep-sg-btn-xs ${rf.aspect===a.key?'active':''}`}
+                                    onClick={()=>setCompReframe(comp.id,{aspect:a.key})}>{a.label}</button>
+                                ))}
+                              </div>
+                              <div className="refine-rf-row">
+                                <span className="ep-ss-lbl" style={{width:52}}>放大</span>
+                                <input type="range" min="1.0" max="1.5" step="0.01" value={rf.scale}
+                                  onChange={e=>setCompReframe(comp.id,{scale:parseFloat(e.target.value)})}
+                                  className="ep-range" style={{flex:1}}/>
+                                <span className="ep-ss-val">{Math.round(rf.scale*100)}%</span>
+                              </div>
+                              <div className="refine-rf-row">
+                                <span className="ep-ss-lbl" style={{width:52}}>上移</span>
+                                <input type="range" min="-0.5" max="0.5" step="0.01" value={rf.offsetY}
+                                  onChange={e=>setCompReframe(comp.id,{offsetY:parseFloat(e.target.value)})}
+                                  className="ep-range" style={{flex:1}}/>
+                                <span className="ep-ss-val">{rf.offsetY>0?'+':''}{Math.round(rf.offsetY*100)}%</span>
+                              </div>
+                              <div className="refine-rf-row">
+                                <span className="ep-ss-lbl" style={{width:52}}>右移</span>
+                                <input type="range" min="-0.5" max="0.5" step="0.01" value={rf.offsetX}
+                                  onChange={e=>setCompReframe(comp.id,{offsetX:parseFloat(e.target.value)})}
+                                  className="ep-range" style={{flex:1}}/>
+                                <span className="ep-ss-val">{rf.offsetX>0?'+':''}{Math.round(rf.offsetX*100)}%</span>
+                              </div>
+                              <div className="ep-ss-hint" style={{marginTop:4}}>放大+上移可把底部原字幕裁出画面</div>
+                            </>)}
+                          </>)
+                        })()}
+                      </div>
+
+                      {/* Col 3: Summary script + final subtitles */}
+                      <div className="refine-sc">
+                        <div className="refine-sc-tabs">
+                          <button className={`refine-sc-tab${refineSubTab==='script'?' active':''}`} onClick={()=>setRefineSubTab('script')}>最终字幕稿</button>
+                          <button className={`refine-sc-tab${refineSubTab==='subs'?' active':''}`} onClick={()=>setRefineSubTab('subs')}>
+                            成品字幕
+                            {rc.finalSubtitles&&rc.finalSubtitles.length>0&&(
+                              <span className={`refine-sc-tab-badge ${rc.finalSubtitlesSavedAt?'ok':'warn'}`}>
+                                {rc.finalSubtitlesSavedAt?`✓${rc.finalSubtitles.length}`:`${rc.finalSubtitles.length}*`}
+                              </span>
+                            )}
+                          </button>
+                        </div>
+                        {refineSubTab==='script'&&<>
+                        <div className="refine-col-head">
+                          <span>最终字幕稿</span>
                           <span className={`refine-save-status${rc.scriptModified?' dirty':rc.scriptSavedAt?' saved':''}`}>{scriptStatus}</span>
                         </div>
                         <div className="refine-sc-desc">当前成品的最终字幕稿，也是生成本条配音的文案。可直接修改，也可复制出去给外部 AI 改写后再粘回来。</div>
@@ -3866,6 +3994,76 @@ export default function App() {
                             </div>
                           )}
                         </div>
+                        </>}
+                        {refineSubTab==='subs'&&(
+                          <div className="refine-subs-editor">
+                            <div className="refine-subs-head">
+                              <div className="refine-subs-status">
+                                {rc.finalSubtitles&&rc.finalSubtitles.length>0
+                                  ?(rc.finalSubtitlesSavedAt
+                                    ?<span className="rs-status ok">成品字幕：已保存 {rc.finalSubtitles.length} 句</span>
+                                    :<span className="rs-status warn">成品字幕：{rc.finalSubtitles.length} 句（未保存）</span>)
+                                  :<span className="rs-status miss">成品字幕：最终导出使用，请先生成</span>}
+                              </div>
+                            </div>
+                            <div className="refine-subs-toolbar">
+                              <button className="refine-tb-btn primary" onClick={()=>handleGenerateSubs(comp.id,comp,rc)}>
+                                {rc.finalSubtitles&&rc.finalSubtitles.length>0?'重新生成':'从字幕稿生成'}
+                              </button>
+                              {rc.finalSubtitles&&rc.finalSubtitles.length>0&&<>
+                                <button className="refine-tb-btn" onClick={()=>clearSubPunct(comp.id)}>清理标点</button>
+                                <button className="refine-tb-btn success" onClick={()=>saveFinalSubtitles(comp.id)}>保存字幕</button>
+                              </>}
+                            </div>
+                            {!(rc.finalSubtitles&&rc.finalSubtitles.length>0)?(
+                              <div className="refine-subs-empty">
+                                {rc.summaryScript?.trim()
+                                  ?'点击「从字幕稿生成」自动拆分字幕，然后逐句检查修改'
+                                  :'请先填写并保存最终字幕稿，再生成成品字幕'}
+                              </div>
+                            ):(
+                              <div className="refine-subs-list">
+                                {rc.finalSubtitles.map((sub,i)=>{
+                                  const fmtT=s=>{const m=Math.floor(s/60),sec=(s%60).toFixed(1);return`${m}:${String(sec).padStart(4,'0')}`}
+                                  return (
+                                    <div key={sub.id||i} className="refine-subs-row">
+                                      <span className="refine-subs-idx">{i+1}</span>
+                                      <div className="refine-subs-times">
+                                        <span className="refine-subs-time">
+                                          <button className="rs-adj" onClick={()=>adjustSubTime(comp.id,sub.id||`s${i}`,'start',-0.1)}>‹</button>
+                                          {fmtT(sub.start)}
+                                          <button className="rs-adj" onClick={()=>adjustSubTime(comp.id,sub.id||`s${i}`,'start',0.1)}>›</button>
+                                        </span>
+                                        <span className="refine-subs-sep">→</span>
+                                        <span className="refine-subs-time">
+                                          <button className="rs-adj" onClick={()=>adjustSubTime(comp.id,sub.id||`s${i}`,'end',-0.1)}>‹</button>
+                                          {fmtT(sub.end)}
+                                          <button className="rs-adj" onClick={()=>adjustSubTime(comp.id,sub.id||`s${i}`,'end',0.1)}>›</button>
+                                        </span>
+                                      </div>
+                                      <input className="refine-subs-input"
+                                        value={sub.text}
+                                        onChange={e=>updateSubText(comp.id,sub.id||`s${i}`,e.target.value)}
+                                      />
+                                      <div className="refine-subs-ops">
+                                        <button className="rs-op" title="换成两行" onClick={()=>addSubNewline(comp.id,sub.id||`s${i}`)}>↵</button>
+                                        <button className="rs-op" title="拆成两条" onClick={()=>{
+                                          const t1=window.prompt('前半句：',sub.text.split(/[，,。！？；]/)[0]||sub.text.slice(0,Math.ceil(sub.text.length/2)))
+                                          if(t1===null) return
+                                          const t2=window.prompt('后半句：',sub.text.slice(t1.length)||sub.text.slice(Math.ceil(sub.text.length/2)))
+                                          if(t2===null) return
+                                          splitSub(comp.id,sub.id||`s${i}`,t1,t2)
+                                        }}>÷</button>
+                                        <button className="rs-op" title="合并上一条" onClick={()=>mergeSub(comp.id,sub.id||`s${i}`)} disabled={i===0}>⤴</button>
+                                        <button className="rs-op rs-del" title="删除本句" onClick={()=>deleteSub(comp.id,sub.id||`s${i}`)}>×</button>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Col 4: Copywriting (dropdown-based) */}
@@ -4517,10 +4715,7 @@ export default function App() {
                           <span className="ep-section-comp-tag">{selComp.name}</span>
                         </div>
                         <div className="ep-preview-video-wrap"
-                          style={reframeEnabled&&reframeAspect!=='保留原比例'?{
-                            aspectRatio: REFRAME_ASPECTS.find(a=>a.key===reframeAspect)?.ratio||'auto',
-                            overflow:'hidden',
-                          }:{}}>
+                          style={(()=>{const rfe=getCompReframe(selComp.id);return rfe.enabled&&rfe.aspect!=='保留原比例'?{aspectRatio:String(REFRAME_ASPECTS.find(a=>a.key===rfe.aspect)?.ratio||'auto'),overflow:'hidden'}:{}})()}>
                           {previewVideoUrl?(
                             <video
                               key={`ep-vid-${selComp.id}`}
@@ -4530,10 +4725,7 @@ export default function App() {
                               preload="metadata"
                               playsInline
                               className="ep-preview-video"
-                              style={reframeEnabled?{
-                                transform:`scale(${reframeScale}) translate(${(reframeOffsetX*100/reframeScale).toFixed(1)}%, ${(-reframeOffsetY*100/reframeScale).toFixed(1)}%)`,
-                                transformOrigin:'center center',
-                              }:{}}
+                              style={(()=>{const rfe=getCompReframe(selComp.id);return rfe.enabled?{transform:`scale(${rfe.scale}) translate(${(rfe.offsetX*100/rfe.scale).toFixed(1)}%, ${(-rfe.offsetY*100/rfe.scale).toFixed(1)}%)`,transformOrigin:'center center'}:{}})()}
                               onLoadedMetadata={e=>{e.target.currentTime=previewStartSec}}
                             />
                           ):(
@@ -4637,45 +4829,36 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* 画面裁切 / 去原字幕 */}
+                        {/* 成品字幕 & 画面取景 状态 */}
                         <div className="ep-ss-group">
-                          <div className="ep-ss-group-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-                            <span>画面裁切 / 去原字幕</span>
-                            <label className={`ep-toggle-label ${reframeEnabled?'on':''}`} onClick={()=>setReframeEnabled(v=>!v)}>
-                              <span className={`ep-toggle-pill ${reframeEnabled?'on':''}`}/>
-                              {reframeEnabled?'已开启':'已关闭'}
-                            </label>
+                          <div className="ep-ss-group-title">精修设置状态</div>
+                          <div className="ep-det-rows" style={{gap:6}}>
+                            {(()=>{
+                              const hasFS = rc.finalSubtitles&&rc.finalSubtitles.length>0
+                              const isSaved = !!rc.finalSubtitlesSavedAt
+                              return(
+                                <div className={`ep-det-row ${hasFS&&isSaved?'ok':hasFS?'warn':''}`} style={{justifyContent:'space-between'}}>
+                                  <span>成品字幕</span>
+                                  <span style={{display:'flex',alignItems:'center',gap:6}}>
+                                    {hasFS?`${isSaved?'已保存':'未保存'} · ${rc.finalSubtitles.length} 句`:'未生成'}
+                                    <button className="ep-ai-btn ep-ai-btn-warn" style={{fontSize:10,padding:'2px 6px'}} onClick={()=>setSubStep('refine')}>精修页修改</button>
+                                  </span>
+                                </div>
+                              )
+                            })()}
+                            {(()=>{
+                              const rfc = getCompReframe(selComp.id)
+                              return(
+                                <div className={`ep-det-row ${rfc.enabled?'ok':''}`} style={{justifyContent:'space-between'}}>
+                                  <span>画面取景</span>
+                                  <span style={{display:'flex',alignItems:'center',gap:6}}>
+                                    {rfc.enabled?`${rfc.aspect} · ${Math.round(rfc.scale*100)}%`:'未设置'}
+                                    <button className="ep-ai-btn ep-ai-btn-warn" style={{fontSize:10,padding:'2px 6px'}} onClick={()=>setSubStep('refine')}>精修页调整</button>
+                                  </span>
+                                </div>
+                              )
+                            })()}
                           </div>
-                          {reframeEnabled&&<>
-                            <div className="ep-ss-row" style={{marginTop:8,flexWrap:'wrap',gap:4}}>
-                              {REFRAME_ASPECTS.map(a=>(
-                                <button key={a.key} className={`ep-sg-btn ep-sg-btn-xs ${reframeAspect===a.key?'active':''}`}
-                                  onClick={()=>setReframeAspect(a.key)}>{a.label}</button>
-                              ))}
-                            </div>
-                            <div className="ep-ss-row" style={{marginTop:8}}>
-                              <span className="ep-ss-lbl" style={{width:60}}>画面放大</span>
-                              <input type="range" min="1.0" max="1.5" step="0.01" value={reframeScale}
-                                onChange={e=>setReframeScale(parseFloat(e.target.value))}
-                                className="ep-range" style={{flex:1}}/>
-                              <span className="ep-ss-val">{Math.round(reframeScale*100)}%</span>
-                            </div>
-                            <div className="ep-ss-row" style={{marginTop:4}}>
-                              <span className="ep-ss-lbl" style={{width:60}}>上移画面</span>
-                              <input type="range" min="-0.5" max="0.5" step="0.01" value={reframeOffsetY}
-                                onChange={e=>setReframeOffsetY(parseFloat(e.target.value))}
-                                className="ep-range" style={{flex:1}}/>
-                              <span className="ep-ss-val">{reframeOffsetY>0?'+':''}{Math.round(reframeOffsetY*100)}%</span>
-                            </div>
-                            <div className="ep-ss-row" style={{marginTop:4}}>
-                              <span className="ep-ss-lbl" style={{width:60}}>右移画面</span>
-                              <input type="range" min="-0.5" max="0.5" step="0.01" value={reframeOffsetX}
-                                onChange={e=>setReframeOffsetX(parseFloat(e.target.value))}
-                                className="ep-range" style={{flex:1}}/>
-                              <span className="ep-ss-val">{reframeOffsetX>0?'+':''}{Math.round(reframeOffsetX*100)}%</span>
-                            </div>
-                            <div className="ep-ss-hint">放大画面 + 上移可把底部原字幕裁出画布</div>
-                          </>}
                         </div>
 
                         {/* 画面去重 */}
@@ -4705,6 +4888,55 @@ export default function App() {
                               </label>
                             ))}
                           </div>
+                          {addMusic&&(
+                            <div className="ep-bgm-section">
+                              <div className="ep-bgm-import-row">
+                                <input type="file" id="ep-bgm-file-input" accept=".mp3,.wav,.m4a,.aac" style={{display:'none'}}
+                                  onChange={async e=>{
+                                    const f=e.target.files[0]; if(!f) return
+                                    e.target.value=''
+                                    const url=URL.createObjectURL(f)
+                                    const aud=new Audio(url)
+                                    aud.onloadedmetadata=()=>{
+                                      const dur=aud.duration||0
+                                      URL.revokeObjectURL(url)
+                                      const meta={fileName:f.name,originalName:f.name,fileType:f.type,duration:dur,importedAt:new Date().toISOString(),url:null,synced:false}
+                                      setBgmFile(meta)
+                                      showToast('背景音乐已导入，正在同步…')
+                                      const fd=new FormData(); fd.append('file',f); fd.append('originalName',f.name)
+                                      fetch('http://127.0.0.1:8765/upload-bgm',{method:'POST',body:fd})
+                                        .then(r=>r.json()).then(d=>{
+                                          if(d.ok) setBgmFile(prev=>({...prev,storedFileName:d.fileName,synced:true}))
+                                          else showToast('背景音乐同步失败：'+d.error)
+                                        }).catch(()=>showToast('本地导出服务未启动，背景音乐未同步'))
+                                    }
+                                    aud.onerror=()=>{ URL.revokeObjectURL(url); showToast('音频读取失败') }
+                                  }}
+                                />
+                                <button className="refine-tb-btn" onClick={()=>document.getElementById('ep-bgm-file-input')?.click()}>
+                                  {bgmFile?'重新导入背景音乐':'导入背景音乐'}
+                                </button>
+                                {bgmFile&&(
+                                  <span className={`ep-bc3-tag ${bgmFile.synced?'ok':'warn'}`} style={{fontSize:10}}>
+                                    {bgmFile.synced?'已同步':'未同步'}
+                                  </span>
+                                )}
+                              </div>
+                              {bgmFile&&(
+                                <>
+                                  <div className="ep-bgm-name">{bgmFile.originalName||bgmFile.fileName}</div>
+                                  <div className="ep-ss-row" style={{marginTop:6}}>
+                                    <span className="ep-ss-lbl">背景音量</span>
+                                    <input type="range" min="0" max="1" step="0.01" value={bgmVolume}
+                                      onChange={e=>setBgmVolume(parseFloat(e.target.value))}
+                                      className="ep-range" style={{flex:1}}/>
+                                    <span className="ep-ss-val">{Math.round(bgmVolume*100)}%</span>
+                                  </div>
+                                </>
+                              )}
+                              {!bgmFile&&<div style={{fontSize:11,color:'var(--text-muted)',marginTop:4}}>导入 mp3/wav/m4a/aac 文件</div>}
+                            </div>
+                          )}
                           <div className="ep-ss-group-title" style={{marginTop:14}}>原字幕处理</div>
                           <div className="ep-ss-row" style={{gap:4,flexWrap:'wrap'}}>
                             {[['keep','保留原字幕'],['crop','裁切去原字幕'],['cover','黑条遮挡']].map(([k,l])=>(
@@ -4723,8 +4955,8 @@ export default function App() {
                               </select>
                             </div>
                           )}
-                          {origSubMode==='crop'&&!reframeEnabled&&(
-                            <div className="ep-ss-warn">⚠ 选了裁切但「画面裁切」未开启，请先配置</div>
+                          {origSubMode==='crop'&&!getCompReframe(selComp.id).enabled&&(
+                            <div className="ep-ss-warn">⚠ 选了裁切但「画面裁切」未开启，请在精修页配置</div>
                           )}
                           <div className="ep-ss-group-title" style={{marginTop:14}}>成品字幕烧录</div>
                           <div className="ep-ss-row" style={{gap:8,flexWrap:'wrap'}}>
@@ -4807,60 +5039,6 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                  </div>
-
-                  {/* ── 成品字幕编辑 ── */}
-                  <div className="ep-section-wrap ep-subs-panel">
-                    <div className="ep-section-title-row">
-                      <span className="ep-section-title">成品字幕编辑</span>
-                      <span className="ep-section-sub">
-                        {rc.finalSubtitles&&rc.finalSubtitles.length>0
-                          ?(rc.finalSubtitlesSavedAt?`已保存 ${rc.finalSubtitlesSavedAt.slice(11,16)} · ${rc.finalSubtitles.length} 句`:`${rc.finalSubtitles.length} 句（未保存）`)
-                          :'未生成'}
-                      </span>
-                    </div>
-                    <div className="ep-subs-toolbar">
-                      <button className="ep-act-btn secondary" onClick={()=>handleGenerateSubs(selComp.id,selComp,rc)}>
-                        {rc.finalSubtitles&&rc.finalSubtitles.length>0?'重新生成':'从字幕稿生成'}
-                      </button>
-                      {rc.finalSubtitles&&rc.finalSubtitles.length>0&&<>
-                        <button className="ep-act-btn secondary" onClick={()=>clearSubPunct(selComp.id)}>一键清理标点</button>
-                        <button className="ep-act-btn save" onClick={()=>saveFinalSubtitles(selComp.id)}>保存成品字幕</button>
-                      </>}
-                    </div>
-                    {!(rc.finalSubtitles&&rc.finalSubtitles.length>0)&&(
-                      <div className="ep-subs-empty">
-                        {ckScriptExists
-                          ?'点击「从字幕稿生成」自动拆分字幕，然后逐句检查修改'
-                          :'请先在精修页填写最终字幕稿，再生成成品字幕'}
-                      </div>
-                    )}
-                    {rc.finalSubtitles&&rc.finalSubtitles.length>0&&(
-                      <div className="ep-subs-list">
-                        <div className="ep-subs-header">
-                          <span style={{width:28}}>序</span>
-                          <span style={{width:52}}>开始</span>
-                          <span style={{width:52}}>结束</span>
-                          <span style={{flex:1}}>字幕文本</span>
-                          <span style={{width:32}}></span>
-                        </div>
-                        {rc.finalSubtitles.map((sub,i)=>{
-                          const fmtT=s=>{const m=Math.floor(s/60),sec=(s%60).toFixed(1);return `${m}:${String(sec).padStart(4,'0')}`}
-                          return (
-                            <div key={sub.id||i} className="ep-subs-row">
-                              <span className="ep-subs-idx">{i+1}</span>
-                              <span className="ep-subs-time">{fmtT(sub.start)}</span>
-                              <span className="ep-subs-time">{fmtT(sub.end)}</span>
-                              <input className="ep-subs-input"
-                                value={sub.text}
-                                onChange={e=>updateSubText(selComp.id, sub.id||(sub.id=`sub-r-${i}`), e.target.value)}
-                              />
-                              <button className="ep-subs-del" onClick={()=>deleteSub(selComp.id, sub.id||(sub.id=`sub-r-${i}`))}>×</button>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
                   </div>
 
                   {/* ── 剪辑草稿 ── */}
@@ -4970,7 +5148,7 @@ export default function App() {
                         <div className="ep-det-rows">
                           <div className={`ep-det-row ${ckScriptExists?'ok':'warn'}`}><span>字幕汇总稿</span><span>{ckScriptExists?`约 ${rc.summaryScript.trim().length} 字`:'未填写'}</span></div>
                           <div className={`ep-det-row ${rc.finalSubtitles&&rc.finalSubtitles.length>0?(rc.finalSubtitlesSavedAt?'ok':'warn'):burnInSub?'warn':''}`}><span>成品字幕</span><span>{!burnInSub?'不烧录':rc.finalSubtitles&&rc.finalSubtitles.length>0?(rc.finalSubtitlesSavedAt?`已保存 ${rc.finalSubtitles.length} 句`:`${rc.finalSubtitles.length} 句未保存`):'将从字幕稿自动生成'}</span></div>
-                          <div className={`ep-det-row ${reframeEnabled?'ok':''}`}><span>画面裁切</span><span>{reframeEnabled?`${reframeAspect} · ${Math.round(reframeScale*100)}% · Y${reframeOffsetY>0?'+':''}${Math.round(reframeOffsetY*100)}%`:'未启用'}</span></div>
+                          {(()=>{const rfc=getCompReframe(selComp.id);return(<div className={`ep-det-row ${rfc.enabled?'ok':''}`}><span>画面裁切</span><span>{rfc.enabled?`${rfc.aspect} · ${Math.round(rfc.scale*100)}% · Y${rfc.offsetY>0?'+':''}${Math.round(rfc.offsetY*100)}%`:'未启用（精修页设置）'}</span></div>)})()}
                           <div className={`ep-det-row ${origSubMode!=='keep'?'ok':''}`}><span>原字幕处理</span><span>{origSubMode==='keep'?'保留原字幕':origSubMode==='crop'?'裁切去原字幕':'黑条遮挡'}</span></div>
                           <div className={`ep-det-row ${ckTitleExists?'ok':''}`}><span>最终标题</span><span>{ckTitleExists?cp.finalTitle:'未填写'}</span></div>
                           <div className={`ep-det-row ${ckWechatExists?'ok':''}`}><span>公众号正文</span><span>{ckWechatExists?`约 ${cp.finalWechatBody.trim().length} 字`:'未填写'}</span></div>

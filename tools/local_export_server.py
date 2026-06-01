@@ -125,6 +125,8 @@ class ExportHandler(BaseHTTPRequestHandler):
         original = fields.get("originalName") or up["filename"] or "file"
         if kind == "video":
             target_dir, prefix, default_ext = VIDEOS_DIR, "video", ".mp4"
+        elif kind == "bgm":
+            target_dir, prefix, default_ext = AUDIO_DIR, "bgm", ".mp3"
         else:
             target_dir, prefix, default_ext = AUDIO_DIR, "audio", ".mp3"
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -137,7 +139,8 @@ class ExportHandler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": f"保存文件失败: {e}"})
             return
         size = dest.stat().st_size
-        print(f"[服务] 已同步{('视频' if kind=='video' else '配音')}：{original} → {stored} ({size/1024/1024:.1f} MB)", flush=True)
+        kind_label = '视频' if kind=='video' else ('背景音乐' if kind=='bgm' else '配音')
+        print(f"[服务] 已同步{kind_label}：{original} → {stored} ({size/1024/1024:.1f} MB)", flush=True)
         self._json({
             "ok": True,
             "type": kind,
@@ -153,6 +156,9 @@ class ExportHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/upload-audio":
             self._handle_upload("audio")
+            return
+        if self.path == "/upload-bgm":
+            self._handle_upload("bgm")
             return
         if self.path != "/export":
             self._json({"ok": False, "error": "not found"}, 404)

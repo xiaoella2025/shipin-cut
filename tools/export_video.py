@@ -669,6 +669,37 @@ def main():
             try: sub_file.unlink()
             except: pass
 
+    # v0.9.5: Background music mixing
+    bgm_cfg = export_settings.get("bgm") or {}
+    if bgm_cfg.get("enabled") and voice_path:
+        bgm_name = bgm_cfg.get("fileName") or ""
+        bgm_volume = float(bgm_cfg.get("volume", 0.18))
+        bgm_path = None
+        if bgm_name:
+            bgm_path = AUDIO_DIR / bgm_name
+            if not bgm_path.exists():
+                log(f"背景音乐文件未找到，跳过背景音乐混合: {bgm_name}")
+                bgm_path = None
+        if bgm_path:
+            bgm_out = OUTPUT_DIR / f"bgm_{final_name}"
+            log(f"正在混合背景音乐（音量 {int(bgm_volume*100)}%）: {bgm_path.name}")
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(final_out),
+                "-i", str(bgm_path),
+                "-filter_complex",
+                f"[0:a]volume=1.0[main];[1:a]volume={bgm_volume:.2f},aloop=-1:size=2e+09[bgm];[main][bgm]amix=inputs=2:duration=first[aout]",
+                "-map", "0:v:0",
+                "-map", "[aout]",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                str(bgm_out),
+            ]
+            run(cmd)
+            final_out.unlink()
+            shutil.move(str(bgm_out), str(final_out))
+            log(f"背景音乐混合完成 → {final_name}")
+
     size_mb = final_out.stat().st_size / 1024 / 1024
     log(f"完成！输出文件: export_workspace/output/{final_name}  ({size_mb:.1f} MB)")
 
