@@ -11,7 +11,6 @@ import os
 import json
 import subprocess
 import shutil
-import tempfile
 import re
 from pathlib import Path
 from datetime import datetime
@@ -183,9 +182,7 @@ def resolve_voice(data):
 
 # ── 裁剪单个片段 ──────────────────────────────────────────────────────────────
 def cut_segment(seg, video_path, out_path, speed=1.0):
-    """
-    从 video_path 裁剪 [startSec, endSec]，应用速度，输出到 out_path。
-    """
+    """从 video_path 裁剪 [startSec, endSec]，应用速度，输出到 out_path。"""
     start  = seg["startSec"]
     end    = seg["endSec"]
     dur    = end - start
@@ -194,13 +191,9 @@ def cut_segment(seg, video_path, out_path, speed=1.0):
         return False
 
     vf = ""
-    af = ""
     if abs(speed - 1.0) > 0.01:
-        # setpts 控制视频速度，atempo 控制音频速度（支持 0.5~2.0）
         pts_val = 1.0 / speed
         vf = f"setpts={pts_val:.6f}*PTS"
-        # atempo 只支持 [0.5, 2.0]，超出要串联
-        af = _build_atempo(speed)
 
     cmd = [
         "ffmpeg", "-y",
@@ -256,11 +249,7 @@ def concat_segments(clip_paths, out_path):
 
 # ── 混合配音 ──────────────────────────────────────────────────────────────────
 def mux_voice(video_path, voice_path, out_path, audio_policy):
-    """
-    将最终语音作为成品唯一音轨合入视频。
-    临时视频由 -an 生成，没有音频轨，所以只取 0:v:0 + 1:a:0。
-    v0.9 暂不支持 amix 原声混合，keepOriginalAudio 为 true 时打印提示后仍走替换逻辑。
-    """
+    """将最终语音作为成品唯一音轨合入视频。"""
     keep_orig = audio_policy.get("keepOriginalAudio", False) if audio_policy else False
     if keep_orig:
         log("提示：当前 v0.9 暂不混合原声，仍使用最终语音作为主音轨。")
@@ -298,28 +287,32 @@ def get_video_dimensions(video_path):
 
 
 _ASPECT_MAP = {
-    "16:9":    (1920, 1080),
-    "4:3":     (1440, 1080),
-    "3:4":     (810,  1080),
-    "9:16":    (607,  1080),
-    "1:1":     (1080, 1080),
-    "2:1":     (2160, 1080),
-    "2.35:1":  (2540, 1080),
+    "16:9":   (1920, 1080),
+    "4:3":    (1440, 1080),
+    "3:4":    (810,  1080),
+    "9:16":   (608,  1080),
+    "1:1":    (1080, 1080),
+    "2:1":    (2160, 1080),
+    "2.35:1": (2540, 1080),
 }
 
 def aspect_to_wh(aspect_str):
     """返回 (W, H)，保留原比例 / 未知 key 返回 None"""
     if not aspect_str or aspect_str == "保留原比例":
         return None
-    return _ASPECT_MAP.get(aspect_str)
+    wh = _ASPECT_MAP.get(aspect_str)
+    if not wh:
+        return None
+    W, H = wh
+    return (W - W % 2), (H - H % 2)
 
 
 def reframe_video(in_path, out_path, W, H, scale=1.0, offset_x=0.0, offset_y=0.0):
     """
     裁切 in_path 到 W×H 画布，输出 out_path。
     scale:    额外放大系数（>1 可避免黑边）
-    offset_x: 水平偏移比例，>0 向右移动
-    offset_y: 垂直偏移比例，>0 向上移动（有利于隐藏底部原字幕）
+    offset_x: 水平偏移比例，>0 向右移（画面右移，底部原字幕不受影响）
+    offset_y: 垂直偏移比例，>0 向上移（crop 向下裁，有利于隐藏底部原字幕）
     """
     src_w, src_h = get_video_dimensions(in_path)
     fill_f = max(W / src_w, H / src_h) * scale
@@ -330,17 +323,18 @@ def reframe_video(in_path, out_path, W, H, scale=1.0, offset_x=0.0, offset_y=0.0
 
     cx = (scaled_w - W) / 2 - offset_x * W
     cy = (scaled_h - H) / 2 - offset_y * H
-    cx = max(0, min(cx, scaled_w - W))
-    cy = max(0, min(cy, scaled_h - H))
+    cx = max(0.0, min(cx, float(scaled_w - W)))
+    cy = max(0.0, min(cy, float(scaled_h - H)))
 
-    vf = f"scale={scaled_w}:{scaled_h}:flags=lanczos,crop={W}:{H}:{cx:.0f}:{cy:.0f}"
+    vf = (
+        f"scale={scaled_w}:{scaled_h}:flags=lanczos,"
+        f"crop={W}:{H}:{int(cx)}:{int(cy)}"
+    )
     cmd = [
         "ffmpeg", "-y",
         "-i", str(in_path),
         "-vf", vf,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "18",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-c:a", "copy",
         str(out_path),
     ]
@@ -361,20 +355,17 @@ def split_script_to_subtitles(text, total_duration):
     raw_lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
     sentences = []
     for line in raw_lines:
-        # 按句末标点切分（保留标点在前一句末尾）
         parts = re.split(r'(?<=[。！？；…])', line)
         for part in parts:
             part = part.strip()
             if not part:
                 continue
-            # 超过 20 字按逗顿号再切
             if len(part) > 20:
                 sub_parts = re.split(r'(?<=[，、：])', part)
                 for sp in sub_parts:
                     sp = sp.strip()
                     if not sp:
                         continue
-                    # 仍超 20 字则强制截断
                     while len(sp) > 20:
                         sentences.append(sp[:20])
                         sp = sp[20:]
@@ -407,127 +398,59 @@ def _format_ass_time(seconds):
     return f"{h}:{m:02d}:{int(s):02d}.{cs:02d}"
 
 
-def get_video_dimensions(video_path):
-    """Use ffprobe to get (width, height) of a video file."""
-    result = subprocess.run([
-        "ffprobe", "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
-        "-of", "csv=s=x:p=0",
-        str(video_path),
-    ], capture_output=True, text=True)
-    if result.returncode == 0 and 'x' in result.stdout:
-        parts = result.stdout.strip().split('x')
-        if len(parts) == 2:
-            try:
-                return int(parts[0]), int(parts[1])
-            except ValueError:
-                pass
-    return 1920, 1080  # fallback
-
-
-def aspect_to_wh(aspect_str, resolution="1080p"):
-    base_long = 1920 if resolution == "1080p" else 1280
-    base_short = 1080 if resolution == "1080p" else 720
-    mapping = {
-        "16:9":   (base_long, base_short),
-        "4:3":    (1440, base_short),
-        "3:4":    (base_short, 1440),
-        "9:16":   (base_short, base_long),
-        "1:1":    (base_short, base_short),
-        "2:1":    (base_long, base_long // 2),
-        "2.35:1": (base_long, int(base_long / 2.35) & ~1),
-    }
-    wh = mapping.get(aspect_str)
-    if not wh:
-        return None
-    # ensure even dimensions
-    W, H = wh
-    W = W - (W % 2)
-    H = H - (H % 2)
-    return W, H
-
-
-def reframe_video(in_path, out_path, W, H, scale=1.0, offset_x=0.0, offset_y=0.0):
+def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_y=1080):
     """
-    Reframe video to W×H canvas.
-    scale: additional zoom factor on top of fill-to-cover.
-    offset_x: fraction of W (positive = image pans right = frame shows left side more)
-    offset_y: fraction of H (positive = image pans up = frame shows top more = hides bottom sub)
+    生成 ASS 字幕文件。
+    subtitle_style: dict with fontFamily/fontSize/color/outline/outlineColor/
+                    outlineWidth/background/backgroundOpacity/position/marginV
+    cover_pct: 底部遮挡高度比例（0~1），字幕上移至遮挡条上方。
     """
-    src_w, src_h = get_video_dimensions(in_path)
-    # Compute scale factor to fill W×H at the given zoom
-    fill_f = max(W / src_w, H / src_h) * scale
-    scaled_w = int(src_w * fill_f)
-    scaled_h = int(src_h * fill_f)
-    # Make even
-    scaled_w += scaled_w % 2
-    scaled_h += scaled_h % 2
-    # Crop position (crop_x, crop_y are top-left of crop window in scaled image)
-    cx = max(0, min((scaled_w - W) / 2 - offset_x * W, scaled_w - W))
-    cy = max(0, min((scaled_h - H) / 2 - offset_y * H, scaled_h - H))
-
-    vf = (
-        f"scale={scaled_w}:{scaled_h}:flags=lanczos,"
-        f"crop={W}:{H}:{int(cx)}:{int(cy)}"
-    )
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(in_path),
-        "-vf", vf,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-c:a", "copy",
-        str(out_path),
-    ]
-    run(cmd)
-
-
-def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_y=1920):
     st = subtitle_style or {}
-    font = st.get("fontFamily", "Microsoft YaHei")
-    font_size = int(st.get("fontSize", max(48, int(play_res_y / 27))))
 
-    # Color mapping (ASS format: &HAABBGGRR)
     def color_to_ass(c, alpha=0):
         a = format(alpha, '02X')
-        m = {'white':f'&H{a}FFFFFF','yellow':f'&H{a}00FFFF','black':f'&H{a}000000','red':f'&H{a}0000FF'}
-        return m.get(c, f'&H{a}FFFFFF')
+        table = {
+            'white':  f'&H{a}FFFFFF',
+            'yellow': f'&H{a}00FFFF',
+            'black':  f'&H{a}000000',
+            'red':    f'&H{a}0000FF',
+        }
+        return table.get(c, f'&H{a}FFFFFF')
 
-    primary = color_to_ass(st.get("color", "white"))
+    font         = st.get("fontFamily", "Microsoft YaHei")
+    font_size    = int(st.get("fontSize", max(48, int(play_res_y / 27))))
+    primary      = color_to_ass(st.get("color", "white"))
+    outline_on   = st.get("outline", True)
+    outline_c    = color_to_ass(st.get("outlineColor", "black")) if outline_on else color_to_ass("black")
+    outline_w    = int(st.get("outlineWidth", 4)) if outline_on else 0
+    shadow_w     = max(0, outline_w // 2)
 
-    # Outline
-    outline_on = st.get("outline", True)
-    outline_c = color_to_ass(st.get("outlineColor", "black")) if outline_on else color_to_ass("black")
-    outline_w = int(st.get("outlineWidth", 4)) if outline_on else 0
-    shadow_w = max(0, outline_w // 2)
-
-    # Background
-    bg = st.get("background", "none")
-    bg_opacity = float(st.get("backgroundOpacity", 0.5))
+    bg           = st.get("background", "none")
+    bg_opacity   = float(st.get("backgroundOpacity", 0.5))
     if bg != "none":
-        alpha_val = int((1 - bg_opacity) * 255)
+        alpha_val    = int((1.0 - bg_opacity) * 255)
         border_style = 3
-        bg_color = color_to_ass(bg, alpha=alpha_val)
+        bg_color     = color_to_ass(bg, alpha=alpha_val)
     else:
         border_style = 1
-        bg_color = "&H80000000"
+        bg_color     = "&H80000000"
 
-    # Position / margin
-    pos = st.get("position", "bottom")
-    margin_v_base = int(st.get("marginV", 60))
-    cover_px = max(0, int(play_res_y * cover_pct)) + 10
-    if pos == "bottom":
-        alignment, margin_v = 2, margin_v_base + cover_px
-    elif pos == "lower":
-        alignment, margin_v = 2, int(play_res_y * 0.15) + cover_px
-    elif pos == "middle":
-        alignment, margin_v = 5, 0  # center screen
-    else:  # top
-        alignment, margin_v = 8, margin_v_base
+    position     = st.get("position", "bottom")
+    margin_v     = int(st.get("marginV", 60))
+    cover_px     = max(0, int(play_res_y * cover_pct)) + 10 if cover_pct > 0 else 0
+
+    align_map    = {'bottom': 2, 'lower': 2, 'middle': 5, 'top': 8}
+    alignment    = align_map.get(position, 2)
+
+    if position == 'lower':
+        margin_v = int(play_res_y * 0.15) + cover_px
+    elif position in ('bottom', 'top'):
+        margin_v = margin_v + cover_px
+    # middle: marginV ignored by ASS
 
     header = (
         "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\nScaledBorderAndShadow: yes\n"
-        "PlayResX: 1080\n" + f"PlayResY: {play_res_y}\n\n"
+        f"PlayResX: 1080\nPlayResY: {play_res_y}\n\n"
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
@@ -538,6 +461,7 @@ def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_
         f"{alignment},30,30,{margin_v},1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
+
     with open(out_path, 'w', encoding='utf-8-sig') as f:
         f.write(header)
         for sub in subs:
@@ -545,6 +469,7 @@ def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_
             end   = _format_ass_time(sub['end'])
             text  = sub['text'].replace('\n', '\\N')
             f.write(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n")
+
     return out_path
 
 
@@ -585,11 +510,38 @@ def main():
     draft_path = find_draft(sys.argv[1] if len(sys.argv) > 1 else None)
     data = load_draft(draft_path)
 
-    comp_name       = data.get("compositionName", "output")
-    timeline        = data.get("derivedTimeline", [])
-    source_vids     = data.get("sourceVideos", [])
-    export_settings = data.get("exportSettings", {}) or {}
-    audio_policy    = export_settings
+    comp_name        = data.get("compositionName", "output")
+    timeline         = data.get("derivedTimeline", [])
+    source_vids      = data.get("sourceVideos", [])
+    export_settings  = data.get("exportSettings", {}) or {}
+    audio_policy     = export_settings
+    summary_script   = (data.get("summaryScript") or "").strip()
+    final_subtitles  = data.get("finalSubtitles")  # v0.9.4: per-comp edited subtitles
+
+    # v0.9.4: reframe settings
+    reframe_cfg  = export_settings.get("reframe") or {}
+    reframe_on   = reframe_cfg.get("enabled", False)
+    reframe_asp  = reframe_cfg.get("aspect", "保留原比例")
+    reframe_scl  = float(reframe_cfg.get("scale", 1.0))
+    reframe_ox   = float(reframe_cfg.get("offsetX", 0.0))
+    reframe_oy   = float(reframe_cfg.get("offsetY", 0.0))
+
+    # v0.9.4: origSubMode ('keep'|'crop'|'cover'), subtitle style
+    orig_sub_mode  = export_settings.get("origSubMode", None)
+    if orig_sub_mode is None:
+        # fallback from v0.9.3 boolean
+        orig_sub_mode = "cover" if export_settings.get("coverOriginalSub", False) else "keep"
+    subtitle_style = export_settings.get("subtitleStyle") or {}
+
+    # burn subtitle flag
+    burn_sub = export_settings.get("burnInSubtitle", False)
+
+    # cover strip height (used when origSubMode == 'cover')
+    cover_height_str = export_settings.get("coverOrigSubHeight", "12%")
+    try:
+        cover_pct = float(str(cover_height_str).rstrip('%')) / 100.0
+    except (ValueError, AttributeError):
+        cover_pct = 0.12
 
     if not timeline:
         err("derivedTimeline 为空，草稿中没有片段")
@@ -649,77 +601,73 @@ def main():
     try: concat_out.unlink()
     except: pass
 
-    # v0.9.4: apply reframe / canvas crop
-    reframe = export_settings.get("reframe") or {}
-    reframe_enabled = reframe.get("enabled", False)
-    reframe_aspect = reframe.get("aspect", "保留原比例")
-    reframe_scale = float(reframe.get("scale", 1.0))
-    reframe_offset_x = float(reframe.get("offsetX", 0.0))
-    reframe_offset_y = float(reframe.get("offsetY", 0.0))
-    resolution = export_settings.get("resolution", "1080p")
-
-    if reframe_enabled and reframe_aspect != "保留原比例":
-        wh = aspect_to_wh(reframe_aspect, resolution)
+    # v0.9.4: 画面裁切（reframe）
+    if reframe_on and reframe_asp and reframe_asp != "保留原比例":
+        wh = aspect_to_wh(reframe_asp)
         if wh:
             W, H = wh
-            reframed_out = TEMP_DIR / f"reframed_{ts}.mp4"
-            log(f"画面裁切：{reframe_aspect} {W}×{H}  缩放={reframe_scale:.2f}  偏移Y={reframe_offset_y:.2f}")
-            reframe_video(final_out, reframed_out, W, H, reframe_scale, reframe_offset_x, reframe_offset_y)
+            reframed_out = OUTPUT_DIR / f"reframed_{final_name}"
+            log(f"画面裁切: {reframe_asp} ({W}×{H}), 缩放={reframe_scl:.2f}, offsetX={reframe_ox:.2f}, offsetY={reframe_oy:.2f}")
+            reframe_video(final_out, reframed_out, W, H, reframe_scl, reframe_ox, reframe_oy)
             final_out.unlink()
             shutil.move(str(reframed_out), str(final_out))
-            log(f"画面裁切完成 → {W}×{H}")
+            log(f"裁切完成 → {final_name}")
 
-    # Determine output dimensions for subtitle ASS
-    out_w, out_h = get_video_dimensions(final_out)
+    # v0.9.3/v0.9.4: 字幕 + 遮挡
+    need_cover   = (orig_sub_mode == "cover")
+    need_burn_sub = burn_sub
+    need_burn    = need_burn_sub or need_cover
 
-    # v0.9.4: subtitle and cover
-    orig_sub_mode = export_settings.get("origSubMode",
-        "cover" if export_settings.get("coverOriginalSub") else "keep")
-    cover_height_str = export_settings.get("coverOrigSubHeight", "12%")
-    try:
-        cover_pct = float(str(cover_height_str).rstrip('%')) / 100.0
-    except (ValueError, AttributeError):
-        cover_pct = 0.12
-    need_cover = orig_sub_mode == "cover"
+    if need_burn:
+        # 获取输出视频尺寸（用于 ASS PlayRes）
+        out_w, out_h = get_video_dimensions(final_out)
 
-    burn_sub = export_settings.get("burnInSubtitle", False)
-    subtitle_style = data.get("subtitleStyle") or {}
-    final_subs = data.get("finalSubtitles") or None
-    summary_script = (data.get("summaryScript") or "").strip()
+        sub_file = None
+        if need_burn_sub:
+            # v0.9.4: 优先使用用户逐句编辑的 finalSubtitles
+            if final_subtitles and len(final_subtitles) > 0:
+                subs = [
+                    {'start': s.get('start', 0), 'end': s.get('end', 0), 'text': s.get('text', '')}
+                    for s in final_subtitles
+                    if s.get('text', '').strip()
+                ]
+                log(f"使用用户编辑字幕，共 {len(subs)} 条")
+            elif summary_script:
+                total_dur = data.get("totalDuration") or sum(
+                    seg.get("actualDur", seg.get("endSec", 0) - seg.get("startSec", 0))
+                    for seg in timeline
+                )
+                subs = split_script_to_subtitles(summary_script, total_dur)
+                log(f"从字幕稿切分，共 {len(subs)} 条")
+            else:
+                subs = []
+                log("字幕稿为空，跳过字幕烧录")
 
-    sub_file = None
-    if burn_sub:
-        subs_to_use = []
-        if final_subs and isinstance(final_subs, list) and len(final_subs) > 0:
-            subs_to_use = final_subs
-            log(f"使用成品字幕（用户编辑版），共 {len(subs_to_use)} 条")
-        elif summary_script:
-            total_dur = data.get("totalDuration") or sum(
-                seg.get("actualDur", seg.get("endSec", 0) - seg.get("startSec", 0))
-                for seg in timeline
+            if subs:
+                sub_file = TEMP_DIR / "sub.ass"
+                write_ass_file(
+                    subs, sub_file,
+                    subtitle_style=subtitle_style,
+                    cover_pct=cover_pct if need_cover else 0.0,
+                    play_res_y=out_h,
+                )
+                log(f"字幕文件已生成，共 {len(subs)} 条")
+
+        if sub_file or need_cover:
+            burned_out = OUTPUT_DIR / f"burned_{final_name}"
+            actual_cover = cover_pct if need_cover else 0.0
+            burn_sub_and_cover(
+                final_out, burned_out,
+                sub_name=sub_file.name if sub_file else None,
+                cover_pct=actual_cover,
             )
-            subs_to_use = split_script_to_subtitles(summary_script, total_dur)
-            log(f"从字幕汇总稿自动生成，共 {len(subs_to_use)} 条")
-        else:
-            log("字幕稿为空且无成品字幕，跳过字幕烧录")
+            final_out.unlink()
+            shutil.move(str(burned_out), str(final_out))
+            log(f"字幕/遮挡烧录完成 → {final_name}")
 
-        if subs_to_use:
-            sub_file = TEMP_DIR / "sub.ass"
-            write_ass_file(subs_to_use, sub_file, subtitle_style, cover_pct if need_cover else 0.0, out_h)
-            log(f"字幕文件已生成：{len(subs_to_use)} 条")
-
-    if sub_file or need_cover:
-        burned_out = OUTPUT_DIR / f"burned_{final_name}"
-        burn_sub_and_cover(final_out, burned_out,
-            sub_name=sub_file.name if sub_file else None,
-            cover_pct=cover_pct if need_cover else 0.0)
-        final_out.unlink()
-        shutil.move(str(burned_out), str(final_out))
-        log(f"字幕/遮挡烧录完成 → {final_name}")
-
-    if sub_file and sub_file.exists():
-        try: sub_file.unlink()
-        except: pass
+        if sub_file and sub_file.exists():
+            try: sub_file.unlink()
+            except: pass
 
     size_mb = final_out.stat().st_size / 1024 / 1024
     log(f"完成！输出文件: export_workspace/output/{final_name}  ({size_mb:.1f} MB)")
