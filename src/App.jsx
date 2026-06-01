@@ -1084,6 +1084,7 @@ export default function App() {
   const [refineSelEsId, setRefineSelEsId]           = useState(null)  // selected edit-seg id (v0.7.4)
   const [refineTrimState, setRefineTrimState]       = useState(null)  // v0.7.5 trim drag preview: {esId,edge,previewStartSec,previewEndSec}
   const [refineSubTab, setRefineSubTab]   = useState('script') // v0.9.5: 'script'|'subs'
+  const [splitMenuSubId, setSplitMenuSubId] = useState(null)  // v0.9.5h: open split-menu row
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1132,6 +1133,7 @@ export default function App() {
   // v0.9.5: background music
   const [bgmFile, setBgmFile]       = useState(null)  // {fileName, originalName, storedFileName, synced, duration}
   const [bgmVolume, setBgmVolume]   = useState(0.18)
+  const [exportQuality, setExportQuality] = useState('高清')  // v0.9.5h: 标准/高清/超清
   const [dedup, setDedup] = useState({
     crop:true, scale:true, mirror:false, speed:true,
     bgImage:false, picInPic:false, subDistort:false, endImage:true,
@@ -1172,6 +1174,7 @@ export default function App() {
   const refinePlanImportRef = useRef(null)    // v0.7.6: hidden file input for plan JSON import
   const refinePlayEsIdxRef  = useRef(0)       // index into active editTimeline.segments
   const refineEditTimelineRef = useRef(null)  // populated only during editSegs playback
+  const rfDraggedRef = useRef(false)  // v0.9.5h: suppress click after reframe drag
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -2308,6 +2311,7 @@ export default function App() {
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
         subtitleStyle: { fontFamily: subFontFamily, fontSize: subFontSize, color: subColor, outline: subOutline, outlineColor: subOutlineColor, outlineWidth: subOutlineWidth, background: subBg, backgroundOpacity: subBgOpacity, position: subPosition, marginV: subMarginV },
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
+        exportQuality: exportQuality,
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx,
@@ -2395,6 +2399,7 @@ export default function App() {
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
         subtitleStyle: { fontFamily: subFontFamily, fontSize: subFontSize, color: subColor, outline: subOutline, outlineColor: subOutlineColor, outlineWidth: subOutlineWidth, background: subBg, backgroundOpacity: subBgOpacity, position: subPosition, marginV: subMarginV },
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
+        exportQuality: exportQuality,
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx, fileName: v.storedFileName || v.name, originalName: v.name,
@@ -3753,12 +3758,36 @@ export default function App() {
                               :<><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>播放</>}
                           </button>
                         </div>
-                        <div className="refine-video-wrap" onClick={()=>{
-                          const vid=refinePrevRef.current; if(!vid||!curVid) return
-                          if(refineIsPlayingRef.current) stopRefinePlay()
-                          else if(refineVidPlaying) vid.pause()
-                          else startRefinePlay(comp)
-                        }} style={(()=>{const rf=getCompReframe(comp.id);return rf.enabled&&rf.aspect&&rf.aspect!=='保留原比例'?{aspectRatio:String(REFRAME_ASPECTS.find(a=>a.key===rf.aspect)?.ratio||'auto'),overflow:'hidden'}:{}})()}>
+                        {(()=>{
+                          const rf=getCompReframe(comp.id)
+                          const CONT_A=16/9
+                          const tRatio=rf.enabled&&rf.aspect&&rf.aspect!=='保留原比例'?REFRAME_ASPECTS.find(a=>a.key===rf.aspect)?.ratio:null
+                          let bW=100,bH=100,bL=0,bT=0
+                          if(tRatio){
+                            if(tRatio>CONT_A){bW=100;bH=parseFloat((100*CONT_A/tRatio).toFixed(2))}
+                            else{bH=100;bW=parseFloat((100*tRatio/CONT_A).toFixed(2))}
+                            bL=parseFloat(((100-bW)/2).toFixed(2));bT=parseFloat(((100-bH)/2).toFixed(2))
+                          }
+                          const aFSub=rc.finalSubtitles?.find(s=>refinePrevPos>=s.start&&refinePrevPos<s.end)
+                          return (
+                        <div className="refine-video-wrap"
+                          onClick={()=>{
+                            if(rfDraggedRef.current){rfDraggedRef.current=false;return}
+                            const vid=refinePrevRef.current; if(!vid||!curVid) return
+                            if(refineIsPlayingRef.current) stopRefinePlay()
+                            else if(refineVidPlaying) vid.pause()
+                            else startRefinePlay(comp)
+                          }}
+                          onMouseDown={rf.enabled?(e)=>{
+                            const el=e.currentTarget,sx=e.clientX,sy=e.clientY
+                            const sox=rf.offsetX,soy=rf.offsetY,cw=el.clientWidth,ch=el.clientHeight
+                            rfDraggedRef.current=false
+                            const mv=(me)=>{const dx=me.clientX-sx,dy=me.clientY-sy;if(!rfDraggedRef.current&&Math.abs(dx)<3&&Math.abs(dy)<3)return;rfDraggedRef.current=true;setCompReframe(comp.id,{offsetX:Math.max(-0.5,Math.min(0.5,sox+dx/cw)),offsetY:Math.max(-0.5,Math.min(0.5,soy-dy/ch))})}
+                            const mu=()=>{document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',mu)}
+                            document.addEventListener('mousemove',mv);document.addEventListener('mouseup',mu)
+                          }:undefined}
+                          style={{cursor:rf.enabled?'grab':'pointer'}}
+                        >
                           {curVid?(
                             <video
                               ref={refinePrevRef}
@@ -3768,7 +3797,7 @@ export default function App() {
                               playsInline
                               muted={muteOriginal}
                               className="refine-video"
-                              style={(()=>{const rf=getCompReframe(comp.id);return rf.enabled?{transform:`scale(${rf.scale}) translate(${(rf.offsetX*100/rf.scale).toFixed(1)}%, ${(-rf.offsetY*100/rf.scale).toFixed(1)}%)`,transformOrigin:'center center'}:{}})()}
+                              style={rf.enabled?{objectFit:'cover',transform:`scale(${rf.scale}) translate(${(rf.offsetX*100/rf.scale).toFixed(1)}%, ${(-rf.offsetY*100/rf.scale).toFixed(1)}%)`,transformOrigin:'center center'}:{}}
                               onPlay={()=>setRefineVidPlaying(true)}
                               onPause={()=>setRefineVidPlaying(false)}
                               onLoadedMetadata={()=>{
@@ -3853,12 +3882,22 @@ export default function App() {
                           ):(
                             <div className="refine-no-vid">点击时间轴选择片段</div>
                           )}
+                          {tRatio&&(
+                            <div style={{position:'absolute',left:`${bL}%`,top:`${bT}%`,width:`${bW}%`,height:`${bH}%`,boxShadow:'0 0 0 9999px rgba(0,0,0,0.45)',border:'2px solid rgba(255,255,255,0.8)',pointerEvents:'none',zIndex:2,boxSizing:'border-box'}}/>
+                          )}
+                          {aFSub&&(
+                            <div style={{position:'absolute',left:`${bL}%`,bottom:`calc(${bT}% + 10px)`,width:`${bW}%`,textAlign:'center',color:'#fff',fontSize:13,fontWeight:700,textShadow:'0 1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 -1px 3px #000',pointerEvents:'none',zIndex:3,lineHeight:1.35,wordBreak:'break-all'}}>
+                              {aFSub.text.replace(/\\N/g,'\n').split('\n').map((l,li)=><span key={li} style={{display:'block'}}>{l}</span>)}
+                            </div>
+                          )}
                           <div className={`refine-play-btn${refineVidPlaying?' playing':''}`}>
                             {refineVidPlaying
                               ?<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                               :<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>}
                           </div>
                         </div>
+                          )
+                        })()}
                         <div className="refine-video-meta">
                           {curSeg?(
                             <>
@@ -3875,7 +3914,7 @@ export default function App() {
                           <span className="refine-vm-time">{fmt(refinePrevPos)}/{fmt(derivedDur)}</span>
                         </div>
                         {curSubIdx>=0&&compSubs[curSubIdx]&&(
-                          <div className="refine-vc-cursub">{compSubs[curSubIdx].text}</div>
+                          <div className="refine-vc-cursub"><span style={{fontSize:9,color:'var(--text-muted)',marginRight:3,opacity:0.7}}>参考</span>{compSubs[curSubIdx].text}</div>
                         )}
                       </div>
 
@@ -3903,25 +3942,34 @@ export default function App() {
                                 ))}
                               </div>
                               <div className="refine-rf-row">
-                                <span className="ep-ss-lbl" style={{width:52}}>放大</span>
+                                <span className="ep-ss-lbl" style={{width:36}}>放大</span>
+                                <span className="refine-rf-mm">×1</span>
                                 <input type="range" min="1.0" max="1.5" step="0.01" value={rf.scale}
                                   onChange={e=>setCompReframe(comp.id,{scale:parseFloat(e.target.value)})}
                                   className="ep-range" style={{flex:1}}/>
-                                <span className="ep-ss-val">{Math.round(rf.scale*100)}%</span>
+                                <span className="refine-rf-mm">×1.5</span>
+                                <span className="ep-ss-val" style={{minWidth:34}}>{Math.round(rf.scale*100)}%</span>
+                                <button className="refine-rf-rst" onClick={()=>setCompReframe(comp.id,{scale:1.0})} title="重置放大">↺</button>
                               </div>
                               <div className="refine-rf-row">
-                                <span className="ep-ss-lbl" style={{width:52}}>上移</span>
+                                <span className="ep-ss-lbl" style={{width:36}}>上移</span>
+                                <span className="refine-rf-mm">-50</span>
                                 <input type="range" min="-0.5" max="0.5" step="0.01" value={rf.offsetY}
                                   onChange={e=>setCompReframe(comp.id,{offsetY:parseFloat(e.target.value)})}
                                   className="ep-range" style={{flex:1}}/>
-                                <span className="ep-ss-val">{rf.offsetY>0?'+':''}{Math.round(rf.offsetY*100)}%</span>
+                                <span className="refine-rf-mm">+50</span>
+                                <span className="ep-ss-val" style={{minWidth:34}}>{rf.offsetY>0?'+':''}{Math.round(rf.offsetY*100)}%</span>
+                                <button className="refine-rf-rst" onClick={()=>setCompReframe(comp.id,{offsetY:0})} title="重置上移">↺</button>
                               </div>
                               <div className="refine-rf-row">
-                                <span className="ep-ss-lbl" style={{width:52}}>右移</span>
+                                <span className="ep-ss-lbl" style={{width:36}}>右移</span>
+                                <span className="refine-rf-mm">-50</span>
                                 <input type="range" min="-0.5" max="0.5" step="0.01" value={rf.offsetX}
                                   onChange={e=>setCompReframe(comp.id,{offsetX:parseFloat(e.target.value)})}
                                   className="ep-range" style={{flex:1}}/>
-                                <span className="ep-ss-val">{rf.offsetX>0?'+':''}{Math.round(rf.offsetX*100)}%</span>
+                                <span className="refine-rf-mm">+50</span>
+                                <span className="ep-ss-val" style={{minWidth:34}}>{rf.offsetX>0?'+':''}{Math.round(rf.offsetX*100)}%</span>
+                                <button className="refine-rf-rst" onClick={()=>setCompReframe(comp.id,{offsetX:0})} title="重置右移">↺</button>
                               </div>
                               <div className="ep-ss-hint" style={{marginTop:4}}>放大+上移可把底部原字幕裁出画面</div>
                             </>)}
@@ -4046,14 +4094,22 @@ export default function App() {
                                         onChange={e=>updateSubText(comp.id,sub.id||`s${i}`,e.target.value)}
                                       />
                                       <div className="refine-subs-ops">
-                                        <button className="rs-op" title="换成两行" onClick={()=>addSubNewline(comp.id,sub.id||`s${i}`)}>↵</button>
-                                        <button className="rs-op" title="拆成两条" onClick={()=>{
-                                          const t1=window.prompt('前半句：',sub.text.split(/[，,。！？；]/)[0]||sub.text.slice(0,Math.ceil(sub.text.length/2)))
-                                          if(t1===null) return
-                                          const t2=window.prompt('后半句：',sub.text.slice(t1.length)||sub.text.slice(Math.ceil(sub.text.length/2)))
-                                          if(t2===null) return
-                                          splitSub(comp.id,sub.id||`s${i}`,t1,t2)
-                                        }}>÷</button>
+                                        <div style={{position:'relative'}}>
+                                          <button className="rs-op rs-split-btn" title="拆分字幕" onClick={e=>{e.stopPropagation();const k=sub.id||`s${i}`;setSplitMenuSubId(splitMenuSubId===k?null:k)}}>拆分</button>
+                                          {splitMenuSubId===(sub.id||`s${i}`)&&(
+                                            <div className="rs-split-menu">
+                                              <button className="rs-split-opt" onClick={()=>{addSubNewline(comp.id,sub.id||`s${i}`);setSplitMenuSubId(null)}}>换成两行</button>
+                                              <button className="rs-split-opt" onClick={()=>{
+                                                const sk=sub.id||`s${i}`
+                                                const t1=window.prompt('前半句：',sub.text.split(/[，,。！？；]/)[0]||sub.text.slice(0,Math.ceil(sub.text.length/2)))
+                                                if(t1===null){setSplitMenuSubId(null);return}
+                                                const t2=window.prompt('后半句：',sub.text.slice(t1.length)||sub.text.slice(Math.ceil(sub.text.length/2)))
+                                                if(t2===null){setSplitMenuSubId(null);return}
+                                                splitSub(comp.id,sk,t1,t2);setSplitMenuSubId(null)
+                                              }}>拆成两条</button>
+                                            </div>
+                                          )}
+                                        </div>
                                         <button className="rs-op" title="合并上一条" onClick={()=>mergeSub(comp.id,sub.id||`s${i}`)} disabled={i===0}>⤴</button>
                                         <button className="rs-op rs-del" title="删除本句" onClick={()=>deleteSub(comp.id,sub.id||`s${i}`)}>×</button>
                                       </div>
@@ -5036,6 +5092,16 @@ export default function App() {
                               textShadow:subOutline?`0 0 ${subOutlineWidth}px ${subOutlineColor==='black'?'#000':'#fff'}, 1px 1px ${Math.ceil(subOutlineWidth/2)}px ${subOutlineColor==='black'?'#000':'#fff'}`:'none',
                             }}>字幕样式预览 — 欢迎使用成品字幕烧录</div>
                           </>}
+                          <div className="ep-ss-group-title" style={{marginTop:14}}>输出画质</div>
+                          <div className="ep-ss-row" style={{gap:4}}>
+                            {[['标准','CRF 23'],['高清','CRF 20'],['超清','CRF 18']].map(([q,hint])=>(
+                              <button key={q} className={`ep-sg-btn ${exportQuality===q?'active':''}`}
+                                onClick={()=>setExportQuality(q)} title={hint}>{q}</button>
+                            ))}
+                            <span style={{fontSize:10,color:'var(--text-muted)',marginLeft:4}}>
+                              {exportQuality==='标准'?'快速，文件小':exportQuality==='高清'?'均衡推荐':'最佳画质'}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>

@@ -181,7 +181,7 @@ def resolve_voice(data):
         return None
 
 # ── 裁剪单个片段 ──────────────────────────────────────────────────────────────
-def cut_segment(seg, video_path, out_path, speed=1.0):
+def cut_segment(seg, video_path, out_path, speed=1.0, crf=20):
     """从 video_path 裁剪 [startSec, endSec]，应用速度，输出到 out_path。"""
     start  = seg["startSec"]
     end    = seg["endSec"]
@@ -207,7 +207,7 @@ def cut_segment(seg, video_path, out_path, speed=1.0):
     cmd += [
         "-c:v", "libx264",
         "-preset", "fast",
-        "-crf", "18",
+        "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         out_path,
     ]
@@ -307,7 +307,7 @@ def aspect_to_wh(aspect_str):
     return (W - W % 2), (H - H % 2)
 
 
-def reframe_video(in_path, out_path, W, H, scale=1.0, offset_x=0.0, offset_y=0.0):
+def reframe_video(in_path, out_path, W, H, scale=1.0, offset_x=0.0, offset_y=0.0, crf=20):
     """
     裁切 in_path 到 W×H 画布，输出 out_path。
     scale:    额外放大系数（>1 可避免黑边）
@@ -334,7 +334,7 @@ def reframe_video(in_path, out_path, W, H, scale=1.0, offset_x=0.0, offset_y=0.0
         "ffmpeg", "-y",
         "-i", str(in_path),
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
         "-c:a", "copy",
         str(out_path),
     ]
@@ -473,7 +473,7 @@ def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_
     return out_path
 
 
-def burn_sub_and_cover(in_path, out_path, sub_name=None, cover_pct=0.0):
+def burn_sub_and_cover(in_path, out_path, sub_name=None, cover_pct=0.0, crf=20):
     """
     将字幕和/或底部遮挡条烧录到视频中。
     sub_name: ASS 文件名（相对 TEMP_DIR，None 则不烧字幕）
@@ -495,7 +495,7 @@ def burn_sub_and_cover(in_path, out_path, sub_name=None, cover_pct=0.0):
         "-vf", vf,
         "-c:v", "libx264",
         "-preset", "fast",
-        "-crf", "18",
+        "-crf", str(crf),
         "-c:a", "copy",
         str(out_path.resolve()),
     ]
@@ -525,6 +525,12 @@ def main():
     reframe_scl  = float(reframe_cfg.get("scale", 1.0))
     reframe_ox   = float(reframe_cfg.get("offsetX", 0.0))
     reframe_oy   = float(reframe_cfg.get("offsetY", 0.0))
+
+    # v0.9.5h: output quality CRF
+    quality_crf_map = {"标准": 23, "高清": 20, "超清": 18}
+    export_quality = export_settings.get("exportQuality", "高清")
+    crf = quality_crf_map.get(export_quality, 20)
+    log(f"输出画质: {export_quality} (CRF {crf})")
 
     # v0.9.4: origSubMode ('keep'|'crop'|'cover'), subtitle style
     orig_sub_mode  = export_settings.get("origSubMode", None)
@@ -572,7 +578,7 @@ def main():
         speed = seg.get("speed", 1.0) or 1.0
         clip_out = TEMP_DIR / f"seg_{i:04d}.mp4"
         log(f"裁剪片段 {i+1}/{len(timeline)}: {seg.get('label','?')} [{seg['startSec']:.2f}~{seg['endSec']:.2f}s] x{speed}")
-        ok = cut_segment(seg, video_map[vidx], clip_out, speed)
+        ok = cut_segment(seg, video_map[vidx], clip_out, speed, crf=crf)
         if not ok:
             sys.exit(1)
         clip_paths.append(clip_out)
@@ -608,7 +614,7 @@ def main():
             W, H = wh
             reframed_out = OUTPUT_DIR / f"reframed_{final_name}"
             log(f"画面裁切: {reframe_asp} ({W}×{H}), 缩放={reframe_scl:.2f}, offsetX={reframe_ox:.2f}, offsetY={reframe_oy:.2f}")
-            reframe_video(final_out, reframed_out, W, H, reframe_scl, reframe_ox, reframe_oy)
+            reframe_video(final_out, reframed_out, W, H, reframe_scl, reframe_ox, reframe_oy, crf=crf)
             final_out.unlink()
             shutil.move(str(reframed_out), str(final_out))
             log(f"裁切完成 → {final_name}")
@@ -660,6 +666,7 @@ def main():
                 final_out, burned_out,
                 sub_name=sub_file.name if sub_file else None,
                 cover_pct=actual_cover,
+                crf=crf,
             )
             final_out.unlink()
             shutil.move(str(burned_out), str(final_out))
