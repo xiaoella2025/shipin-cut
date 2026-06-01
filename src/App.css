@@ -11515,3 +11515,28 @@ input[type=range] {
 .ep-export-reset-btn:hover { border-color: #666; color: #bbb; }
 @keyframes ep-spin { to { transform: rotate(360deg); } }
 .ep-spin { animation: ep-spin 1.2s linear infinite; }
+
+/* ── v0.9.4: reframe slider / range ── */
+.ep-range { -webkit-appearance:none; appearance:none; height:4px; border-radius:2px; background:var(--border); outline:none; cursor:pointer; }
+.ep-range::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); cursor:pointer; }
+.ep-ss-val { font-size:11px; color:var(--text-muted); min-width:34px; text-align:right; flex-shrink:0; }
+.ep-ss-hint { font-size:11px; color:var(--text-muted); margin-top:6px; line-height:1.5; }
+.ep-sg-btn-xs { font-size:11px; padding:3px 7px; }
+
+/* ── v0.9.4: subtitle style preview ── */
+.ep-sub-preview { margin-top:10px; padding:8px 12px; background:#111; border-radius:6px; text-align:center; font-size:15px; font-weight:bold; min-height:32px; border:1px solid var(--border); }
+
+/* ── v0.9.4: subtitle editor ── */
+.ep-subs-panel { margin-top:12px; }
+.ep-subs-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+.ep-subs-empty { color:var(--text-muted); font-size:12px; padding:12px 0; text-align:center; }
+.ep-subs-list { border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.ep-subs-header { display:flex; align-items:center; gap:6px; padding:5px 8px; background:var(--bg-2); font-size:11px; color:var(--text-muted); border-bottom:1px solid var(--border); }
+.ep-subs-row { display:flex; align-items:center; gap:6px; padding:4px 8px; border-bottom:1px solid var(--border); }
+.ep-subs-row:last-child { border-bottom:none; }
+.ep-subs-idx { width:24px; font-size:11px; color:var(--text-muted); text-align:right; flex-shrink:0; }
+.ep-subs-time { width:48px; font-size:11px; color:var(--text-muted); flex-shrink:0; font-variant-numeric:tabular-nums; }
+.ep-subs-input { flex:1; background:transparent; border:none; color:var(--text); font-size:13px; padding:2px 4px; border-radius:3px; outline:none; }
+.ep-subs-input:focus { background:var(--bg-2); }
+.ep-subs-del { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:16px; padding:0 4px; flex-shrink:0; }
+.ep-subs-del:hover { color:var(--danger); }

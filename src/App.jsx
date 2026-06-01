@@ -985,6 +985,17 @@ function VideoOverviewCard({ video, analysis, vidIdx, isActive, onSelect }) {
   )
 }
 
+const REFRAME_ASPECTS = [
+  {key:'保留原比例', label:'原比例', ratio:null},
+  {key:'16:9', label:'16:9 横屏', ratio:16/9},
+  {key:'4:3', label:'4:3 横版', ratio:4/3},
+  {key:'3:4', label:'3:4 竖版', ratio:3/4},
+  {key:'9:16', label:'9:16 竖屏', ratio:9/16},
+  {key:'1:1', label:'1:1 方形', ratio:1},
+  {key:'2:1', label:'2:1 宽幅', ratio:2},
+  {key:'2.35:1', label:'2.35:1 影院', ratio:2.35},
+]
+
 // ─── main app ────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -1098,6 +1109,25 @@ export default function App() {
   const [burnInSub, setBurnInSub]   = useState(true)   // v0.9.3 burn summaryScript subtitles
   const [coverOrigSub, setCoverOrigSub]           = useState(false) // v0.9.3 cover bottom strip
   const [coverOrigSubHeight, setCoverOrigSubHeight] = useState('12%') // v0.9.3 strip height
+  // v0.9.4: reframe canvas
+  const [reframeEnabled, setReframeEnabled] = useState(false)
+  const [reframeAspect, setReframeAspect]   = useState('16:9')
+  const [reframeScale, setReframeScale]     = useState(1.10)
+  const [reframeOffsetX, setReframeOffsetX] = useState(0)
+  const [reframeOffsetY, setReframeOffsetY] = useState(0)
+  // v0.9.4: original subtitle handling mode
+  const [origSubMode, setOrigSubMode]       = useState('keep') // 'keep'|'crop'|'cover'
+  // v0.9.4: subtitle style
+  const [subFontFamily, setSubFontFamily]   = useState('Microsoft YaHei')
+  const [subFontSize, setSubFontSize]       = useState(72)
+  const [subColor, setSubColor]             = useState('white')
+  const [subOutline, setSubOutline]         = useState(true)
+  const [subOutlineColor, setSubOutlineColor] = useState('black')
+  const [subOutlineWidth, setSubOutlineWidth] = useState(4)
+  const [subBg, setSubBg]                   = useState('none') // 'none'|'black'|'white'|'yellow'
+  const [subBgOpacity, setSubBgOpacity]     = useState(0.5)
+  const [subPosition, setSubPosition]       = useState('bottom') // 'bottom'|'lower'|'middle'|'top'
+  const [subMarginV, setSubMarginV]         = useState(60)
   const [dedup, setDedup] = useState({
     crop:true, scale:true, mirror:false, speed:true,
     bgImage:false, picInPic:false, subDistort:false, endImage:true,
@@ -2042,12 +2072,88 @@ export default function App() {
       planExportedAt:null,      // v0.7.6: last export timestamp
       planImportedAt:null,      // v0.7.6: last import timestamp
       importReport:null,        // v0.7.6-hotfix: integrity report after import
+      finalSubtitles: null,         // v0.9.4: [{id,start,end,text}] user-edited per-comp subtitles
+      finalSubtitlesSavedAt: null,  // v0.9.4: timestamp when finalSubtitles was saved
       ...(existing||{}),
     }
   }
   function updateRefinedComp(compId, updates) {
     setRefinedComps(prev=>({...prev,[compId]:defaultRcFor({...prev[compId],...updates})}))
   }
+
+  // v0.9.4: split script text into timed subtitle objects
+  function splitScriptToSubtitles(text, totalDuration) {
+    if (!text || !text.trim() || totalDuration <= 0) return []
+    const rawLines = text.trim().split('\n').map(l=>l.trim()).filter(Boolean)
+    const sentences = []
+    for (const line of rawLines) {
+      const parts = line.split(/(?<=[。！？；…])/)
+      for (let part of parts) {
+        part = part.trim(); if (!part) continue
+        if (part.length > 20) {
+          const subs = part.split(/(?<=[，、：])/)
+          for (let sp of subs) {
+            sp = sp.trim(); if (!sp) continue
+            while (sp.length > 20) { sentences.push(sp.slice(0,20)); sp = sp.slice(20) }
+            if (sp) sentences.push(sp)
+          }
+        } else { sentences.push(part) }
+      }
+    }
+    if (!sentences.length) return []
+    const total = sentences.reduce((s,x)=>s+x.length,0) || 1
+    let t = 0; const base = Date.now()
+    return sentences.map((s,i)=>{
+      const dur = Math.max(0.8, Math.min(6.0, totalDuration*s.length/total))
+      const end = Math.min(t+dur, totalDuration)
+      const sub = {id:`sub-${base}-${i}`, start:Math.round(t*100)/100, end:Math.round(end*100)/100, text:s}
+      t = end; return sub
+    })
+  }
+
+  function handleGenerateSubs(compId, comp, rc) {
+    if (rc.finalSubtitles && rc.finalSubtitles.length > 0 &&
+        !window.confirm('重新生成将覆盖现有字幕，确定吗？')) return
+    if (!(rc.summaryScript && rc.summaryScript.trim())) { showToast('字幕汇总稿为空，请先在精修页填写'); return }
+    const hasE = !!(rc.editSegs && rc.editSegs.length > 0)
+    const {totalDuration} = hasE ? buildEditTimeline(rc.editSegs) : buildDerivedTimeline(comp, rc.deletedSegIdxs, rc.speedMap)
+    const dur = rc.voice?.duration || totalDuration || 60
+    const subs = splitScriptToSubtitles(rc.summaryScript, dur)
+    if (!subs.length) { showToast('字幕切分结果为空'); return }
+    updateRefinedComp(compId, {finalSubtitles: subs, finalSubtitlesSavedAt: null})
+    showToast(`已生成 ${subs.length} 句字幕，请检查后保存`)
+  }
+
+  function updateSubText(compId, subId, text) {
+    setRefinedComps(prev=>{
+      const rc = defaultRcFor(prev[compId])
+      const subs = (rc.finalSubtitles||[]).map(s=>s.id===subId?{...s,text}:s)
+      return {...prev,[compId]:{...rc,finalSubtitles:subs}}
+    })
+  }
+
+  function deleteSub(compId, subId) {
+    setRefinedComps(prev=>{
+      const rc = defaultRcFor(prev[compId])
+      const subs = (rc.finalSubtitles||[]).filter(s=>s.id!==subId)
+      return {...prev,[compId]:{...rc,finalSubtitles:subs}}
+    })
+  }
+
+  function clearSubPunct(compId) {
+    setRefinedComps(prev=>{
+      const rc = defaultRcFor(prev[compId])
+      const subs = (rc.finalSubtitles||[]).map(s=>({...s,text:s.text.replace(/[。，！？；：、…]/g,'')}))
+      return {...prev,[compId]:{...rc,finalSubtitles:subs}}
+    })
+    showToast('已清理常见标点')
+  }
+
+  function saveFinalSubtitles(compId) {
+    updateRefinedComp(compId, {finalSubtitlesSavedAt: new Date().toISOString()})
+    showToast('成品字幕已保存')
+  }
+
   function toggleDeleteSeg(compId, segIdx) {
     setRefinedComps(prev=>{
       const rc=defaultRcFor(prev[compId])
@@ -2107,6 +2213,7 @@ export default function App() {
       compositionId: compId,
       compositionName: comp.name,
       summaryScript: rc.summaryScript,
+      finalSubtitles: rc.finalSubtitles || null,
       copywriting: rc.copywriting,
       audioPolicy: rc.audioPolicy,
       deletedSegIdxs: rc.deletedSegIdxs,
@@ -2134,6 +2241,9 @@ export default function App() {
         burnInSubtitle: burnInSub,
         coverOriginalSub: coverOrigSub,
         coverOrigSubHeight: coverOrigSubHeight,
+        origSubMode: origSubMode,
+        reframe: { enabled: reframeEnabled, aspect: reframeAspect, scale: reframeScale, offsetX: reframeOffsetX, offsetY: reframeOffsetY },
+        subtitleStyle: { fontFamily: subFontFamily, fontSize: subFontSize, color: subColor, outline: subOutline, outlineColor: subOutlineColor, outlineWidth: subOutlineWidth, background: subBg, backgroundOpacity: subBgOpacity, position: subPosition, marginV: subMarginV },
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx,
@@ -2201,6 +2311,7 @@ export default function App() {
       compositionId: compId,
       compositionName: comp.name,
       summaryScript: rc.summaryScript,
+      finalSubtitles: rc.finalSubtitles || null,
       copywriting: rc.copywriting,
       audioPolicy: rc.audioPolicy,
       deletedSegIdxs: rc.deletedSegIdxs,
@@ -2216,6 +2327,9 @@ export default function App() {
         keepOriginalAudio: keepAudio, backgroundMusic: addMusic,
         autoSubtitle: autoSub, subtitlePosition: subPos, mixStrength: intensity,
         burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
+        origSubMode: origSubMode,
+        reframe: { enabled: reframeEnabled, aspect: reframeAspect, scale: reframeScale, offsetX: reframeOffsetX, offsetY: reframeOffsetY },
+        subtitleStyle: { fontFamily: subFontFamily, fontSize: subFontSize, color: subColor, outline: subOutline, outlineColor: subOutlineColor, outlineWidth: subOutlineWidth, background: subBg, backgroundOpacity: subBgOpacity, position: subPosition, marginV: subMarginV },
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx, fileName: v.storedFileName || v.name, originalName: v.name,
@@ -4227,7 +4341,9 @@ export default function App() {
               return {rc:rc2,dur:d2,active:act2,voice:v2,voiceSrc:vs2,
                 hasCrit,missingVoice:!v2&&!vm2,needReimport:!v2&&!!vm2,
                 unsavedDraft:!rc2.savedAt,unexported:!rc2.planExportedAt,hasScript:hs2,
-                vidsSynced:vidsSynced2,voiceSynced:voiceSynced2,missingVideo:missVid2}
+                vidsSynced:vidsSynced2,voiceSynced:voiceSynced2,missingVideo:missVid2,
+                hasSubs:!!(rc2.finalSubtitles&&rc2.finalSubtitles.length>0),
+                subsSaved:!!(rc2.finalSubtitlesSavedAt)}
             }
 
             // ── batch stats across all comps
@@ -4362,7 +4478,7 @@ export default function App() {
                     </div>
                     <div className="ep-batch-grid">
                       {allStats.length===0&&<div className="ep-batch-empty">暂无成品，请先在组合方案页生成成品。</div>}
-                      {allStats.map(({c,dur,active,voice:v2,voiceSrc:vs2,hasCrit,missingVoice:mv,unsavedDraft:ud,hasScript:hs,vidsSynced:vsy,voiceSynced:vosy,missingVideo:mvid})=>{
+                      {allStats.map(({c,dur,active,voice:v2,voiceSrc:vs2,hasCrit,missingVoice:mv,unsavedDraft:ud,hasScript:hs,vidsSynced:vsy,voiceSynced:vosy,missingVideo:mvid,hasSubs:hs2,subsSaved:ss2})=>{
                         const isSel=c.id===selComp?.id
                         const sc=hasCrit||mvid?'err':(mv||ud||!vsy||(v2&&!vosy))?'warn':'ok'
                         return (
@@ -4379,6 +4495,7 @@ export default function App() {
                               </span>
                               <span className={`ep-bc3-tag ${ud?'warn':'ok'}`}>{ud?'草稿未保存':'草稿已保存'}</span>
                               <span className={`ep-bc3-tag ${hs?'ok':'warn'}`}>{hs?'字幕稿已填':'缺字幕稿'}</span>
+                              <span className={`ep-bc3-tag ${hs2?(ss2?'ok':'warn'):'miss'}`}>{hs2?(ss2?'字幕已保存':'字幕未保存'):'缺成品字幕'}</span>
                             </div>
                             {isSel&&<div className="ep-bc3-cur">▶ 当前查看</div>}
                           </div>
@@ -4399,7 +4516,11 @@ export default function App() {
                           <span className="ep-section-title">当前成品预览</span>
                           <span className="ep-section-comp-tag">{selComp.name}</span>
                         </div>
-                        <div className="ep-preview-video-wrap">
+                        <div className="ep-preview-video-wrap"
+                          style={reframeEnabled&&reframeAspect!=='保留原比例'?{
+                            aspectRatio: REFRAME_ASPECTS.find(a=>a.key===reframeAspect)?.ratio||'auto',
+                            overflow:'hidden',
+                          }:{}}>
                           {previewVideoUrl?(
                             <video
                               key={`ep-vid-${selComp.id}`}
@@ -4409,6 +4530,10 @@ export default function App() {
                               preload="metadata"
                               playsInline
                               className="ep-preview-video"
+                              style={reframeEnabled?{
+                                transform:`scale(${reframeScale}) translate(${(reframeOffsetX*100/reframeScale).toFixed(1)}%, ${(-reframeOffsetY*100/reframeScale).toFixed(1)}%)`,
+                                transformOrigin:'center center',
+                              }:{}}
                               onLoadedMetadata={e=>{e.target.currentTime=previewStartSec}}
                             />
                           ):(
@@ -4512,6 +4637,47 @@ export default function App() {
                           </div>
                         </div>
 
+                        {/* 画面裁切 / 去原字幕 */}
+                        <div className="ep-ss-group">
+                          <div className="ep-ss-group-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                            <span>画面裁切 / 去原字幕</span>
+                            <label className={`ep-toggle-label ${reframeEnabled?'on':''}`} onClick={()=>setReframeEnabled(v=>!v)}>
+                              <span className={`ep-toggle-pill ${reframeEnabled?'on':''}`}/>
+                              {reframeEnabled?'已开启':'已关闭'}
+                            </label>
+                          </div>
+                          {reframeEnabled&&<>
+                            <div className="ep-ss-row" style={{marginTop:8,flexWrap:'wrap',gap:4}}>
+                              {REFRAME_ASPECTS.map(a=>(
+                                <button key={a.key} className={`ep-sg-btn ep-sg-btn-xs ${reframeAspect===a.key?'active':''}`}
+                                  onClick={()=>setReframeAspect(a.key)}>{a.label}</button>
+                              ))}
+                            </div>
+                            <div className="ep-ss-row" style={{marginTop:8}}>
+                              <span className="ep-ss-lbl" style={{width:60}}>画面放大</span>
+                              <input type="range" min="1.0" max="1.5" step="0.01" value={reframeScale}
+                                onChange={e=>setReframeScale(parseFloat(e.target.value))}
+                                className="ep-range" style={{flex:1}}/>
+                              <span className="ep-ss-val">{Math.round(reframeScale*100)}%</span>
+                            </div>
+                            <div className="ep-ss-row" style={{marginTop:4}}>
+                              <span className="ep-ss-lbl" style={{width:60}}>上移画面</span>
+                              <input type="range" min="-0.5" max="0.5" step="0.01" value={reframeOffsetY}
+                                onChange={e=>setReframeOffsetY(parseFloat(e.target.value))}
+                                className="ep-range" style={{flex:1}}/>
+                              <span className="ep-ss-val">{reframeOffsetY>0?'+':''}{Math.round(reframeOffsetY*100)}%</span>
+                            </div>
+                            <div className="ep-ss-row" style={{marginTop:4}}>
+                              <span className="ep-ss-lbl" style={{width:60}}>右移画面</span>
+                              <input type="range" min="-0.5" max="0.5" step="0.01" value={reframeOffsetX}
+                                onChange={e=>setReframeOffsetX(parseFloat(e.target.value))}
+                                className="ep-range" style={{flex:1}}/>
+                              <span className="ep-ss-val">{reframeOffsetX>0?'+':''}{Math.round(reframeOffsetX*100)}%</span>
+                            </div>
+                            <div className="ep-ss-hint">放大画面 + 上移可把底部原字幕裁出画布</div>
+                          </>}
+                        </div>
+
                         {/* 画面去重 */}
                         <div className="ep-ss-group">
                           <div className="ep-ss-group-title">画面去重 <small style={{fontWeight:400,color:'var(--text-muted)',textTransform:'none',letterSpacing:0}}>({Object.values(dedup).filter(Boolean).length}/8 启用)</small></div>
@@ -4529,50 +4695,172 @@ export default function App() {
 
                         {/* 音频与字幕 */}
                         <div className="ep-ss-group">
-                          <div className="ep-ss-group-title">音频与字幕</div>
+                          <div className="ep-ss-group-title">音频</div>
                           <div className="ep-ss-toggles-row">
                             {[['keepAudio','保留原声',keepAudio,()=>setKeepAudio(v=>!v)],
                               ['addMusic','背景音乐',addMusic,()=>setAddMusic(v=>!v)],
-                              ['autoSub','自动字幕',autoSub,()=>setAutoSub(v=>!v)]
                             ].map(([k,label,val,toggle])=>(
                               <label key={k} className={`ep-toggle-label ${val?'on':''}`} onClick={toggle}>
-                                <span className={`ep-toggle-pill ${val?'on':''}`}/>
-                                {label}
+                                <span className={`ep-toggle-pill ${val?'on':''}`}/>{label}
                               </label>
                             ))}
                           </div>
-                          <div className="ep-ss-row" style={{marginTop:8}}>
-                            <span className="ep-ss-lbl">字幕位置</span>
-                            <select className="ep-select" value={subPos} onChange={e=>setSubPos(e.target.value)}>
-                              <option value="bottom">底部</option>
-                              <option value="middle">中部</option>
-                              <option value="top">顶部</option>
-                            </select>
+                          <div className="ep-ss-group-title" style={{marginTop:14}}>原字幕处理</div>
+                          <div className="ep-ss-row" style={{gap:4,flexWrap:'wrap'}}>
+                            {[['keep','保留原字幕'],['crop','裁切去原字幕'],['cover','黑条遮挡']].map(([k,l])=>(
+                              <button key={k} className={`ep-sg-btn ${origSubMode===k?'active':''}`}
+                                onClick={()=>setOrigSubMode(k)}>{l}</button>
+                            ))}
                           </div>
-                          <div className="ep-ss-row" style={{marginTop:10,gap:8,flexWrap:'wrap'}}>
-                            <label className={`ep-toggle-label ${burnInSub?'on':''}`} onClick={()=>setBurnInSub(v=>!v)}>
-                              <span className={`ep-toggle-pill ${burnInSub?'on':''}`}/>
-                              烧录字幕稿
-                            </label>
-                            <label className={`ep-toggle-label ${coverOrigSub?'on':''}`} onClick={()=>setCoverOrigSub(v=>!v)}>
-                              <span className={`ep-toggle-pill ${coverOrigSub?'on':''}`}/>
-                              遮挡原字幕
-                            </label>
-                            {coverOrigSub&&(
-                              <select className="ep-select" style={{height:26}} value={coverOrigSubHeight} onChange={e=>setCoverOrigSubHeight(e.target.value)}>
-                                <option value="8%">遮挡 8%（小）</option>
-                                <option value="12%">遮挡 12%（默认）</option>
-                                <option value="16%">遮挡 16%（中）</option>
-                                <option value="20%">遮挡 20%（大）</option>
+                          {origSubMode==='cover'&&(
+                            <div className="ep-ss-row" style={{marginTop:6}}>
+                              <span className="ep-ss-lbl">遮挡高度</span>
+                              <select className="ep-select" value={coverOrigSubHeight} onChange={e=>setCoverOrigSubHeight(e.target.value)}>
+                                <option value="8%">8%（小）</option>
+                                <option value="12%">12%（默认）</option>
+                                <option value="16%">16%（中）</option>
+                                <option value="20%">20%（大）</option>
                               </select>
-                            )}
-                          </div>
-                          {burnInSub&&!ckScriptExists&&(
-                            <div className="ep-ss-warn">⚠ 字幕汇总稿为空，导出时将跳过字幕烧录</div>
+                            </div>
                           )}
+                          {origSubMode==='crop'&&!reframeEnabled&&(
+                            <div className="ep-ss-warn">⚠ 选了裁切但「画面裁切」未开启，请先配置</div>
+                          )}
+                          <div className="ep-ss-group-title" style={{marginTop:14}}>成品字幕烧录</div>
+                          <div className="ep-ss-row" style={{gap:8,flexWrap:'wrap'}}>
+                            <label className={`ep-toggle-label ${burnInSub?'on':''}`} onClick={()=>setBurnInSub(v=>!v)}>
+                              <span className={`ep-toggle-pill ${burnInSub?'on':''}`}/>烧录成品字幕
+                            </label>
+                          </div>
+                          {burnInSub&&!ckScriptExists&&!(rc.finalSubtitles&&rc.finalSubtitles.length>0)&&(
+                            <div className="ep-ss-warn">⚠ 字幕稿为空且无成品字幕，导出将跳过烧录</div>
+                          )}
+                          {burnInSub&&<>
+                            <div className="ep-ss-group-title" style={{marginTop:12,fontSize:11}}>字幕样式</div>
+                            <div className="ep-ss-row" style={{marginTop:6,gap:4,flexWrap:'wrap'}}>
+                              {[['Microsoft YaHei','微软雅黑'],['SimHei','黑体'],['SimSun','宋体'],['KaiTi','楷体']].map(([f,l])=>(
+                                <button key={f} className={`ep-sg-btn ep-sg-btn-xs ${subFontFamily===f?'active':''}`}
+                                  onClick={()=>setSubFontFamily(f)}>{l}</button>
+                              ))}
+                            </div>
+                            <div className="ep-ss-row" style={{marginTop:6}}>
+                              <span className="ep-ss-lbl">字号</span>
+                              <input type="range" min="32" max="120" step="2" value={subFontSize}
+                                onChange={e=>setSubFontSize(parseInt(e.target.value))}
+                                className="ep-range" style={{flex:1}}/>
+                              <span className="ep-ss-val">{subFontSize}px</span>
+                            </div>
+                            <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
+                              {[['white','白'],['yellow','黄'],['black','黑'],['red','红']].map(([c,l])=>(
+                                <button key={c} className={`ep-sg-btn ep-sg-btn-xs ${subColor===c?'active':''}`}
+                                  onClick={()=>setSubColor(c)}>{l}</button>
+                              ))}
+                              <span className="ep-ss-lbl" style={{margin:'0 4px'}}>颜色</span>
+                            </div>
+                            <div className="ep-ss-row" style={{marginTop:6,gap:6,flexWrap:'wrap'}}>
+                              <label className={`ep-toggle-label ${subOutline?'on':''}`} onClick={()=>setSubOutline(v=>!v)}>
+                                <span className={`ep-toggle-pill ${subOutline?'on':''}`}/>描边</label>
+                              {subOutline&&<>
+                                {[['black','黑边'],['white','白边']].map(([c,l])=>(
+                                  <button key={c} className={`ep-sg-btn ep-sg-btn-xs ${subOutlineColor===c?'active':''}`}
+                                    onClick={()=>setSubOutlineColor(c)}>{l}</button>
+                                ))}
+                                <input type="range" min="1" max="8" step="1" value={subOutlineWidth}
+                                  onChange={e=>setSubOutlineWidth(parseInt(e.target.value))}
+                                  className="ep-range" style={{width:60}}/>
+                                <span className="ep-ss-val">{subOutlineWidth}px</span>
+                              </>}
+                            </div>
+                            <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
+                              {[['none','无背景'],['black','黑底'],['white','白底'],['yellow','黄底']].map(([b,l])=>(
+                                <button key={b} className={`ep-sg-btn ep-sg-btn-xs ${subBg===b?'active':''}`}
+                                  onClick={()=>setSubBg(b)}>{l}</button>
+                              ))}
+                            </div>
+                            {subBg!=='none'&&<div className="ep-ss-row" style={{marginTop:4}}>
+                              <span className="ep-ss-lbl">透明度</span>
+                              <input type="range" min="0.1" max="0.9" step="0.05" value={subBgOpacity}
+                                onChange={e=>setSubBgOpacity(parseFloat(e.target.value))}
+                                className="ep-range" style={{flex:1}}/>
+                              <span className="ep-ss-val">{Math.round(subBgOpacity*100)}%</span>
+                            </div>}
+                            <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
+                              {[['bottom','底部'],['lower','中下'],['middle','中间'],['top','顶部']].map(([p,l])=>(
+                                <button key={p} className={`ep-sg-btn ep-sg-btn-xs ${subPosition===p?'active':''}`}
+                                  onClick={()=>setSubPosition(p)}>{l}</button>
+                              ))}
+                            </div>
+                            <div className="ep-ss-row" style={{marginTop:4}}>
+                              <span className="ep-ss-lbl">下边距</span>
+                              <input type="range" min="10" max="300" step="5" value={subMarginV}
+                                onChange={e=>setSubMarginV(parseInt(e.target.value))}
+                                className="ep-range" style={{flex:1}}/>
+                              <span className="ep-ss-val">{subMarginV}px</span>
+                            </div>
+                            <div className="ep-sub-preview" style={{
+                              fontFamily:subFontFamily==='Microsoft YaHei'?'Microsoft YaHei,PingFang SC,sans-serif':subFontFamily==='SimHei'?'SimHei,Heiti SC,sans-serif':'inherit',
+                              color:subColor==='yellow'?'#ffff00':subColor==='black'?'#111':subColor==='red'?'#f33':'#fff',
+                              background:subBg==='none'?'transparent':subBg==='black'?`rgba(0,0,0,${subBgOpacity})`:subBg==='white'?`rgba(255,255,255,${subBgOpacity})`:`rgba(255,255,0,${subBgOpacity})`,
+                              textShadow:subOutline?`0 0 ${subOutlineWidth}px ${subOutlineColor==='black'?'#000':'#fff'}, 1px 1px ${Math.ceil(subOutlineWidth/2)}px ${subOutlineColor==='black'?'#000':'#fff'}`:'none',
+                            }}>字幕样式预览 — 欢迎使用成品字幕烧录</div>
+                          </>}
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* ── 成品字幕编辑 ── */}
+                  <div className="ep-section-wrap ep-subs-panel">
+                    <div className="ep-section-title-row">
+                      <span className="ep-section-title">成品字幕编辑</span>
+                      <span className="ep-section-sub">
+                        {rc.finalSubtitles&&rc.finalSubtitles.length>0
+                          ?(rc.finalSubtitlesSavedAt?`已保存 ${rc.finalSubtitlesSavedAt.slice(11,16)} · ${rc.finalSubtitles.length} 句`:`${rc.finalSubtitles.length} 句（未保存）`)
+                          :'未生成'}
+                      </span>
+                    </div>
+                    <div className="ep-subs-toolbar">
+                      <button className="ep-act-btn secondary" onClick={()=>handleGenerateSubs(selComp.id,selComp,rc)}>
+                        {rc.finalSubtitles&&rc.finalSubtitles.length>0?'重新生成':'从字幕稿生成'}
+                      </button>
+                      {rc.finalSubtitles&&rc.finalSubtitles.length>0&&<>
+                        <button className="ep-act-btn secondary" onClick={()=>clearSubPunct(selComp.id)}>一键清理标点</button>
+                        <button className="ep-act-btn save" onClick={()=>saveFinalSubtitles(selComp.id)}>保存成品字幕</button>
+                      </>}
+                    </div>
+                    {!(rc.finalSubtitles&&rc.finalSubtitles.length>0)&&(
+                      <div className="ep-subs-empty">
+                        {ckScriptExists
+                          ?'点击「从字幕稿生成」自动拆分字幕，然后逐句检查修改'
+                          :'请先在精修页填写最终字幕稿，再生成成品字幕'}
+                      </div>
+                    )}
+                    {rc.finalSubtitles&&rc.finalSubtitles.length>0&&(
+                      <div className="ep-subs-list">
+                        <div className="ep-subs-header">
+                          <span style={{width:28}}>序</span>
+                          <span style={{width:52}}>开始</span>
+                          <span style={{width:52}}>结束</span>
+                          <span style={{flex:1}}>字幕文本</span>
+                          <span style={{width:32}}></span>
+                        </div>
+                        {rc.finalSubtitles.map((sub,i)=>{
+                          const fmtT=s=>{const m=Math.floor(s/60),sec=(s%60).toFixed(1);return `${m}:${String(sec).padStart(4,'0')}`}
+                          return (
+                            <div key={sub.id||i} className="ep-subs-row">
+                              <span className="ep-subs-idx">{i+1}</span>
+                              <span className="ep-subs-time">{fmtT(sub.start)}</span>
+                              <span className="ep-subs-time">{fmtT(sub.end)}</span>
+                              <input className="ep-subs-input"
+                                value={sub.text}
+                                onChange={e=>updateSubText(selComp.id, sub.id||(sub.id=`sub-r-${i}`), e.target.value)}
+                              />
+                              <button className="ep-subs-del" onClick={()=>deleteSub(selComp.id, sub.id||(sub.id=`sub-r-${i}`))}>×</button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* ── 剪辑草稿 ── */}
@@ -4681,8 +4969,9 @@ export default function App() {
                         </div>
                         <div className="ep-det-rows">
                           <div className={`ep-det-row ${ckScriptExists?'ok':'warn'}`}><span>字幕汇总稿</span><span>{ckScriptExists?`约 ${rc.summaryScript.trim().length} 字`:'未填写'}</span></div>
-                          <div className={`ep-det-row ${ckWillBurnSub?'ok':''}`}><span>成品字幕</span><span>{!burnInSub?'不烧录':ckScriptExists?'将自动生成':'缺字幕稿，导出时跳过'}</span></div>
-                          <div className={`ep-det-row ${coverOrigSub?'ok':''}`}><span>原字幕遮挡</span><span>{coverOrigSub?`遮挡底部 ${coverOrigSubHeight}`:'不遮挡'}</span></div>
+                          <div className={`ep-det-row ${rc.finalSubtitles&&rc.finalSubtitles.length>0?(rc.finalSubtitlesSavedAt?'ok':'warn'):burnInSub?'warn':''}`}><span>成品字幕</span><span>{!burnInSub?'不烧录':rc.finalSubtitles&&rc.finalSubtitles.length>0?(rc.finalSubtitlesSavedAt?`已保存 ${rc.finalSubtitles.length} 句`:`${rc.finalSubtitles.length} 句未保存`):'将从字幕稿自动生成'}</span></div>
+                          <div className={`ep-det-row ${reframeEnabled?'ok':''}`}><span>画面裁切</span><span>{reframeEnabled?`${reframeAspect} · ${Math.round(reframeScale*100)}% · Y${reframeOffsetY>0?'+':''}${Math.round(reframeOffsetY*100)}%`:'未启用'}</span></div>
+                          <div className={`ep-det-row ${origSubMode!=='keep'?'ok':''}`}><span>原字幕处理</span><span>{origSubMode==='keep'?'保留原字幕':origSubMode==='crop'?'裁切去原字幕':'黑条遮挡'}</span></div>
                           <div className={`ep-det-row ${ckTitleExists?'ok':''}`}><span>最终标题</span><span>{ckTitleExists?cp.finalTitle:'未填写'}</span></div>
                           <div className={`ep-det-row ${ckWechatExists?'ok':''}`}><span>公众号正文</span><span>{ckWechatExists?`约 ${cp.finalWechatBody.trim().length} 字`:'未填写'}</span></div>
                           <div className={`ep-det-row ${ckXhsExists?'ok':''}`}><span>小红书正文</span><span>{ckXhsExists?`约 ${cp.finalXhs.trim().length} 字`:'未填写'}</span></div>
