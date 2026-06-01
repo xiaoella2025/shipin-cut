@@ -11407,6 +11407,17 @@ input[type=range] {
   border-radius: 6px;
 }
 
+/* v0.9.3 inline warning in settings panel */
+.ep-ss-warn {
+  font-size: 11px;
+  color: #f59e0b;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(245,158,11,0.08);
+  border-radius: 5px;
+  border-left: 2px solid #f59e0b;
+}
+
 /* ── v0.9 export workflow hint ── */
 .ep-export-v9-hint {
   display: flex;

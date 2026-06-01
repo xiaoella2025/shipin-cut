@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-shipin-cut v0.9-hotfix — 本地成品视频生成脚本
+shipin-cut v0.9.3 — 本地成品视频生成脚本
 用法: python export_video.py [草稿JSON路径]
      不传参数则自动扫描 export_workspace/drafts/ 下最新的 JSON
 依赖: Python 3.8+, FFmpeg（ffmpeg/ffprobe 必须在 PATH 中）
@@ -259,6 +259,134 @@ def mux_voice(video_path, voice_path, out_path, audio_policy):
     ]
     run(cmd)
 
+# ── v0.9.3 字幕生成 ──────────────────────────────────────────────────────────
+
+def split_script_to_subtitles(text, total_duration):
+    """
+    将字幕稿切分为带时间戳的字幕列表。
+    按换行、句末标点切分，单句超 20 字再强制截断。
+    返回 [{start, end, text}, ...]，按字数比例分配时长。
+    """
+    if not text or not text.strip() or total_duration <= 0:
+        return []
+
+    raw_lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    sentences = []
+    for line in raw_lines:
+        # 按句末标点切分（保留标点在前一句末尾）
+        parts = re.split(r'(?<=[。！？；…])', line)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            # 超过 20 字按逗顿号再切
+            if len(part) > 20:
+                sub_parts = re.split(r'(?<=[，、：])', part)
+                for sp in sub_parts:
+                    sp = sp.strip()
+                    if not sp:
+                        continue
+                    # 仍超 20 字则强制截断
+                    while len(sp) > 20:
+                        sentences.append(sp[:20])
+                        sp = sp[20:]
+                    if sp:
+                        sentences.append(sp)
+            else:
+                sentences.append(part)
+
+    if not sentences:
+        return []
+
+    total_chars = sum(len(s) for s in sentences) or 1
+    subs = []
+    t = 0.0
+    for s in sentences:
+        dur = max(0.8, min(6.0, total_duration * len(s) / total_chars))
+        end = min(t + dur, total_duration)
+        subs.append({'start': t, 'end': end, 'text': s})
+        t = end
+
+    return subs
+
+
+def _format_ass_time(seconds):
+    """秒数转 ASS 时间格式 H:MM:SS.cc"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    cs = int((s - int(s)) * 100)
+    return f"{h}:{m:02d}:{int(s):02d}.{cs:02d}"
+
+
+def write_ass_file(subs, out_path, cover_pct=0.0, play_res_y=1920):
+    """
+    生成 ASS 字幕文件。
+    cover_pct: 底部遮挡高度比例（0~1），字幕上移至遮挡条上方。
+    """
+    margin_v = max(20, int(play_res_y * cover_pct) + 20)
+    font_size = max(48, int(play_res_y / 27))  # ~72 for 1920p
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "WrapStyle: 0\n"
+        "ScaledBorderAndShadow: yes\n"
+        "PlayResX: 1080\n"
+        f"PlayResY: {play_res_y}\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,Microsoft YaHei,{font_size},"
+        f"&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        f"-1,0,0,0,100,100,0,0,1,4,2,2,30,30,{margin_v},1\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    with open(out_path, 'w', encoding='utf-8-sig') as f:
+        f.write(header)
+        for sub in subs:
+            start = _format_ass_time(sub['start'])
+            end   = _format_ass_time(sub['end'])
+            text  = sub['text'].replace('\n', '\\N')
+            f.write(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n")
+
+    return out_path
+
+
+def burn_sub_and_cover(in_path, out_path, sub_name=None, cover_pct=0.0):
+    """
+    将字幕和/或底部遮挡条烧录到视频中。
+    sub_name: ASS 文件名（相对 TEMP_DIR，None 则不烧字幕）
+    cover_pct: 底部遮挡比例 0~1
+    以 TEMP_DIR 为工作目录，避免路径转义问题。
+    """
+    vf_parts = []
+    if cover_pct > 0:
+        vf_parts.append(
+            f"drawbox=x=0:y=ih-ih*{cover_pct:.4f}:w=iw:h=ih*{cover_pct:.4f}:color=black:t=fill"
+        )
+    if sub_name:
+        vf_parts.append(f"ass='{sub_name}'")
+
+    vf = ",".join(vf_parts)
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(in_path.resolve()),
+        "-vf", vf,
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "18",
+        "-c:a", "copy",
+        str(out_path.resolve()),
+    ]
+    log("运行: " + " ".join(str(c) for c in cmd))
+    subprocess.run([str(c) for c in cmd], check=True, cwd=str(TEMP_DIR))
+
+
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 def main():
     check_ffmpeg()
@@ -266,10 +394,19 @@ def main():
     draft_path = find_draft(sys.argv[1] if len(sys.argv) > 1 else None)
     data = load_draft(draft_path)
 
-    comp_name    = data.get("compositionName", "output")
-    timeline     = data.get("derivedTimeline", [])
-    source_vids  = data.get("sourceVideos", [])
-    audio_policy = data.get("exportSettings", {})
+    comp_name       = data.get("compositionName", "output")
+    timeline        = data.get("derivedTimeline", [])
+    source_vids     = data.get("sourceVideos", [])
+    export_settings = data.get("exportSettings", {}) or {}
+    audio_policy    = export_settings
+    summary_script  = (data.get("summaryScript") or "").strip()
+    burn_sub        = export_settings.get("burnInSubtitle", False)
+    cover_orig      = export_settings.get("coverOriginalSub", False)
+    cover_height_str = export_settings.get("coverOrigSubHeight", "12%")
+    try:
+        cover_pct = float(str(cover_height_str).rstrip('%')) / 100.0
+    except (ValueError, AttributeError):
+        cover_pct = 0.12
 
     if not timeline:
         err("derivedTimeline 为空，草稿中没有片段")
@@ -328,6 +465,38 @@ def main():
         except: pass
     try: concat_out.unlink()
     except: pass
+
+    # v0.9.3: 烧录字幕 + 底部遮挡
+    sub_file = None
+    need_burn = burn_sub or cover_orig
+    if need_burn:
+        if burn_sub:
+            if summary_script:
+                total_dur = data.get("totalDuration") or sum(
+                    seg.get("actualDur", seg.get("endSec", 0) - seg.get("startSec", 0))
+                    for seg in timeline
+                )
+                subs = split_script_to_subtitles(summary_script, total_dur)
+                if subs:
+                    sub_file = TEMP_DIR / "sub.ass"
+                    write_ass_file(subs, sub_file, cover_pct if cover_orig else 0.0)
+                    log(f"字幕切分完成，共 {len(subs)} 条")
+                else:
+                    log("字幕稿切分结果为空，跳过字幕烧录")
+            else:
+                log("字幕汇总稿为空，跳过字幕烧录")
+
+        if sub_file or cover_orig:
+            burned_out = OUTPUT_DIR / f"burned_{final_name}"
+            actual_cover = cover_pct if cover_orig else 0.0
+            burn_sub_and_cover(final_out, burned_out, sub_name=sub_file.name if sub_file else None, cover_pct=actual_cover)
+            final_out.unlink()
+            shutil.move(str(burned_out), str(final_out))
+            log(f"字幕/遮挡烧录完成 → {final_name}")
+
+        if sub_file and sub_file.exists():
+            try: sub_file.unlink()
+            except: pass
 
     size_mb = final_out.stat().st_size / 1024 / 1024
     log(f"完成！输出文件: export_workspace/output/{final_name}  ({size_mb:.1f} MB)")

@@ -1095,6 +1095,9 @@ export default function App() {
   const [subStyle, setSubStyle]     = useState('bold')
   const [subPos, setSubPos]         = useState('bottom')
   const [subStroke, setSubStroke]   = useState(true)
+  const [burnInSub, setBurnInSub]   = useState(true)   // v0.9.3 burn summaryScript subtitles
+  const [coverOrigSub, setCoverOrigSub]           = useState(false) // v0.9.3 cover bottom strip
+  const [coverOrigSubHeight, setCoverOrigSubHeight] = useState('12%') // v0.9.3 strip height
   const [dedup, setDedup] = useState({
     crop:true, scale:true, mirror:false, speed:true,
     bgImage:false, picInPic:false, subDistort:false, endImage:true,
@@ -2065,6 +2068,9 @@ export default function App() {
         autoSubtitle: autoSub,
         subtitlePosition: subPos,
         mixStrength: intensity,
+        burnInSubtitle: burnInSub,
+        coverOriginalSub: coverOrigSub,
+        coverOrigSubHeight: coverOrigSubHeight,
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx,
@@ -2140,6 +2146,7 @@ export default function App() {
         subtitleJitter: dedup.subDistort||false, endCardImage: dedup.endImage||false,
         keepOriginalAudio: keepAudio, backgroundMusic: addMusic,
         autoSubtitle: autoSub, subtitlePosition: subPos, mixStrength: intensity,
+        burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx, fileName: v.name, duration: v.dur,
@@ -4129,9 +4136,10 @@ export default function App() {
               const vm2=rc2.voiceMeta||null
               const vs2=v2||vm2||null
               const hasCrit=act2.length===0||d2===0
+              const hs2=!!(rc2.summaryScript&&rc2.summaryScript.trim())
               return {rc:rc2,dur:d2,active:act2,voice:v2,voiceSrc:vs2,
                 hasCrit,missingVoice:!v2&&!vm2,needReimport:!v2&&!!vm2,
-                unsavedDraft:!rc2.savedAt,unexported:!rc2.planExportedAt}
+                unsavedDraft:!rc2.savedAt,unexported:!rc2.planExportedAt,hasScript:hs2}
             }
 
             // ── batch stats across all comps
@@ -4203,6 +4211,7 @@ export default function App() {
             if(anomalySegs.length>0)               mustItems.push({type:'anomaly',text:`${anomalySegs.length} 个片段存在异常（缺少源视频或时长为 0）`})
             if(!ckVideosExist)                      mustItems.push({type:'noVideo',text:'尚未导入任何视频素材'})
             if(!ckHasSegs||!ckDurOk)               mustItems.push({type:'noSegs',text:'当前成品无有效片段或时长为 0'})
+            if(burnInSub&&!ckScriptExists)          warnItems.push({type:'noScript',text:'已启用「烧录字幕稿」但字幕汇总稿为空',sub:'请返回精修页填写字幕汇总稿，或在导出设置中关闭烧录字幕。',btn:'返回精修页'})
             if(!ckVoiceHasFile&&ckVoiceRecorded)   warnItems.push({type:'reimport',text:`语音「${voiceSrc?.fileName||voiceSrc?.name}」需要重新导入`,sub:'请返回精修页，在「最终语音轨道」重新导入该文件。',btn:'返回精修页导入语音'})
             if(!ckVoiceHasFile&&!ckVoiceRecorded)  warnItems.push({type:'noVoice',text:'尚未导入最终语音文件',sub:'请返回精修页，在「最终语音轨道」导入语音文件。',btn:'返回精修页导入语音'})
             if(!ckMuteOriginal&&ckVoiceRecorded)   warnItems.push({type:'noMute',text:'已记录最终语音，但原视频声音未关闭',sub:'请返回精修页，开启「原视频默认静音」。',btn:'返回精修页设置静音'})
@@ -4252,7 +4261,7 @@ export default function App() {
                     </div>
                     <div className="ep-batch-grid">
                       {allStats.length===0&&<div className="ep-batch-empty">暂无成品，请先在组合方案页生成成品。</div>}
-                      {allStats.map(({c,dur,active,voice:v2,voiceSrc:vs2,hasCrit,missingVoice:mv,unsavedDraft:ud})=>{
+                      {allStats.map(({c,dur,active,voice:v2,voiceSrc:vs2,hasCrit,missingVoice:mv,unsavedDraft:ud,hasScript:hs})=>{
                         const isSel=c.id===selComp?.id
                         const sc=hasCrit?'err':(mv||ud)?'warn':'ok'
                         return (
@@ -4265,6 +4274,7 @@ export default function App() {
                                 {v2?`配音：${(v2.fileName||'').slice(0,12)}`:vs2?'配音需重导':'缺配音'}
                               </span>
                               <span className={`ep-bc3-tag ${ud?'warn':'ok'}`}>{ud?'草稿未保存':'草稿已保存'}</span>
+                              <span className={`ep-bc3-tag ${hs?'ok':'warn'}`}>{hs?'字幕稿已填':'缺字幕稿'}</span>
                             </div>
                             {isSel&&<div className="ep-bc3-cur">▶ 当前查看</div>}
                           </div>
@@ -4339,7 +4349,7 @@ export default function App() {
                                     <div className="ep-ai-text">{item.text}</div>
                                   </div>
                                   <div className="ep-ai-btns">
-                                    {(item.type==='noVoice'||item.type==='reimport'||item.type==='noMute')&&
+                                    {(item.type==='noVoice'||item.type==='reimport'||item.type==='noMute'||item.type==='noScript')&&
                                       <button className={`ep-ai-btn ${isErr?'ep-ai-btn-err':'ep-ai-btn-warn'}`} onClick={()=>setSubStep('refine')}>返回精修页</button>}
                                     {item.type==='unsaved'&&
                                       <button className="ep-ai-btn ep-ai-btn-warn" onClick={()=>saveRefinedPlan(selComp.id)}>保存草稿</button>}
@@ -4430,6 +4440,27 @@ export default function App() {
                               <option value="top">顶部</option>
                             </select>
                           </div>
+                          <div className="ep-ss-row" style={{marginTop:10,gap:8,flexWrap:'wrap'}}>
+                            <label className={`ep-toggle-label ${burnInSub?'on':''}`} onClick={()=>setBurnInSub(v=>!v)}>
+                              <span className={`ep-toggle-pill ${burnInSub?'on':''}`}/>
+                              烧录字幕稿
+                            </label>
+                            <label className={`ep-toggle-label ${coverOrigSub?'on':''}`} onClick={()=>setCoverOrigSub(v=>!v)}>
+                              <span className={`ep-toggle-pill ${coverOrigSub?'on':''}`}/>
+                              遮挡原字幕
+                            </label>
+                            {coverOrigSub&&(
+                              <select className="ep-select" style={{height:26}} value={coverOrigSubHeight} onChange={e=>setCoverOrigSubHeight(e.target.value)}>
+                                <option value="8%">遮挡 8%（小）</option>
+                                <option value="12%">遮挡 12%（默认）</option>
+                                <option value="16%">遮挡 16%（中）</option>
+                                <option value="20%">遮挡 20%（大）</option>
+                              </select>
+                            )}
+                          </div>
+                          {burnInSub&&!ckScriptExists&&(
+                            <div className="ep-ss-warn">⚠ 字幕汇总稿为空，导出时将跳过字幕烧录</div>
+                          )}
                         </div>
                       </div>
                     </div>
