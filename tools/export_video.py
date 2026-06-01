@@ -96,13 +96,24 @@ def resolve_videos(source_videos):
     missing = []
     for sv in source_videos:
         idx = sv["index"]
-        fname = sv["fileName"]
-        match = available.get(fname.lower())
+        # v0.9.3: 优先使用同步后的 storedFileName / fileName，回退到 originalName
+        candidates = [
+            sv.get("storedFileName"),
+            sv.get("fileName"),
+            sv.get("originalName"),
+        ]
+        match = None
+        used = None
+        for cand in candidates:
+            if cand and cand.lower() in available:
+                match = available[cand.lower()]
+                used = cand
+                break
         if match:
             resolved[idx] = match
-            log(f"  素材[{idx}] {fname} → {match.name}")
+            log(f"  素材[{idx}] {used} → {match.name}")
         else:
-            missing.append(fname)
+            missing.append(sv.get("fileName") or sv.get("originalName") or f"index={idx}")
     if missing:
         err("以下素材视频未找到，请将原始视频放入 export_workspace/videos/:")
         for m in missing:
@@ -127,25 +138,33 @@ def resolve_voice(data):
     ]
     audio_map = {f.name.lower(): f for f in audio_files}
 
-    # 优先级 1: voice.fileName
+    # 优先级 1: voice 的同步文件名（storedFileName / fileName / originalName）
     voice = data.get("voice") or {}
-    fname = voice.get("fileName", "").strip() if isinstance(voice, dict) else ""
+    names = []
+    if isinstance(voice, dict):
+        for key in ("storedFileName", "fileName", "originalName"):
+            v = (voice.get(key) or "").strip()
+            if v:
+                names.append(v)
 
     # 优先级 2: voiceMeta.fileName（兼容旧版或备用字段）
-    if not fname:
+    if not names:
         voice_meta = data.get("voiceMeta") or {}
-        fname = voice_meta.get("fileName", "").strip() if isinstance(voice_meta, dict) else ""
+        if isinstance(voice_meta, dict):
+            v = (voice_meta.get("fileName") or "").strip()
+            if v:
+                names.append(v)
 
-    if fname:
-        match = audio_map.get(fname.lower())
-        if match:
-            log(f"已找到最终语音：{match.name}")
-            return match
-        else:
-            err(f"剪辑草稿记录了最终语音：{fname}")
-            err(f"但在 export_workspace/audio/ 中没有找到该文件。")
-            err(f"请把 {fname} 放入 audio 文件夹，或重新导出剪辑草稿。")
-            sys.exit(1)
+    if names:
+        for fname in names:
+            match = audio_map.get(fname.lower())
+            if match:
+                log(f"已找到最终语音：{match.name}")
+                return match
+        err(f"剪辑草稿记录了最终语音：{names[0]}")
+        err(f"但在 export_workspace/audio/ 中没有找到该文件。")
+        err(f"请在网页精修页重新导入并同步配音，或重新导出剪辑草稿。")
+        sys.exit(1)
 
     # 草稿没有记录语音文件名
     if len(audio_files) == 1:

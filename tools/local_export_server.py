@@ -1,25 +1,75 @@
 #!/usr/bin/env python3
 """
-shipin-cut v0.9.1 — 本地导出服务
+shipin-cut v0.9.3 — 本地导出服务
 用法: python local_export_server.py
      启动后监听 http://127.0.0.1:8765
-     网页点击"导出成品视频"时自动 POST 草稿 JSON 到 /export
+     - 网页导入原视频时自动 POST 到 /upload-video（同步到 videos/）
+     - 精修页导入配音时自动 POST 到 /upload-audio（同步到 audio/）
+     - 网页点击"导出成品视频"时 POST 草稿 JSON 到 /export
 """
 
 import sys
 import json
+import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 SCRIPT_DIR    = Path(__file__).resolve().parent
 WORKSPACE     = SCRIPT_DIR.parent / "export_workspace"
 DRAFTS_DIR    = WORKSPACE / "drafts"
+VIDEOS_DIR    = WORKSPACE / "videos"
+AUDIO_DIR     = WORKSPACE / "audio"
 EXPORT_SCRIPT = SCRIPT_DIR / "export_video.py"
 CURRENT_DRAFT = "web-export-current.json"
 
 HOST = "127.0.0.1"
 PORT = 8765
+
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac"}
+
+
+def safe_stored_name(original, prefix, default_ext):
+    """生成安全的存储文件名：prefix_时间戳_清洗后原名.ext，避免中文/空格/特殊符号。"""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = Path(original or "").stem
+    ext = Path(original or "").suffix.lower()
+    if not ext:
+        ext = default_ext
+    clean = re.sub(r"[^A-Za-z0-9._-]", "_", stem).strip("_")[:40] or "file"
+    return f"{prefix}_{ts}_{clean}{ext}"
+
+
+def parse_multipart(body, content_type):
+    """极简 multipart/form-data 解析，返回 (fields:dict, files:dict{name:{filename,content}})。"""
+    m = re.search(r"boundary=([^;]+)", content_type)
+    if not m:
+        return {}, {}
+    boundary = m.group(1).strip().strip('"')
+    delim = b"--" + boundary.encode()
+    fields, files = {}, {}
+    for part in body.split(delim):
+        if not part or part in (b"--", b"--\r\n", b"\r\n"):
+            continue
+        if b"\r\n\r\n" not in part:
+            continue
+        header_blob, content = part.split(b"\r\n\r\n", 1)
+        if content.endswith(b"\r\n"):
+            content = content[:-2]
+        headers = header_blob.decode("utf-8", "replace")
+        name_m = re.search(r'name="([^"]*)"', headers)
+        if not name_m:
+            continue
+        name = name_m.group(1)
+        fn_m = re.search(r'filename="([^"]*)"', headers)
+        if fn_m and fn_m.group(1):
+            files[name] = {"filename": fn_m.group(1), "content": content}
+        else:
+            fields[name] = content.decode("utf-8", "replace").strip()
+    return fields, files
+
 
 
 class ExportHandler(BaseHTTPRequestHandler):
@@ -47,11 +97,63 @@ class ExportHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._json({"ok": True, "service": "shipin-cut-local-export", "version": "0.9.1"})
+            self._json({"ok": True, "service": "shipin-cut-local-export", "version": "0.9.3"})
+        elif self.path == "/synced-files":
+            VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+            AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+            vids = [f.name for f in VIDEOS_DIR.iterdir()
+                    if f.is_file() and f.suffix.lower() in VIDEO_EXTS]
+            auds = [f.name for f in AUDIO_DIR.iterdir()
+                    if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
+            self._json({"ok": True, "videos": sorted(vids), "audio": sorted(auds)})
         else:
             self._json({"ok": False, "error": "not found"}, 404)
 
+    def _handle_upload(self, kind):
+        """kind: 'video' | 'audio'。接收 multipart/form-data，保存到对应目录。"""
+        ctype = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in ctype:
+            self._json({"ok": False, "error": "需要 multipart/form-data"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        fields, files = parse_multipart(body, ctype)
+        if "file" not in files:
+            self._json({"ok": False, "error": "缺少 file 字段"})
+            return
+        up = files["file"]
+        original = fields.get("originalName") or up["filename"] or "file"
+        if kind == "video":
+            target_dir, prefix, default_ext = VIDEOS_DIR, "video", ".mp4"
+        else:
+            target_dir, prefix, default_ext = AUDIO_DIR, "audio", ".mp3"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        stored = safe_stored_name(original, prefix, default_ext)
+        dest = target_dir / stored
+        try:
+            with open(dest, "wb") as f:
+                f.write(up["content"])
+        except Exception as e:
+            self._json({"ok": False, "error": f"保存文件失败: {e}"})
+            return
+        size = dest.stat().st_size
+        print(f"[服务] 已同步{('视频' if kind=='video' else '配音')}：{original} → {stored} ({size/1024/1024:.1f} MB)", flush=True)
+        self._json({
+            "ok": True,
+            "type": kind,
+            "fileName": stored,
+            "originalName": original,
+            "storedPath": str(dest),
+            "size": size,
+        })
+
     def do_POST(self):
+        if self.path == "/upload-video":
+            self._handle_upload("video")
+            return
+        if self.path == "/upload-audio":
+            self._handle_upload("audio")
+            return
         if self.path != "/export":
             self._json({"ok": False, "error": "not found"}, 404)
             return
@@ -141,10 +243,14 @@ class ExportHandler(BaseHTTPRequestHandler):
 
 def main():
     server = HTTPServer((HOST, PORT), ExportHandler)
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     print("=" * 56, flush=True)
-    print(" shipin-cut v0.9.1  本地导出服务", flush=True)
+    print(" shipin-cut v0.9.3  本地导出服务", flush=True)
     print("=" * 56, flush=True)
     print(f" 地址: http://{HOST}:{PORT}", flush=True)
+    print(" 网页导入素材会自动同步到 videos/ 和 audio/", flush=True)
     print(" 请回到网页点击「导出成品视频」", flush=True)
     print(" 按 Ctrl+C 可停止服务", flush=True)
     print("=" * 56, flush=True)

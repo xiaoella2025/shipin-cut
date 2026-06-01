@@ -1484,17 +1484,77 @@ export default function App() {
 
   function handleImportClick() { fileInputRef.current?.click() }
 
+  // v0.9.3: 上传文件到本地导出服务（自动同步素材）
+  async function uploadToLocalService(endpoint, blob, originalName, extraFields={}) {
+    const fd = new FormData()
+    fd.append('file', blob, originalName)
+    fd.append('originalName', originalName)
+    for (const [k,v] of Object.entries(extraFields)) fd.append(k, String(v))
+    const resp = await fetch(`http://127.0.0.1:8765${endpoint}`, { method:'POST', body:fd })
+    const data = await resp.json()
+    if (!data || !data.ok) throw new Error(data?.error || '同步失败')
+    return data
+  }
+
   async function handleFileSelect(e) {
     const files=Array.from(e.target.files); if (!files.length) return
     const idBase=Date.now()
+    let syncedAny=false, serviceDown=false
     const newVideos=await Promise.all(files.map(async(file,i)=>{
       const url=URL.createObjectURL(file)
       const meta=await readVideoMeta(url)
-      return { id:idBase+i, name:file.name, sizeStr:formatSize(file.size), dur:meta.dur||0, durStr:meta.dur>0?fmt(meta.dur):'—', res:meta.width>0?`${meta.width}×${meta.height}`:'—', url }
+      let synced=false, storedFileName=null, syncedAt=null
+      try {
+        const r=await uploadToLocalService('/upload-video', file, file.name)
+        synced=true; storedFileName=r.fileName; syncedAt=new Date().toISOString(); syncedAny=true
+      } catch(err) {
+        if (err instanceof TypeError) serviceDown=true
+      }
+      return { id:idBase+i, name:file.name, originalName:file.name, storedFileName, synced, syncedAt,
+        sizeStr:formatSize(file.size), dur:meta.dur||0, durStr:meta.dur>0?fmt(meta.dur):'—',
+        res:meta.width>0?`${meta.width}×${meta.height}`:'—', url }
     }))
     setUploadedVideos(prev=>[...prev,...newVideos])
     setSelectedVideoId(prev=>prev??(newVideos[0]?.id??null))
     e.target.value=''
+    if (serviceDown) showToast('本地导出服务未启动，当前只能预览；导出前请启动服务并在导出准备页点击同步')
+    else if (syncedAny) showToast('视频已导入并自动同步到本地导出服务')
+  }
+
+  // v0.9.3: 同步指定成品用到的、尚未同步的原视频
+  async function syncCompVideos(comp, rc) {
+    const hasEditSegs=!!(rc.editSegs&&rc.editSegs.length>0)
+    const {segments}=hasEditSegs?buildEditTimeline(rc.editSegs):buildDerivedTimeline(comp,rc.deletedSegIdxs,rc.speedMap)
+    const usedIdx=[...new Set(segments.filter(ds=>!ds.seg?.deleted).map(ds=>ds.seg.videoIndex))]
+    const pending=usedIdx.map(i=>uploadedVideos[i]).filter(v=>v&&!v.synced&&v.url)
+    if (pending.length===0) { showToast('该成品的原视频均已同步'); return }
+    let ok=0, down=false
+    for (const v of pending) {
+      try {
+        const blob=await (await fetch(v.url)).blob()
+        const r=await uploadToLocalService('/upload-video', blob, v.name)
+        setUploadedVideos(prev=>prev.map(x=>x.id===v.id?{...x,synced:true,storedFileName:r.fileName,syncedAt:new Date().toISOString()}:x))
+        ok++
+      } catch(err) { if (err instanceof TypeError) down=true }
+    }
+    if (down) showToast('本地导出服务未启动，请先双击「启动本地导出服务.bat」，再点击同步')
+    else showToast(`已同步 ${ok} 个原视频到本地导出服务`)
+  }
+
+  // v0.9.3: 同步指定成品的本条配音
+  async function syncCompVoice(compId) {
+    const rc=defaultRcFor(refinedComps[compId])
+    const v=rc.voice
+    if (!v||!v.url) { showToast('未找到可同步的配音，请重新导入'); return }
+    try {
+      const blob=await (await fetch(v.url)).blob()
+      const r=await uploadToLocalService('/upload-audio', blob, v.originalName||v.fileName, {compId:String(compId)})
+      updateRefinedComp(compId, { voice:{...v, storedFileName:r.fileName, synced:true, syncedAt:new Date().toISOString()} })
+      showToast('本条配音已同步到本地导出服务')
+    } catch(err) {
+      if (err instanceof TypeError) showToast('本地导出服务未启动，请先双击「启动本地导出服务.bat」，再点击同步')
+      else showToast('配音同步失败：'+(err.message||''))
+    }
   }
 
   function handleRemoveVideo(id) {
@@ -2028,7 +2088,10 @@ export default function App() {
     // v0.7.6-hotfix: voice export uses normalized shape; objectUrl is never serialized
     const voiceSrc = rc.voice || rc.voiceMeta || null
     const exportedVoice = voiceSrc ? {
-      fileName: voiceSrc.fileName || voiceSrc.name || '',
+      fileName: voiceSrc.storedFileName || voiceSrc.fileName || voiceSrc.name || '',
+      originalName: voiceSrc.originalName || voiceSrc.fileName || voiceSrc.name || '',
+      storedFileName: voiceSrc.storedFileName || null,
+      synced: !!voiceSrc.synced,
       fileType: voiceSrc.fileType || '',
       duration: voiceSrc.duration || 0,
       importedAt: voiceSrc.importedAt || '',
@@ -2074,7 +2137,10 @@ export default function App() {
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx,
-        fileName: v.name,
+        fileName: v.storedFileName || v.name,
+        originalName: v.name,
+        storedFileName: v.storedFileName || null,
+        synced: !!v.synced,
         duration: v.dur,
       })),
       derivedTimeline: derivedSegs.map(ds => ({
@@ -2116,7 +2182,10 @@ export default function App() {
       : buildDerivedTimeline(comp, rc.deletedSegIdxs, rc.speedMap)
     const voiceSrc = rc.voice || rc.voiceMeta || null
     const exportedVoice = voiceSrc ? {
-      fileName: voiceSrc.fileName || voiceSrc.name || '',
+      fileName: voiceSrc.storedFileName || voiceSrc.fileName || voiceSrc.name || '',
+      originalName: voiceSrc.originalName || voiceSrc.fileName || voiceSrc.name || '',
+      storedFileName: voiceSrc.storedFileName || null,
+      synced: !!voiceSrc.synced,
       fileType: voiceSrc.fileType || '',
       duration: voiceSrc.duration || 0,
       importedAt: voiceSrc.importedAt || '',
@@ -2149,7 +2218,8 @@ export default function App() {
         burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
       },
       sourceVideos: uploadedVideos.map((v, idx) => ({
-        index: idx, fileName: v.name, duration: v.dur,
+        index: idx, fileName: v.storedFileName || v.name, originalName: v.name,
+        storedFileName: v.storedFileName || null, synced: !!v.synced, duration: v.dur,
       })),
       derivedTimeline: derivedSegs.map(ds => ({
         esId: ds.esId ?? null, segIdx: ds.segIdx ?? null,
@@ -2304,12 +2374,21 @@ export default function App() {
     if (!file) return
     const url = URL.createObjectURL(file)
     const tmp = new Audio(url)
-    tmp.addEventListener('loadedmetadata', () => {
+    tmp.addEventListener('loadedmetadata', async () => {
       const dur = isFinite(tmp.duration) ? tmp.duration : 0
       const importedAt = new Date().toISOString()
+      // v0.9.3: 自动同步到本地导出服务
+      let synced=false, storedFileName=null, syncedAt=null, serviceDown=false
+      try {
+        const r=await uploadToLocalService('/upload-audio', file, file.name, {compId:String(compId)})
+        synced=true; storedFileName=r.fileName; syncedAt=new Date().toISOString()
+      } catch(err) { if (err instanceof TypeError) serviceDown=true }
       updateRefinedComp(compId, {
         voice: {
-          fileName: file.name,
+          fileName: file.name,           // 原始名，用于页面显示
+          originalName: file.name,
+          storedFileName,                // 本地服务返回的安全名，导出时使用
+          synced, syncedAt,
           fileType: file.type || '',
           duration: dur,
           importedAt,
@@ -2319,7 +2398,9 @@ export default function App() {
         voiceMeta: null, // cleared once a real file is loaded
         audioPolicy: { ...(defaultRcFor(refinedComps[compId]).audioPolicy), muteOriginalVideo: true },
       })
-      showToast('本条成品配音已导入，原视频音频已自动静音')
+      if (serviceDown) showToast('配音已导入（仅预览）；本地导出服务未启动，导出前请启动服务并点击同步')
+      else if (synced) showToast('本条配音已导入并同步到本地导出服务，原视频音频已自动静音')
+      else showToast('本条成品配音已导入，原视频音频已自动静音')
     })
     tmp.addEventListener('error', () => showToast('音频文件读取失败'))
   }
@@ -4137,18 +4218,27 @@ export default function App() {
               const vs2=v2||vm2||null
               const hasCrit=act2.length===0||d2===0
               const hs2=!!(rc2.summaryScript&&rc2.summaryScript.trim())
+              // v0.9.3 sync status
+              const usedIdx2=[...new Set(act2.map(ds=>ds.seg.videoIndex))]
+              const usedVids2=usedIdx2.map(i=>uploadedVideos[i])
+              const missVid2=usedVids2.some(v=>!v)
+              const vidsSynced2=usedVids2.length>0&&usedVids2.every(v=>v&&v.synced)
+              const voiceSynced2=!!(v2&&v2.synced)
               return {rc:rc2,dur:d2,active:act2,voice:v2,voiceSrc:vs2,
                 hasCrit,missingVoice:!v2&&!vm2,needReimport:!v2&&!!vm2,
-                unsavedDraft:!rc2.savedAt,unexported:!rc2.planExportedAt,hasScript:hs2}
+                unsavedDraft:!rc2.savedAt,unexported:!rc2.planExportedAt,hasScript:hs2,
+                vidsSynced:vidsSynced2,voiceSynced:voiceSynced2,missingVideo:missVid2}
             }
 
             // ── batch stats across all comps
             const allStats=compositions.map(c=>({c,...compStat(c)}))
             const totalCount=compositions.length
-            const readyCount=allStats.filter(s=>!s.hasCrit&&!s.missingVoice&&!s.unsavedDraft).length
-            const needsCount=allStats.filter(s=>s.hasCrit||s.missingVoice).length
+            const notSynced=s=>(s.active.length>0&&!s.vidsSynced)||(s.voice&&!s.voiceSynced)||s.missingVideo
+            const readyCount=allStats.filter(s=>!s.hasCrit&&!s.missingVoice&&!s.unsavedDraft&&!notSynced(s)).length
+            const needsCount=allStats.filter(s=>s.hasCrit||s.missingVoice||notSynced(s)).length
             const savedCount=allStats.filter(s=>!s.unsavedDraft).length
             const missingVoiceCount=allStats.filter(s=>s.missingVoice).length
+            const unsyncedCount=allStats.filter(s=>notSynced(s)).length
             const batchStatus=needsCount>0?'error':allStats.some(s=>s.unsavedDraft||s.unexported)?'warn':'ok'
             const batchLabel=batchStatus==='ok'?'全部准备完成':batchStatus==='warn'?'有建议项，但可继续':
               `有 ${needsCount} 条需要处理`
@@ -4194,6 +4284,13 @@ export default function App() {
             const ckMuteOriginal=muteOriginal, ckDraftSaved=!!rc.savedAt
             const ckJsonExported=!!rc.planExportedAt
             const ckScriptExists=!!(rc.summaryScript&&rc.summaryScript.trim())
+            // v0.9.3 sync status for selected comp
+            const usedVidIdxs=[...new Set(activeSegs.map(ds=>ds.seg.videoIndex))]
+            const usedVidObjs=usedVidIdxs.map(i=>uploadedVideos[i])
+            const ckVideosSynced=usedVidObjs.length>0&&usedVidObjs.every(v=>v&&v.synced)
+            const unsyncedVidCount=usedVidObjs.filter(v=>v&&!v.synced).length
+            const ckVoiceSynced=!!(voice&&voice.synced)
+            const ckWillBurnSub=burnInSub&&ckScriptExists
             const ckTitleExists=!!(cp.finalTitle&&cp.finalTitle.trim())
             const ckWechatExists=!!(cp.finalWechatBody&&cp.finalWechatBody.trim())
             const ckXhsExists=!!(cp.finalXhs&&cp.finalXhs.trim())
@@ -4211,6 +4308,8 @@ export default function App() {
             if(anomalySegs.length>0)               mustItems.push({type:'anomaly',text:`${anomalySegs.length} 个片段存在异常（缺少源视频或时长为 0）`})
             if(!ckVideosExist)                      mustItems.push({type:'noVideo',text:'尚未导入任何视频素材'})
             if(!ckHasSegs||!ckDurOk)               mustItems.push({type:'noSegs',text:'当前成品无有效片段或时长为 0'})
+            if(ckVideosExist&&!ckVideosSynced&&!anomalySegs.length) mustItems.push({type:'syncVideo',text:`${unsyncedVidCount} 个原视频尚未同步到本地导出服务`,sub:'导出前需把原视频同步到本地服务，点击下方按钮一键同步（无需手动复制文件）。'})
+            if(ckVoiceHasFile&&!ckVoiceSynced)     mustItems.push({type:'syncVoice',text:'本条配音尚未同步到本地导出服务',sub:'点击下方按钮一键同步本条配音（无需手动复制文件）。'})
             if(burnInSub&&!ckScriptExists)          warnItems.push({type:'noScript',text:'已启用「烧录字幕稿」但字幕汇总稿为空',sub:'请返回精修页填写字幕汇总稿，或在导出设置中关闭烧录字幕。',btn:'返回精修页'})
             if(!ckVoiceHasFile&&ckVoiceRecorded)   warnItems.push({type:'reimport',text:`语音「${voiceSrc?.fileName||voiceSrc?.name}」需要重新导入`,sub:'请返回精修页，在「最终语音轨道」重新导入该文件。',btn:'返回精修页导入语音'})
             if(!ckVoiceHasFile&&!ckVoiceRecorded)  warnItems.push({type:'noVoice',text:'尚未导入最终语音文件',sub:'请返回精修页，在「最终语音轨道」导入语音文件。',btn:'返回精修页导入语音'})
@@ -4219,7 +4318,8 @@ export default function App() {
             if(!ckJsonExported)                     warnItems.push({type:'unexported',text:'剪辑草稿尚未导出文件',sub:'建议导出草稿文件存档备份。'})
             if(durDiff!==null&&durDiffAbs>=3)       warnItems.push({type:'durDiff',text:`视频（${fmt2(epDur)}）与语音（${fmt2(voiceDur)}）时长相差 ${fmt2(durDiffAbs)}`})
 
-            const overallStatus=(!ckHasSegs||!ckDurOk||!ckVideosExist||!ckNoAnomalies)?'error':warnItems.length>0?'warn':'ok'
+            const ckSyncOk=(!ckVideosExist||ckVideosSynced)&&(!ckVoiceHasFile||ckVoiceSynced)
+            const overallStatus=(!ckHasSegs||!ckDurOk||!ckVideosExist||!ckNoAnomalies||!ckSyncOk)?'error':warnItems.length>0?'warn':'ok'
 
             // ── video preview: first active segment of selected comp
             const previewSeg=activeSegs[0]||null
@@ -4245,6 +4345,7 @@ export default function App() {
                     <span className={`ep-ts-item ${readyCount===totalCount&&totalCount>0?'ok':''}`}>{readyCount} 可导出</span>
                     {needsCount>0&&<span className="ep-ts-item err">{needsCount} 需处理</span>}
                     {missingVoiceCount>0&&<span className="ep-ts-item warn">{missingVoiceCount} 缺语音</span>}
+                    {unsyncedCount>0&&<span className="ep-ts-item err">{unsyncedCount} 待同步</span>}
                     {(savedCount<totalCount)&&<span className="ep-ts-item warn">{totalCount-savedCount} 未保存草稿</span>}
                   </div>
                   <span className={`ep-topbar-badge ep-zbadge-${batchStatus}`}>{batchLabel}</span>
@@ -4261,17 +4362,20 @@ export default function App() {
                     </div>
                     <div className="ep-batch-grid">
                       {allStats.length===0&&<div className="ep-batch-empty">暂无成品，请先在组合方案页生成成品。</div>}
-                      {allStats.map(({c,dur,active,voice:v2,voiceSrc:vs2,hasCrit,missingVoice:mv,unsavedDraft:ud,hasScript:hs})=>{
+                      {allStats.map(({c,dur,active,voice:v2,voiceSrc:vs2,hasCrit,missingVoice:mv,unsavedDraft:ud,hasScript:hs,vidsSynced:vsy,voiceSynced:vosy,missingVideo:mvid})=>{
                         const isSel=c.id===selComp?.id
-                        const sc=hasCrit?'err':(mv||ud)?'warn':'ok'
+                        const sc=hasCrit||mvid?'err':(mv||ud||!vsy||(v2&&!vosy))?'warn':'ok'
                         return (
                           <div key={c.id} className={`ep-bc3 ep-bc3-${sc}${isSel?' ep-bc3-sel':''}`}
                                onClick={()=>setEpSelCompId(c.id)}>
                             <div className="ep-bc3-name">{c.name}</div>
                             <div className="ep-bc3-meta">{fmt2(dur)} · {active.length} 段</div>
                             <div className="ep-bc3-tags">
-                              <span className={`ep-bc3-tag ${v2?'ok':vs2?'warn':'miss'}`} title={v2?`配音：${v2.fileName||''}`:vs2?`需重导：${vs2.fileName||''}`:'未绑定配音'}>
-                                {v2?`配音：${(v2.fileName||'').slice(0,12)}`:vs2?'配音需重导':'缺配音'}
+                              <span className={`ep-bc3-tag ${mvid?'miss':vsy?'ok':'warn'}`} title="原视频是否已同步到本地导出服务">
+                                {mvid?'缺源视频':vsy?'视频已同步':'视频未同步'}
+                              </span>
+                              <span className={`ep-bc3-tag ${v2?(vosy?'ok':'warn'):vs2?'warn':'miss'}`} title={v2?`配音：${v2.originalName||v2.fileName||''}`:vs2?`需重导：${vs2.fileName||''}`:'未绑定配音'}>
+                                {v2?(vosy?`配音已同步`:`配音未同步`):vs2?'配音需重导':'缺配音'}
                               </span>
                               <span className={`ep-bc3-tag ${ud?'warn':'ok'}`}>{ud?'草稿未保存':'草稿已保存'}</span>
                               <span className={`ep-bc3-tag ${hs?'ok':'warn'}`}>{hs?'字幕稿已填':'缺字幕稿'}</span>
@@ -4341,14 +4445,19 @@ export default function App() {
                           </div>
                         ):(
                           <div className="ep-action-list">
-                            {[...mustItems,...warnItems].slice(0,4).map((item,i)=>{
+                            {[...mustItems,...warnItems].slice(0,6).map((item,i)=>{
                               const isErr=i<mustItems.length
                               return (
                                 <div key={i} className={`ep-action-item ${isErr?'ep-ai-err':'ep-ai-warn'}`}>
                                   <div className="ep-ai-body">
                                     <div className="ep-ai-text">{item.text}</div>
+                                    {item.sub&&<div className="ep-ai-sub">{item.sub}</div>}
                                   </div>
                                   <div className="ep-ai-btns">
+                                    {item.type==='syncVideo'&&
+                                      <button className="ep-ai-btn ep-ai-btn-err" onClick={()=>syncCompVideos(selComp,rc)}>同步当前素材</button>}
+                                    {item.type==='syncVoice'&&
+                                      <button className="ep-ai-btn ep-ai-btn-err" onClick={()=>syncCompVoice(selComp.id)}>同步当前配音</button>}
                                     {(item.type==='noVoice'||item.type==='reimport'||item.type==='noMute'||item.type==='noScript')&&
                                       <button className={`ep-ai-btn ${isErr?'ep-ai-btn-err':'ep-ai-btn-warn'}`} onClick={()=>setSubStep('refine')}>返回精修页</button>}
                                     {item.type==='unsaved'&&
@@ -4540,14 +4649,26 @@ export default function App() {
                       </div>
                       <div className="ep-det-section">
                         <div className="ep-det-head">
+                          <span>素材同步（本地导出服务）</span>
+                          <span className={`ep-det-badge-sm ${ckSyncOk?'ok':'err'}`}>{ckSyncOk?'已同步':'未同步'}</span>
+                        </div>
+                        <div className="ep-det-rows">
+                          <div className={`ep-det-row ${!ckVideosExist?'err':ckVideosSynced?'ok':'warn'}`}><span>原视频同步</span><span>{!ckVideosExist?'无视频':ckVideosSynced?`已同步 ${usedVidObjs.length} 个`:`${unsyncedVidCount} 个未同步`}</span></div>
+                          <div className={`ep-det-row ${ckVoiceHasFile?(ckVoiceSynced?'ok':'warn'):''}`}><span>配音同步</span><span>{ckVoiceHasFile?(ckVoiceSynced?'已同步':'未同步'):'无配音'}</span></div>
+                          <div className="ep-det-row"><span>同步方式</span><span>导入即自动同步（无需手动复制）</span></div>
+                        </div>
+                      </div>
+                      <div className="ep-det-section">
+                        <div className="ep-det-head">
                           <span>语音与音频</span>
                           <span className={`ep-det-badge-sm ${ckVoiceHasFile&&ckMuteOriginal?'ok':ckVoiceRecorded?'warn':'err'}`}>
                             {ckVoiceHasFile&&ckMuteOriginal?'通过':ckVoiceHasFile?'未静音':ckVoiceRecorded?'需重新导入':'未导入'}
                           </span>
                         </div>
                         <div className="ep-det-rows">
-                          <div className={`ep-det-row ${ckVoiceRecorded?'ok':'err'}`}><span>语音文件</span><span>{voiceSrc?.fileName||voiceSrc?.name||'未记录'}</span></div>
+                          <div className={`ep-det-row ${ckVoiceRecorded?'ok':'err'}`}><span>语音文件</span><span>{voice?.originalName||voiceSrc?.fileName||voiceSrc?.name||'未记录'}</span></div>
                           <div className={`ep-det-row ${ckVoiceHasFile?'ok':ckVoiceRecorded?'warn':'err'}`}><span>导入状态</span><span>{ckVoiceHasFile?'已导入':ckVoiceRecorded?'需重新导入':'未导入'}</span></div>
+                          <div className={`ep-det-row ${ckVoiceHasFile?(ckVoiceSynced?'ok':'warn'):''}`}><span>同步状态</span><span>{ckVoiceHasFile?(ckVoiceSynced?'已同步到本地服务':'未同步'):'—'}</span></div>
                           <div className="ep-det-row"><span>语音时长</span><span>{ckVoiceRecorded?fmt2(voiceDur):'—'}</span></div>
                           <div className={`ep-det-row ${ckMuteOriginal?'ok':'warn'}`}><span>原视频声音</span><span>{ckMuteOriginal?'已关闭':'未关闭'}</span></div>
                           {durDiff!==null&&<div className={`ep-det-row ${ckDurClose?'ok':'warn'}`}><span>时长差值</span><span>{durDiffAbs<0.5?'基本一致':durDiff>0?`视频短 ${fmt2(durDiffAbs)}`:`视频长 ${fmt2(durDiffAbs)}`}</span></div>}
@@ -4560,6 +4681,8 @@ export default function App() {
                         </div>
                         <div className="ep-det-rows">
                           <div className={`ep-det-row ${ckScriptExists?'ok':'warn'}`}><span>字幕汇总稿</span><span>{ckScriptExists?`约 ${rc.summaryScript.trim().length} 字`:'未填写'}</span></div>
+                          <div className={`ep-det-row ${ckWillBurnSub?'ok':''}`}><span>成品字幕</span><span>{!burnInSub?'不烧录':ckScriptExists?'将自动生成':'缺字幕稿，导出时跳过'}</span></div>
+                          <div className={`ep-det-row ${coverOrigSub?'ok':''}`}><span>原字幕遮挡</span><span>{coverOrigSub?`遮挡底部 ${coverOrigSubHeight}`:'不遮挡'}</span></div>
                           <div className={`ep-det-row ${ckTitleExists?'ok':''}`}><span>最终标题</span><span>{ckTitleExists?cp.finalTitle:'未填写'}</span></div>
                           <div className={`ep-det-row ${ckWechatExists?'ok':''}`}><span>公众号正文</span><span>{ckWechatExists?`约 ${cp.finalWechatBody.trim().length} 字`:'未填写'}</span></div>
                           <div className={`ep-det-row ${ckXhsExists?'ok':''}`}><span>小红书正文</span><span>{ckXhsExists?`约 ${cp.finalXhs.trim().length} 字`:'未填写'}</span></div>
