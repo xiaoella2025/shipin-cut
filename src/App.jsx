@@ -3832,7 +3832,7 @@ export default function App() {
                           <audio ref={refineVoiceRef} src={voice.url} preload="auto"
                             onPlay={()=>setRefineVoicePlaying(true)}
                             onPause={()=>setRefineVoicePlaying(false)}
-                            onTimeUpdate={()=>{ const a=refineVoiceRef.current; if(a) setRefineVoicePos(a.currentTime) }}
+                            onTimeUpdate={()=>{ const a=refineVoiceRef.current; if(a){ setRefineVoicePos(a.currentTime); if(!refineIsPlayingRef.current) setRefinePrevPos(a.currentTime) } }}
                             onEnded={()=>setRefineVoicePlaying(false)}/>
                           <div className="refine-vt-info">
                             <span className="refine-vt-filename" title={voice.fileName}>{voice.fileName}</span>
@@ -3844,35 +3844,49 @@ export default function App() {
                               refineVoicePlaying?a.pause():a.play().catch(()=>{})
                             }}>{refineVoicePlaying?'⏸ 暂停':'▶ 播放配音'}</button>
                             <span className="refine-vt-pos">{fmt(refineVoicePos)} / {fmt(voiceDur)}</span>
+                            {refinePrevPos>voiceDur+0.1&&<span className="refine-vt-over">已超过配音长度</span>}
                           </div>
-                          <div className="refine-vt-progress-row">
-                            <input
-                              type="range"
-                              className="refine-vt-progress"
-                              min="0"
-                              max={voiceDur > 0 ? voiceDur : 1}
-                              step="0.05"
-                              value={Math.min(refineVoicePos, voiceDur > 0 ? voiceDur : 1)}
-                              onMouseDown={()=>stopRefinePlay()}
-                              onChange={e=>{
-                                const t=parseFloat(e.target.value)
-                                const aud=refineVoiceRef.current
-                                if(aud) aud.currentTime=t
-                                setRefineVoicePos(t)
-                                setRefinePrevPos(t)
-                                const ds=derivedSegs.find(s=>t>=s.compStart&&t<s.compEnd)||derivedSegs[derivedSegs.length-1]
-                                if(ds){
-                                  if(hasEditSegs) setRefineSelEsId(ds.esId)
-                                  else setRefineSelSeg(ds.segIdx)
-                                  const offsetInSeg=(t-ds.compStart)*ds.speed
-                                  const seekT=ds.seg.startSec+Math.min(Math.max(0,offsetInSeg),ds.seg.endSec-ds.seg.startSec-0.01)
-                                  refinePrevSeekRef.current=seekT
-                                  const vid=refinePrevRef.current
-                                  if(vid&&vid.readyState>=2) vid.currentTime=seekT
-                                }
-                              }}
-                            />
-                          </div>
+                          {(()=>{
+                            // shared timescale: video & voice share one ruler (v0.9.2-hotfix-3)
+                            const tlDur=Math.max(derivedDur,voiceDur||0)||1
+                            const playPct=Math.min(100,Math.max(0,(refinePrevPos/tlDur)*100))
+                            const voicePct=Math.min(100,(voiceDur/tlDur)*100)
+                            const seekFromClientX=(clientX,el)=>{
+                              const rect=el.getBoundingClientRect()
+                              const ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width))
+                              const t=ratio*tlDur
+                              const aud=refineVoiceRef.current
+                              if(aud&&aud.src) aud.currentTime=Math.min(t,voiceDur||0)
+                              setRefineVoicePos(Math.min(t,voiceDur||0))
+                              setRefinePrevPos(t)
+                              const ds=derivedSegs.find(s=>t>=s.compStart&&t<s.compEnd)||derivedSegs[derivedSegs.length-1]
+                              if(ds){
+                                if(hasEditSegs) setRefineSelEsId(ds.esId); else setRefineSelSeg(ds.segIdx)
+                                const offsetInSeg=(t-ds.compStart)*ds.speed
+                                const seekT=ds.seg.startSec+Math.min(Math.max(0,offsetInSeg),ds.seg.endSec-ds.seg.startSec-0.01)
+                                refinePrevSeekRef.current=seekT
+                                const vid=refinePrevRef.current
+                                if(vid&&vid.readyState>=2) vid.currentTime=seekT
+                              }
+                            }
+                            return (
+                              <div className="refine-vt-track-row">
+                                <div className="refine-vt-track" onMouseDown={e=>{
+                                  stopRefinePlay()
+                                  const el=e.currentTarget
+                                  seekFromClientX(e.clientX,el)
+                                  const onMove=ev=>{ ev.preventDefault(); seekFromClientX(ev.clientX,el) }
+                                  const onUp=()=>{ document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp) }
+                                  document.addEventListener('mousemove',onMove)
+                                  document.addEventListener('mouseup',onUp)
+                                }}>
+                                  <div className="refine-vt-track-fill" style={{width:`${voicePct}%`}}/>
+                                  {voicePct<99.5&&<div className="refine-vt-track-gap" style={{left:`${voicePct}%`}} title="此段无配音"/>}
+                                  <div className="refine-vt-track-playhead" style={{left:`${playPct}%`}}/>
+                                </div>
+                              </div>
+                            )
+                          })()}
                           <div className={`refine-vt-diff${Math.abs(durDiff)<0.5?' ok':durDiff>0?' short':' long'}`}>
                             <span className="refine-vt-diff-item">视频方案时长 <b>{fmt(derivedDur)}</b></span>
                             <span className="refine-vt-diff-item">本条配音时长 <b>{fmt(voiceDur)}</b></span>
