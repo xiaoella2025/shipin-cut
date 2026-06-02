@@ -408,12 +408,18 @@ def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_
     st = subtitle_style or {}
 
     def color_to_ass(c, alpha=0):
+        # ASS color format: &HAABBGGRR (alpha=0 means opaque)
         a = format(alpha, '02X')
         table = {
             'white':  f'&H{a}FFFFFF',
             'yellow': f'&H{a}00FFFF',
             'black':  f'&H{a}000000',
             'red':    f'&H{a}0000FF',
+            'blue':   f'&H{a}FF8844',
+            'green':  f'&H{a}33CC33',
+            'orange': f'&H{a}0099FF',
+            'pink':   f'&H{a}AA88FF',
+            'purple': f'&H{a}FF55BB',
         }
         return table.get(c, f'&H{a}FFFFFF')
 
@@ -425,12 +431,19 @@ def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_
     outline_w    = int(st.get("outlineWidth", 4)) if outline_on else 0
     shadow_w     = max(0, outline_w // 2)
 
-    bg           = st.get("background", "none")
-    bg_opacity   = float(st.get("backgroundOpacity", 0.5))
-    if bg != "none":
+    # background: support new backgroundMode/backgroundColor + old background field
+    bg_mode      = st.get("backgroundMode")
+    if bg_mode is None:
+        old_bg = st.get("background", "none")
+        bg_mode = "none" if old_bg == "none" else "text"
+        bg_color_key = old_bg if old_bg != "none" else "black"
+    else:
+        bg_color_key = st.get("backgroundColor", "black")
+    bg_opacity   = float(st.get("backgroundOpacity", 0.45))
+    if bg_mode != "none":
         alpha_val    = int((1.0 - bg_opacity) * 255)
-        border_style = 3
-        bg_color     = color_to_ass(bg, alpha=alpha_val)
+        border_style = 3   # ASS opaque box wraps text; bar mode uses same box for low-risk impl
+        bg_color     = color_to_ass(bg_color_key, alpha=alpha_val)
     else:
         border_style = 1
         bg_color     = "&H80000000"
