@@ -1085,6 +1085,7 @@ export default function App() {
   const [refineTrimState, setRefineTrimState]       = useState(null)  // v0.7.5 trim drag preview: {esId,edge,previewStartSec,previewEndSec}
   const [refineSubTab, setRefineSubTab]   = useState('script') // v0.9.5: 'script'|'subs'
   const [splitMenuSubId, setSplitMenuSubId] = useState(null)  // v0.9.5h: open split-menu row
+  const [subHistory, setSubHistory] = useState({})  // v0.9.5h2: per-comp subtitle undo history
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1175,6 +1176,7 @@ export default function App() {
   const refinePlayEsIdxRef  = useRef(0)       // index into active editTimeline.segments
   const refineEditTimelineRef = useRef(null)  // populated only during editSegs playback
   const rfDraggedRef = useRef(false)  // v0.9.5h: suppress click after reframe drag
+  const subEditSnapRef = useRef(null) // v0.9.5h2: tracks focused subtitle to snapshot once per focus
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -2123,6 +2125,7 @@ export default function App() {
     if (rc.finalSubtitles && rc.finalSubtitles.length > 0 &&
         !window.confirm('重新生成将覆盖现有字幕，确定吗？')) return
     if (!(rc.summaryScript && rc.summaryScript.trim())) { showToast('字幕汇总稿为空，请先在精修页填写'); return }
+    recordSubSnapshot(compId)
     const hasE = !!(rc.editSegs && rc.editSegs.length > 0)
     const {totalDuration} = hasE ? buildEditTimeline(rc.editSegs) : buildDerivedTimeline(comp, rc.deletedSegIdxs, rc.speedMap)
     const dur = rc.voice?.duration || totalDuration || 60
@@ -2136,23 +2139,25 @@ export default function App() {
     setRefinedComps(prev=>{
       const rc = defaultRcFor(prev[compId])
       const subs = (rc.finalSubtitles||[]).map(s=>s.id===subId?{...s,text}:s)
-      return {...prev,[compId]:{...rc,finalSubtitles:subs}}
+      return {...prev,[compId]:{...rc,finalSubtitles:subs,finalSubtitlesSavedAt:null}}
     })
   }
 
   function deleteSub(compId, subId) {
+    recordSubSnapshot(compId)
     setRefinedComps(prev=>{
       const rc = defaultRcFor(prev[compId])
       const subs = (rc.finalSubtitles||[]).filter(s=>s.id!==subId)
-      return {...prev,[compId]:{...rc,finalSubtitles:subs}}
+      return {...prev,[compId]:{...rc,finalSubtitles:subs,finalSubtitlesSavedAt:null}}
     })
   }
 
   function clearSubPunct(compId) {
+    recordSubSnapshot(compId)
     setRefinedComps(prev=>{
       const rc = defaultRcFor(prev[compId])
       const subs = (rc.finalSubtitles||[]).map(s=>({...s,text:s.text.replace(/[。，！？；：、…]/g,'')}))
-      return {...prev,[compId]:{...rc,finalSubtitles:subs}}
+      return {...prev,[compId]:{...rc,finalSubtitles:subs,finalSubtitlesSavedAt:null}}
     })
     showToast('已清理常见标点')
   }
@@ -2171,8 +2176,26 @@ export default function App() {
     updateRefinedComp(compId, { reframe: { ...getCompReframe(compId), ...updates } })
   }
 
+  // v0.9.5h2: subtitle undo helpers
+  function recordSubSnapshot(compId) {
+    const curSubs = refinedComps[compId]?.finalSubtitles || []
+    setSubHistory(prev => ({
+      ...prev,
+      [compId]: [...(prev[compId] || []), JSON.parse(JSON.stringify(curSubs))].slice(-10)
+    }))
+  }
+  function undoSubOp(compId) {
+    const hist = subHistory[compId] || []
+    if (!hist.length) { showToast('暂无可撤销操作'); return }
+    const prevSubs = hist[hist.length - 1]
+    updateRefinedComp(compId, { finalSubtitles: prevSubs, finalSubtitlesSavedAt: null })
+    setSubHistory(prev => ({ ...prev, [compId]: (prev[compId] || []).slice(0, -1) }))
+    showToast('已撤销字幕操作')
+  }
+
   // v0.9.5: subtitle edit helpers for refine page
   function mergeSub(compId, subId) {
+    recordSubSnapshot(compId)
     setRefinedComps(prev => {
       const rc = prev[compId] || {}
       const subs = [...(rc.finalSubtitles || [])]
@@ -2184,10 +2207,11 @@ export default function App() {
         text: subs[idx - 1].text + subs[idx].text,
       }
       subs.splice(idx - 1, 2, merged)
-      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs } }
+      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs, finalSubtitlesSavedAt: null } }
     })
   }
   function splitSub(compId, subId, text1, text2) {
+    recordSubSnapshot(compId)
     setRefinedComps(prev => {
       const rc = prev[compId] || {}
       const subs = [...(rc.finalSubtitles || [])]
@@ -2198,16 +2222,29 @@ export default function App() {
       const s1 = { ...orig, end: mid, text: text1, id: orig.id + '_a' }
       const s2 = { id: orig.id + '_b', start: mid, end: orig.end, text: text2 }
       subs.splice(idx, 1, s1, s2)
-      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs } }
+      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs, finalSubtitlesSavedAt: null } }
     })
   }
   function addSubNewline(compId, subId) {
+    recordSubSnapshot(compId)
     setRefinedComps(prev => {
       const rc = prev[compId] || {}
-      const subs = (rc.finalSubtitles || []).map(s =>
-        s.id === subId ? { ...s, text: s.text + '\n' } : s
-      )
-      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs } }
+      const subs = (rc.finalSubtitles || []).map(s => {
+        if (s.id !== subId) return s
+        const text = s.text
+        // Already has newline — append another
+        if (text.includes('\n')) return { ...s, text: text + '\n' }
+        // Insert at midpoint, preferring punctuation boundary
+        const mid = Math.ceil(text.length / 2)
+        let bp = mid
+        const punc = /[，,。！？；、]/
+        for (let r = 0; r <= 5; r++) {
+          if (mid + r < text.length && punc.test(text[mid + r])) { bp = mid + r + 1; break }
+          if (mid - r > 0 && punc.test(text[mid - r - 1])) { bp = mid - r; break }
+        }
+        return { ...s, text: text.slice(0, bp) + '\n' + text.slice(bp) }
+      })
+      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs, finalSubtitlesSavedAt: null } }
     })
   }
   function adjustSubTime(compId, subId, field, delta) {
@@ -2216,7 +2253,7 @@ export default function App() {
       const subs = (rc.finalSubtitles || []).map(s =>
         s.id === subId ? { ...s, [field]: Math.max(0, +(s[field] + delta).toFixed(1)) } : s
       )
-      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs } }
+      return { ...prev, [compId]: { ...defaultRcFor(rc), finalSubtitles: subs, finalSubtitlesSavedAt: null } }
     })
   }
 
@@ -3797,7 +3834,7 @@ export default function App() {
                               playsInline
                               muted={muteOriginal}
                               className="refine-video"
-                              style={rf.enabled?{objectFit:'cover',transform:`scale(${rf.scale}) translate(${(rf.offsetX*100/rf.scale).toFixed(1)}%, ${(-rf.offsetY*100/rf.scale).toFixed(1)}%)`,transformOrigin:'center center'}:{}}
+                              style={rf.enabled?{transform:`scale(${rf.scale}) translate(${(rf.offsetX*100/rf.scale).toFixed(1)}%, ${(-rf.offsetY*100/rf.scale).toFixed(1)}%)`,transformOrigin:'center center'}:{}}
                               onPlay={()=>setRefineVidPlaying(true)}
                               onPause={()=>setRefineVidPlaying(false)}
                               onLoadedMetadata={()=>{
@@ -3887,7 +3924,7 @@ export default function App() {
                           )}
                           {aFSub&&(
                             <div style={{position:'absolute',left:`${bL}%`,bottom:`calc(${bT}% + 10px)`,width:`${bW}%`,textAlign:'center',color:'#fff',fontSize:13,fontWeight:700,textShadow:'0 1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 -1px 3px #000',pointerEvents:'none',zIndex:3,lineHeight:1.35,wordBreak:'break-all'}}>
-                              {aFSub.text.replace(/\\N/g,'\n').split('\n').map((l,li)=><span key={li} style={{display:'block'}}>{l}</span>)}
+                              {aFSub.text.split('\n').map((l,li)=><span key={li} style={{display:'block'}}>{l}</span>)}
                             </div>
                           )}
                           <div className={`refine-play-btn${refineVidPlaying?' playing':''}`}>
@@ -4060,6 +4097,11 @@ export default function App() {
                               </button>
                               {rc.finalSubtitles&&rc.finalSubtitles.length>0&&<>
                                 <button className="refine-tb-btn" onClick={()=>clearSubPunct(comp.id)}>清理标点</button>
+                                <button className="refine-tb-btn"
+                                  onClick={()=>undoSubOp(comp.id)}
+                                  disabled={!(subHistory[comp.id]?.length)}
+                                  title={subHistory[comp.id]?.length?`可撤销 ${subHistory[comp.id].length} 步`:'暂无可撤销操作'}
+                                >撤销字幕</button>
                                 <button className="refine-tb-btn success" onClick={()=>saveFinalSubtitles(comp.id)}>保存字幕</button>
                               </>}
                             </div>
@@ -4089,9 +4131,15 @@ export default function App() {
                                           <button className="rs-adj" onClick={()=>adjustSubTime(comp.id,sub.id||`s${i}`,'end',0.1)}>›</button>
                                         </span>
                                       </div>
-                                      <input className="refine-subs-input"
+                                      <textarea className="refine-subs-input"
                                         value={sub.text}
+                                        rows={sub.text.includes('\n')?2:1}
                                         onChange={e=>updateSubText(comp.id,sub.id||`s${i}`,e.target.value)}
+                                        onFocus={()=>{
+                                          const k=comp.id+':'+(sub.id||`s${i}`)
+                                          if(subEditSnapRef.current!==k){recordSubSnapshot(comp.id);subEditSnapRef.current=k}
+                                        }}
+                                        onBlur={()=>{subEditSnapRef.current=null}}
                                       />
                                       <div className="refine-subs-ops">
                                         <div style={{position:'relative'}}>
