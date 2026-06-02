@@ -11556,6 +11556,12 @@ input[type=range] {
 .rs-status.miss { background:rgba(239,68,68,.12); color:#fca5a5; }
 .refine-subs-toolbar { display:flex; gap:6px; flex-wrap:wrap; flex-shrink:0; }
 .refine-subs-empty { font-size:12px; color:var(--text-muted); padding:12px 0; text-align:center; }
+/* v0.9.5h4: per-comp subtitle style panel */
+.refine-sub-style-wrap { border-top:1px solid var(--border); margin-top:6px; padding-top:4px; }
+.refine-sub-style-toggle { background:none; border:none; color:var(--text-muted); font-size:11px; cursor:pointer; padding:3px 0; display:flex; align-items:center; gap:6px; width:100%; text-align:left; }
+.refine-sub-style-toggle:hover { color:var(--text); }
+.refine-sub-style-summary { font-size:10px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.refine-sub-style-panel { background:var(--bg-2); border:1px solid var(--border); border-radius:5px; padding:8px 10px; margin-top:4px; }
 .refine-subs-list { flex:1; overflow-y:auto; border:1px solid var(--border); border-radius:6px; }
 .refine-subs-row { display:flex; align-items:flex-start; gap:4px; padding:3px 6px; border-bottom:1px solid var(--border); }
 .refine-subs-row:last-child { border-bottom:none; }

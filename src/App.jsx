@@ -996,6 +996,19 @@ const REFRAME_ASPECTS = [
   {key:'2.35:1', label:'2.35:1 影院', ratio:2.35},
 ]
 
+const DEFAULT_SUB_STYLE = {
+  fontFamily: 'Microsoft YaHei',
+  fontSize: 72,
+  color: 'white',
+  outline: true,
+  outlineColor: 'black',
+  outlineWidth: 4,
+  background: 'none',
+  backgroundOpacity: 0.5,
+  position: 'bottom',
+  marginV: 60,
+}
+
 // ─── main app ────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -1086,6 +1099,7 @@ export default function App() {
   const [refineSubTab, setRefineSubTab]   = useState('script') // v0.9.5: 'script'|'subs'
   const [splitMenuSubId, setSplitMenuSubId] = useState(null)  // v0.9.5h: open split-menu row
   const [subHistory, setSubHistory] = useState({})  // v0.9.5h2: per-comp subtitle undo history
+  const [showSubStylePanel, setShowSubStylePanel] = useState(false)  // v0.9.5h4: per-comp style panel open
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -2084,6 +2098,7 @@ export default function App() {
       finalSubtitles: null,         // v0.9.4: [{id,start,end,text}] user-edited per-comp subtitles
       finalSubtitlesSavedAt: null,  // v0.9.4: timestamp when finalSubtitles was saved
       reframe: null,  // v0.9.5: {enabled,aspect,scale,offsetX,offsetY} per-comp
+      subtitleStyle: null,  // v0.9.5h4: per-comp subtitle style, null = use DEFAULT_SUB_STYLE
       ...(existing||{}),
     }
   }
@@ -2174,6 +2189,14 @@ export default function App() {
   }
   function setCompReframe(compId, updates) {
     updateRefinedComp(compId, { reframe: { ...getCompReframe(compId), ...updates } })
+  }
+
+  // v0.9.5h4: per-comp subtitle style helpers
+  function getCompSubStyle(compId) {
+    return refinedComps[compId]?.subtitleStyle || DEFAULT_SUB_STYLE
+  }
+  function setCompSubStyle(compId, updates) {
+    updateRefinedComp(compId, { subtitleStyle: { ...getCompSubStyle(compId), ...updates } })
   }
 
   // v0.9.5h2: subtitle undo helpers
@@ -2346,7 +2369,7 @@ export default function App() {
         coverOrigSubHeight: coverOrigSubHeight,
         origSubMode: origSubMode,
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
-        subtitleStyle: { fontFamily: subFontFamily, fontSize: subFontSize, color: subColor, outline: subOutline, outlineColor: subOutlineColor, outlineWidth: subOutlineWidth, background: subBg, backgroundOpacity: subBgOpacity, position: subPosition, marginV: subMarginV },
+        subtitleStyle: rc.subtitleStyle || DEFAULT_SUB_STYLE,
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
         exportQuality: exportQuality,
       },
@@ -2434,7 +2457,7 @@ export default function App() {
         burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
         origSubMode: origSubMode,
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
-        subtitleStyle: { fontFamily: subFontFamily, fontSize: subFontSize, color: subColor, outline: subOutline, outlineColor: subOutlineColor, outlineWidth: subOutlineWidth, background: subBg, backgroundOpacity: subBgOpacity, position: subPosition, marginV: subMarginV },
+        subtitleStyle: rc.subtitleStyle || DEFAULT_SUB_STYLE,
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
         exportQuality: exportQuality,
       },
@@ -3922,11 +3945,20 @@ export default function App() {
                           {tRatio&&(
                             <div style={{position:'absolute',left:`${bL}%`,top:`${bT}%`,width:`${bW}%`,height:`${bH}%`,boxShadow:'0 0 0 9999px rgba(0,0,0,0.45)',border:'2px solid rgba(255,255,255,0.8)',pointerEvents:'none',zIndex:2,boxSizing:'border-box'}}/>
                           )}
-                          {aFSub&&(
-                            <div style={{position:'absolute',left:`${bL}%`,bottom:`calc(${bT}% + 10px)`,width:`${bW}%`,textAlign:'center',color:'#fff',fontSize:13,fontWeight:700,textShadow:'0 1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 -1px 3px #000',pointerEvents:'none',zIndex:3,lineHeight:1.35,wordBreak:'break-all'}}>
+                          {aFSub&&(()=>{
+                            const ss=getCompSubStyle(comp.id)
+                            const previewFs=Math.round(ss.fontSize*270/1080)
+                            const colorMap={'white':'#fff','yellow':'#ffff00','black':'#111','red':'#f33'}
+                            const col=colorMap[ss.color]||ss.color
+                            const ts=ss.outline?`0 0 ${ss.outlineWidth}px ${ss.outlineColor==='black'?'#000':'#fff'},1px 1px ${Math.ceil(ss.outlineWidth/2)}px ${ss.outlineColor==='black'?'#000':'#fff'}`:'none'
+                            const bgColorMap={'black':`rgba(0,0,0,${ss.backgroundOpacity})`,'white':`rgba(255,255,255,${ss.backgroundOpacity})`,'yellow':`rgba(255,255,0,${ss.backgroundOpacity})`}
+                            const bg=ss.background!=='none'?bgColorMap[ss.background]:'transparent'
+                            return (
+                            <div style={{position:'absolute',left:`${bL}%`,bottom:`calc(${bT}% + 6px)`,width:`${bW}%`,textAlign:'center',color:col,fontSize:previewFs,fontWeight:700,textShadow:ts,background:bg,pointerEvents:'none',zIndex:3,lineHeight:1.4,wordBreak:'break-all',padding:'1px 3px',boxSizing:'border-box'}}>
                               {aFSub.text.split('\n').map((l,li)=><span key={li} style={{display:'block'}}>{l}</span>)}
                             </div>
-                          )}
+                            )
+                          })()}
                           <div className={`refine-play-btn${refineVidPlaying?' playing':''}`}>
                             {refineVidPlaying
                               ?<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
@@ -4109,6 +4141,96 @@ export default function App() {
                                 >撤销字幕</button>
                                 <button className="refine-tb-btn success" onClick={()=>saveFinalSubtitles(comp.id)}>保存字幕</button>
                               </>}
+                            </div>
+                            {/* v0.9.5h4: per-comp subtitle style panel */}
+                            <div className="refine-sub-style-wrap">
+                              <button className="refine-sub-style-toggle" onClick={()=>setShowSubStylePanel(v=>!v)}>
+                                字幕样式 {showSubStylePanel?'▾':'▸'}
+                                {(()=>{const ss=getCompSubStyle(comp.id);const fn={'Microsoft YaHei':'微软雅黑','SimHei':'黑体','SimSun':'宋体','KaiTi':'楷体'}[ss.fontFamily]||ss.fontFamily;return<span className="refine-sub-style-summary">{fn} · {ss.fontSize}px · {{'white':'白','yellow':'黄','black':'黑','red':'红'}[ss.color]||ss.color}字{ss.outline?` ${ss.outlineWidth}px${ss.outlineColor==='black'?'黑':'白'}边`:' 无描边'}</span>})()}
+                              </button>
+                              {showSubStylePanel&&(()=>{
+                                const ss=getCompSubStyle(comp.id)
+                                const colorMap={'white':'#fff','yellow':'#ffff00','black':'#111','red':'#f33'}
+                                const ts=ss.outline?`0 0 ${ss.outlineWidth}px ${ss.outlineColor==='black'?'#000':'#fff'},1px 1px ${Math.ceil(ss.outlineWidth/2)}px ${ss.outlineColor==='black'?'#000':'#fff'}`:'none'
+                                const bgColorMap={'black':`rgba(0,0,0,${ss.backgroundOpacity})`,'white':`rgba(255,255,255,${ss.backgroundOpacity})`,'yellow':`rgba(255,255,0,${ss.backgroundOpacity})`}
+                                const bg=ss.background!=='none'?bgColorMap[ss.background]:'transparent'
+                                return (
+                                <div className="refine-sub-style-panel">
+                                  <div className="ep-ss-row" style={{gap:4,flexWrap:'wrap'}}>
+                                    {[['Microsoft YaHei','微软雅黑'],['SimHei','黑体'],['SimSun','宋体'],['KaiTi','楷体']].map(([f,l])=>(
+                                      <button key={f} className={`ep-sg-btn ep-sg-btn-xs ${ss.fontFamily===f?'active':''}`}
+                                        onClick={()=>setCompSubStyle(comp.id,{fontFamily:f})}>{l}</button>
+                                    ))}
+                                    <span className="ep-ss-lbl" style={{marginLeft:4}}>字体</span>
+                                  </div>
+                                  <div className="ep-ss-row" style={{marginTop:5}}>
+                                    <span className="ep-ss-lbl">字号</span>
+                                    <input type="range" min="32" max="120" step="2" value={ss.fontSize}
+                                      onChange={e=>setCompSubStyle(comp.id,{fontSize:parseInt(e.target.value)})}
+                                      className="ep-range" style={{flex:1}}/>
+                                    <span className="ep-ss-val">{ss.fontSize}px</span>
+                                  </div>
+                                  <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
+                                    {[['white','白'],['yellow','黄'],['black','黑'],['red','红']].map(([c,l])=>(
+                                      <button key={c} className={`ep-sg-btn ep-sg-btn-xs ${ss.color===c?'active':''}`}
+                                        onClick={()=>setCompSubStyle(comp.id,{color:c})}>{l}</button>
+                                    ))}
+                                    <span className="ep-ss-lbl" style={{margin:'0 4px'}}>颜色</span>
+                                  </div>
+                                  <div className="ep-ss-row" style={{marginTop:4,gap:6,flexWrap:'wrap'}}>
+                                    <label className={`ep-toggle-label ${ss.outline?'on':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:!ss.outline})}>
+                                      <span className={`ep-toggle-pill ${ss.outline?'on':''}`}/>描边</label>
+                                    {ss.outline&&<>
+                                      {[['black','黑边'],['white','白边']].map(([c,l])=>(
+                                        <button key={c} className={`ep-sg-btn ep-sg-btn-xs ${ss.outlineColor===c?'active':''}`}
+                                          onClick={()=>setCompSubStyle(comp.id,{outlineColor:c})}>{l}</button>
+                                      ))}
+                                      <input type="range" min="1" max="8" step="1" value={ss.outlineWidth}
+                                        onChange={e=>setCompSubStyle(comp.id,{outlineWidth:parseInt(e.target.value)})}
+                                        className="ep-range" style={{width:60}}/>
+                                      <span className="ep-ss-val">{ss.outlineWidth}px</span>
+                                    </>}
+                                  </div>
+                                  <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
+                                    {[['none','无背景'],['black','黑底'],['white','白底'],['yellow','黄底']].map(([b,l])=>(
+                                      <button key={b} className={`ep-sg-btn ep-sg-btn-xs ${ss.background===b?'active':''}`}
+                                        onClick={()=>setCompSubStyle(comp.id,{background:b})}>{l}</button>
+                                    ))}
+                                  </div>
+                                  {ss.background!=='none'&&<div className="ep-ss-row" style={{marginTop:4}}>
+                                    <span className="ep-ss-lbl">透明度</span>
+                                    <input type="range" min="0.1" max="0.9" step="0.05" value={ss.backgroundOpacity}
+                                      onChange={e=>setCompSubStyle(comp.id,{backgroundOpacity:parseFloat(e.target.value)})}
+                                      className="ep-range" style={{flex:1}}/>
+                                    <span className="ep-ss-val">{Math.round(ss.backgroundOpacity*100)}%</span>
+                                  </div>}
+                                  <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
+                                    {[['bottom','底部'],['lower','中下'],['middle','中间'],['top','顶部']].map(([p,l])=>(
+                                      <button key={p} className={`ep-sg-btn ep-sg-btn-xs ${ss.position===p?'active':''}`}
+                                        onClick={()=>setCompSubStyle(comp.id,{position:p})}>{l}</button>
+                                    ))}
+                                    <span className="ep-ss-lbl" style={{margin:'0 4px'}}>位置</span>
+                                  </div>
+                                  <div className="ep-ss-row" style={{marginTop:4}}>
+                                    <span className="ep-ss-lbl">下边距</span>
+                                    <input type="range" min="10" max="300" step="5" value={ss.marginV}
+                                      onChange={e=>setCompSubStyle(comp.id,{marginV:parseInt(e.target.value)})}
+                                      className="ep-range" style={{flex:1}}/>
+                                    <span className="ep-ss-val">{ss.marginV}px</span>
+                                  </div>
+                                  <div className="ep-sub-preview" style={{
+                                    marginTop:6,
+                                    fontFamily:ss.fontFamily==='Microsoft YaHei'?'Microsoft YaHei,PingFang SC,sans-serif':ss.fontFamily==='SimHei'?'SimHei,Heiti SC,sans-serif':'inherit',
+                                    color:colorMap[ss.color]||ss.color,
+                                    background:bg,
+                                    textShadow:ts,
+                                  }}>字幕样式预览 — 欢迎使用成品字幕烧录</div>
+                                  <div style={{marginTop:4,display:'flex',gap:6}}>
+                                    <button className="refine-tb-btn" style={{fontSize:10}} onClick={()=>setCompSubStyle(comp.id,DEFAULT_SUB_STYLE)}>恢复默认</button>
+                                  </div>
+                                </div>
+                                )
+                              })()}
                             </div>
                             {!(rc.finalSubtitles&&rc.finalSubtitles.length>0)?(
                               <div className="refine-subs-empty">
@@ -5077,75 +5199,20 @@ export default function App() {
                           {burnInSub&&!ckScriptExists&&!(rc.finalSubtitles&&rc.finalSubtitles.length>0)&&(
                             <div className="ep-ss-warn">⚠ 字幕稿为空且无成品字幕，导出将跳过烧录</div>
                           )}
-                          {burnInSub&&<>
-                            <div className="ep-ss-group-title" style={{marginTop:12,fontSize:11}}>字幕样式</div>
-                            <div className="ep-ss-row" style={{marginTop:6,gap:4,flexWrap:'wrap'}}>
-                              {[['Microsoft YaHei','微软雅黑'],['SimHei','黑体'],['SimSun','宋体'],['KaiTi','楷体']].map(([f,l])=>(
-                                <button key={f} className={`ep-sg-btn ep-sg-btn-xs ${subFontFamily===f?'active':''}`}
-                                  onClick={()=>setSubFontFamily(f)}>{l}</button>
-                              ))}
+                          {burnInSub&&(()=>{
+                            const ss=getCompSubStyle(selComp.id)
+                            const fn={'Microsoft YaHei':'微软雅黑','SimHei':'黑体','SimSun':'宋体','KaiTi':'楷体'}[ss.fontFamily]||ss.fontFamily
+                            const cn={'white':'白','yellow':'黄','black':'黑','red':'红'}[ss.color]||ss.color
+                            const pos={'bottom':'底部','lower':'中下','middle':'中间','top':'顶部'}[ss.position]||ss.position
+                            return (
+                            <div className="ep-ss-row" style={{marginTop:8,gap:6,flexWrap:'wrap',alignItems:'center'}}>
+                              <span style={{fontSize:11,color:'var(--text-muted)',flex:1}}>
+                                字幕样式：{fn} · {ss.fontSize}px · {cn}字{ss.outline?` ${ss.outlineWidth}px${ss.outlineColor==='black'?'黑':'白'}边`:' 无描边'} · {pos}
+                              </span>
+                              <button className="ep-sg-btn" style={{flexShrink:0}} onClick={()=>setSubStep('refine')}>← 返回精修页修改</button>
                             </div>
-                            <div className="ep-ss-row" style={{marginTop:6}}>
-                              <span className="ep-ss-lbl">字号</span>
-                              <input type="range" min="32" max="120" step="2" value={subFontSize}
-                                onChange={e=>setSubFontSize(parseInt(e.target.value))}
-                                className="ep-range" style={{flex:1}}/>
-                              <span className="ep-ss-val">{subFontSize}px</span>
-                            </div>
-                            <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
-                              {[['white','白'],['yellow','黄'],['black','黑'],['red','红']].map(([c,l])=>(
-                                <button key={c} className={`ep-sg-btn ep-sg-btn-xs ${subColor===c?'active':''}`}
-                                  onClick={()=>setSubColor(c)}>{l}</button>
-                              ))}
-                              <span className="ep-ss-lbl" style={{margin:'0 4px'}}>颜色</span>
-                            </div>
-                            <div className="ep-ss-row" style={{marginTop:6,gap:6,flexWrap:'wrap'}}>
-                              <label className={`ep-toggle-label ${subOutline?'on':''}`} onClick={()=>setSubOutline(v=>!v)}>
-                                <span className={`ep-toggle-pill ${subOutline?'on':''}`}/>描边</label>
-                              {subOutline&&<>
-                                {[['black','黑边'],['white','白边']].map(([c,l])=>(
-                                  <button key={c} className={`ep-sg-btn ep-sg-btn-xs ${subOutlineColor===c?'active':''}`}
-                                    onClick={()=>setSubOutlineColor(c)}>{l}</button>
-                                ))}
-                                <input type="range" min="1" max="8" step="1" value={subOutlineWidth}
-                                  onChange={e=>setSubOutlineWidth(parseInt(e.target.value))}
-                                  className="ep-range" style={{width:60}}/>
-                                <span className="ep-ss-val">{subOutlineWidth}px</span>
-                              </>}
-                            </div>
-                            <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
-                              {[['none','无背景'],['black','黑底'],['white','白底'],['yellow','黄底']].map(([b,l])=>(
-                                <button key={b} className={`ep-sg-btn ep-sg-btn-xs ${subBg===b?'active':''}`}
-                                  onClick={()=>setSubBg(b)}>{l}</button>
-                              ))}
-                            </div>
-                            {subBg!=='none'&&<div className="ep-ss-row" style={{marginTop:4}}>
-                              <span className="ep-ss-lbl">透明度</span>
-                              <input type="range" min="0.1" max="0.9" step="0.05" value={subBgOpacity}
-                                onChange={e=>setSubBgOpacity(parseFloat(e.target.value))}
-                                className="ep-range" style={{flex:1}}/>
-                              <span className="ep-ss-val">{Math.round(subBgOpacity*100)}%</span>
-                            </div>}
-                            <div className="ep-ss-row" style={{marginTop:4,gap:4,flexWrap:'wrap'}}>
-                              {[['bottom','底部'],['lower','中下'],['middle','中间'],['top','顶部']].map(([p,l])=>(
-                                <button key={p} className={`ep-sg-btn ep-sg-btn-xs ${subPosition===p?'active':''}`}
-                                  onClick={()=>setSubPosition(p)}>{l}</button>
-                              ))}
-                            </div>
-                            <div className="ep-ss-row" style={{marginTop:4}}>
-                              <span className="ep-ss-lbl">下边距</span>
-                              <input type="range" min="10" max="300" step="5" value={subMarginV}
-                                onChange={e=>setSubMarginV(parseInt(e.target.value))}
-                                className="ep-range" style={{flex:1}}/>
-                              <span className="ep-ss-val">{subMarginV}px</span>
-                            </div>
-                            <div className="ep-sub-preview" style={{
-                              fontFamily:subFontFamily==='Microsoft YaHei'?'Microsoft YaHei,PingFang SC,sans-serif':subFontFamily==='SimHei'?'SimHei,Heiti SC,sans-serif':'inherit',
-                              color:subColor==='yellow'?'#ffff00':subColor==='black'?'#111':subColor==='red'?'#f33':'#fff',
-                              background:subBg==='none'?'transparent':subBg==='black'?`rgba(0,0,0,${subBgOpacity})`:subBg==='white'?`rgba(255,255,255,${subBgOpacity})`:`rgba(255,255,0,${subBgOpacity})`,
-                              textShadow:subOutline?`0 0 ${subOutlineWidth}px ${subOutlineColor==='black'?'#000':'#fff'}, 1px 1px ${Math.ceil(subOutlineWidth/2)}px ${subOutlineColor==='black'?'#000':'#fff'}`:'none',
-                            }}>字幕样式预览 — 欢迎使用成品字幕烧录</div>
-                          </>}
+                            )
+                          })()}
                           <div className="ep-ss-group-title" style={{marginTop:14}}>输出画质</div>
                           <div className="ep-ss-row" style={{gap:4}}>
                             {[['标准','CRF 23'],['高清','CRF 20'],['超清','CRF 18']].map(([q,hint])=>(
