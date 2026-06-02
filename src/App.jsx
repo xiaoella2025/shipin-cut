@@ -989,9 +989,9 @@ function VideoOverviewCard({ video, analysis, vidIdx, isActive, onSelect }) {
 function ExportCheckModal({ rc, comp, sourceVideos, onClose, onConfirm, exporting }) {
   const voice = rc.voice || rc.voiceMeta
   const stickers = rc.stickers || []
-  const dedup = rc.dedupOpts || {}
-  const bw = rc.backgroundWrap || {}
-  const dedupCount = Object.values(dedup).filter(Boolean).length
+  const dedupeEffects = rc.dedupeEffects || []
+  const bgEffects = rc.backgroundEffects || []
+  const fmtT = (t) => { t = Math.max(0, t || 0); const m = Math.floor(t/60), s = Math.floor(t%60); return `${m}:${String(s).padStart(2,'0')}` }
   const checks = []
 
   // ── 强拦截项 ──────────────────────────────────────────────────────────────
@@ -1044,30 +1044,36 @@ function ExportCheckModal({ rc, comp, sourceVideos, onClose, onConfirm, exportin
     const emojiCount = stickers.filter(s => s.isEmoji).length
     const imgCount = stickers.filter(s => s.type === 'image').length
     const parts = []
-    if (textCount) parts.push(`文字 ${textCount} 个（可导出）`)
-    if (emojiCount) parts.push(`emoji ${emojiCount} 个（暂不导出，字体依赖）`)
-    if (imgCount)   parts.push(`图片 ${imgCount} 个（暂不导出，待完善）`)
-    checks.push({ type: emojiCount > 0 || imgCount > 0 ? 'warn' : 'ok', label: '贴图贴纸', detail: parts.join(' · ') })
+    if (textCount) parts.push(`文字 ${textCount} 个（✅ 导出）`)
+    if (emojiCount) parts.push(`emoji ${emojiCount} 个（⚠ 暂不导出）`)
+    if (imgCount)   parts.push(`图片 ${imgCount} 个（⚠ 暂不导出）`)
+    checks.push({ type: emojiCount > 0 || imgCount > 0 ? 'warn' : 'ok', label: '贴图（时间线）', detail: parts.join(' · ') + ` · 共 ${stickers.length} 段` })
   } else {
-    checks.push({ type: 'ok', label: '贴图贴纸', detail: '无' })
+    checks.push({ type: 'ok', label: '贴图（时间线）', detail: '无' })
   }
 
-  if (dedupCount > 0) {
-    const labels = Object.entries(dedup).filter(([,v])=>v).map(([k])=>({mirror:'镜像',brightness:'亮度',contrast:'对比度',saturation:'饱和度',lightScale:'缩放'}[k]||k)).join('、')
-    checks.push({ type: 'ok', label: '去重包装', detail: `已启用 ${dedupCount} 项：${labels}` })
+  if (dedupeEffects.length > 0) {
+    const lines = dedupeEffects.map(e => {
+      const labels = Object.entries(e.params||{}).filter(([,v])=>v).map(([k])=>({mirror:'镜像',brightness:'亮度',contrast:'对比度',saturation:'饱和度',scale:'缩放',border:'边框'}[k]||k)).join('+')
+      return `${fmtT(e.start)}-${fmtT(e.end)} ${labels||'无'}`
+    }).join(' · ')
+    checks.push({ type: 'ok', label: '去重 / 滤镜（时间线）', detail: `${dedupeEffects.length} 段 · ${lines}` })
   } else {
-    checks.push({ type: 'ok', label: '去重包装', detail: '未启用' })
+    checks.push({ type: 'ok', label: '去重 / 滤镜（时间线）', detail: '未添加' })
   }
 
-  if (bw.enabled) {
+  if (bgEffects.length > 0) {
+    const unsynced = bgEffects.filter(e => !e.storedFileName).length
     checks.push({
-      type: bw.storedFileName ? 'ok' : 'warn',
-      label: '背景包装',
-      detail: bw.storedFileName ? `已导入 · 位移 ${bw.videoX||0}% / ${bw.videoY||0}%` : '已启用但背景图未同步到本地服务',
+      type: unsynced > 0 ? 'warn' : 'ok',
+      label: '背景包装（时间线）',
+      detail: unsynced > 0 ? `${bgEffects.length} 段，其中 ${unsynced} 段未同步将跳过` : `${bgEffects.length} 段 · ${bgEffects.map(e=>`${fmtT(e.start)}-${fmtT(e.end)}`).join(' · ')}`,
     })
   } else {
-    checks.push({ type: 'ok', label: '背景包装', detail: '未启用' })
+    checks.push({ type: 'ok', label: '背景包装（时间线）', detail: '未添加' })
   }
+
+  checks.push({ type: 'ok', label: '导出画质', detail: '清晰度优先：所有效果合并为一次重编码，不加噪点' })
 
   const hasBlocker = checks.some(c => c.type === 'error')
   const ICON = { ok: '✅', warn: '⚠️', error: '❌' }
@@ -1284,6 +1290,7 @@ export default function App() {
   const [showSubStylePanel, setShowSubStylePanel] = useState(false)  // v0.9.5h4: per-comp style panel open
   const [showStickerPanel, setShowStickerPanel]   = useState(false)  // v0.9.6: sticker panel
   const [showDedupPanel, setShowDedupPanel]       = useState(false)  // v0.9.6: dedup in refine
+  const [selectedEffectId, setSelectedEffectId]   = useState(null)   // v0.9.8h1: selected timeline effect
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1377,6 +1384,8 @@ export default function App() {
   const subEditSnapRef = useRef(null) // v0.9.5h2: tracks focused subtitle to snapshot once per focus
   const subDragRef = useRef(false)    // v0.9.6: true while subtitle overlay is being dragged
   const bgWrapInputRef = useRef(null) // v0.9.8: background image file input
+  const effTlRef = useRef(null)       // v0.9.8h1: effect timeline track element (for drag math)
+  const effDragRef = useRef(null)     // v0.9.8h1: active effect drag state
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -2287,8 +2296,10 @@ export default function App() {
       subtitleStyle: null,  // v0.9.5h4: per-comp subtitle style, null = use DEFAULT_SUB_STYLE
       stickers: null,  // v0.9.6: [{id,key,emoji,text,isEmoji,x,y,scale}] per-comp
       subtitleAlign: null,  // v0.9.7: {status:'aligned',engine,alignedAt,message,mismatch}
-      dedupOpts: null,      // v0.9.8: per-comp {mirror,brightness,contrast,saturation,lightScale}
-      backgroundWrap: null, // v0.9.8: {enabled,imageUrl,imageFileName,storedFileName,videoScale,videoX,videoY}
+      dedupOpts: null,      // v0.9.8: (legacy/export-prep) per-comp {mirror,brightness,contrast,saturation,lightScale}
+      backgroundWrap: null, // v0.9.8: (legacy) single background wrap
+      dedupeEffects: null,     // v0.9.8h1: [{id,type:'dedupe',start,end,params:{mirror,brightness,contrast,saturation,scale,border}}]
+      backgroundEffects: null, // v0.9.8h1: [{id,type:'background',start,end,imageUrl,imageFileName,storedFileName,synced,videoScale,videoX,videoY}]
       ...(existing||{}),
     }
   }
@@ -2465,59 +2476,134 @@ export default function App() {
     updateRefinedComp(compId, { subtitleStyle: { ...getCompSubStyle(compId), ...updates } })
   }
 
-  // v0.9.6: sticker helpers
-  function getCompStickers(compId) {
-    return refinedComps[compId]?.stickers || []
+  // ── v0.9.8h1: 统一时间线效果层 helpers ─────────────────────────────────────
+  // 所有视觉效果（贴图/去重/背景）都是「时间线效果」：有 start/end，可在轨道上拖动，
+  // 预览按播放头实时显示，导出按时间段生效。
+  const r2 = (x) => Math.round((x || 0) * 100) / 100
+  const effectActiveAt = (eff, t) => t >= (eff.start ?? 0) && t < (eff.end ?? 1e9)
+  function getEffField(compId, field) { return refinedComps[compId]?.[field] || [] }
+  function setEffField(compId, field, arr) { updateRefinedComp(compId, { [field]: arr }) }
+  function updateEffectItem(compId, field, id, updates) {
+    setEffField(compId, field, getEffField(compId, field).map(e => e.id === id ? { ...e, ...updates } : e))
   }
-  function addSticker(compId, preset) {
-    const s = { id: Date.now().toString(), ...preset, x: 50, y: 50, scale: 1 }
-    updateRefinedComp(compId, { stickers: [...getCompStickers(compId), s] })
+  function deleteEffectItem(compId, field, id) {
+    setEffField(compId, field, getEffField(compId, field).filter(e => e.id !== id))
+    if (selectedEffectId === id) setSelectedEffectId(null)
+  }
+  // default a duration window from current playhead (+3s, clamped to total)
+  function defaultEffWindow(totalDur) {
+    const s = r2(Math.max(0, refinePrevPos || 0))
+    return { start: s, end: r2(Math.min((totalDur || s + 3), s + 3)) }
+  }
+
+  // ── stickers (now time-ranged) ──
+  function getCompStickers(compId) {
+    return (refinedComps[compId]?.stickers || []).map(s => ({
+      x: 50, y: 50, scale: 1, opacity: 1, rotation: 0,
+      start: s.start ?? 0, end: s.end ?? 1e9,
+      ...s,
+    }))
+  }
+  function addSticker(compId, preset, totalDur) {
+    const w = defaultEffWindow(totalDur)
+    const s = { id: 'stk' + Date.now(), ...preset, x: 50, y: 50, scale: 1, opacity: 1, rotation: 0, ...w }
+    updateRefinedComp(compId, { stickers: [...(refinedComps[compId]?.stickers || []), s] })
+    setSelectedEffectId(s.id)
   }
   function updateStickerPos(compId, sid, x, y) {
-    updateRefinedComp(compId, { stickers: getCompStickers(compId).map(s => s.id===sid ? {...s, x, y} : s) })
+    updateRefinedComp(compId, { stickers: (refinedComps[compId]?.stickers || []).map(s => s.id===sid ? {...s, x, y} : s) })
   }
   function resizeSticker(compId, sid, delta) {
-    updateRefinedComp(compId, { stickers: getCompStickers(compId).map(s => s.id===sid ? {...s, scale: Math.max(0.3, Math.min(4, (s.scale||1)+delta))} : s) })
+    updateRefinedComp(compId, { stickers: (refinedComps[compId]?.stickers || []).map(s => s.id===sid ? {...s, scale: Math.max(0.3, Math.min(4, (s.scale||1)+delta))} : s) })
   }
   function deleteSticker(compId, sid) {
-    updateRefinedComp(compId, { stickers: getCompStickers(compId).filter(s => s.id!==sid) })
+    updateRefinedComp(compId, { stickers: (refinedComps[compId]?.stickers || []).filter(s => s.id!==sid) })
+    if (selectedEffectId === sid) setSelectedEffectId(null)
   }
 
-  // v0.9.8: per-comp dedup helpers
-  const COMP_DEDUP_DEFAULT = { mirror: false, brightness: false, contrast: false, saturation: false, lightScale: false }
-  function getCompDedup(compId) {
-    return { ...COMP_DEDUP_DEFAULT, ...(refinedComps[compId]?.dedupOpts || {}) }
+  // ── dedupe effects (time-ranged, per-segment) ──
+  const DEDUPE_PARAM_DEFAULT = { mirror: false, brightness: false, contrast: false, saturation: false, scale: false, border: false }
+  function getDedupeEffects(compId) { return getEffField(compId, 'dedupeEffects') }
+  function addDedupeEffect(compId, start, end, label) {
+    const e = { id: 'dd' + Date.now(), type: 'dedupe', label: label || '去重', start: r2(start), end: r2(end), params: { ...DEDUPE_PARAM_DEFAULT, mirror: true } }
+    setEffField(compId, 'dedupeEffects', [...getDedupeEffects(compId), e])
+    setSelectedEffectId(e.id)
   }
-  function toggleCompDedup(compId, key) {
-    const cur = getCompDedup(compId)
-    updateRefinedComp(compId, { dedupOpts: { ...cur, [key]: !cur[key] } })
+  function toggleDedupeParam(compId, id, key) {
+    const eff = getDedupeEffects(compId).find(e => e.id === id); if (!eff) return
+    updateEffectItem(compId, 'dedupeEffects', id, { params: { ...DEDUPE_PARAM_DEFAULT, ...(eff.params || {}), [key]: !(eff.params || {})[key] } })
   }
 
-  // v0.9.8: per-comp background wrap helpers
-  const BG_WRAP_DEFAULT = { enabled: false, imageUrl: null, imageFileName: null, storedFileName: null, videoScale: 1.0, videoX: 0, videoY: 0 }
-  function getCompBgWrap(compId) {
-    return { ...BG_WRAP_DEFAULT, ...(refinedComps[compId]?.backgroundWrap || {}) }
-  }
-  function setCompBgWrap(compId, updates) {
-    updateRefinedComp(compId, { backgroundWrap: { ...getCompBgWrap(compId), ...updates } })
-  }
-  async function importBgWrapFile(compId, file) {
+  // ── background effects (time-ranged) ──
+  function getBackgroundEffects(compId) { return getEffField(compId, 'backgroundEffects') }
+  async function importBgImage(compId, file, totalDur) {
     if (!file) return
     const url = URL.createObjectURL(file)
     let synced = false, storedFileName = null
     try {
-      const r = await uploadToLocalService('/upload-image', file, file.name, {compId: String(compId)})
+      const r = await uploadToLocalService('/upload-image', file, file.name, { compId: String(compId) })
       synced = true; storedFileName = r.fileName
-    } catch(e) { /* service may be down - still allow preview */ }
-    setCompBgWrap(compId, {
-      enabled: true,
-      imageUrl: url,
-      imageFileName: file.name,
-      storedFileName,
-      synced,
+    } catch (e) { /* service may be down - still allow preview */ }
+    const e = {
+      id: 'bg' + Date.now(), type: 'background', label: '背景',
+      start: 0, end: r2(totalDur || 9999),
+      imageUrl: url, imageFileName: file.name, storedFileName, synced,
+      videoScale: 0.8, videoX: 0, videoY: 0,
+    }
+    setEffField(compId, 'backgroundEffects', [...getBackgroundEffects(compId), e])
+    setSelectedEffectId(e.id)
+    showToast(synced ? '背景图已导入并同步，默认作用全程（可在轨道上调整时段）' : '背景图已导入（仅预览）；启动本地导出服务后再导出')
+  }
+
+  // compute combined preview FX for current playhead (transform + css filter + active bg)
+  function getPreviewFx(compId, rf) {
+    const t = refinePrevPos || 0
+    const dds = getDedupeEffects(compId).filter(e => effectActiveAt(e, t))
+    let mirror = false, scaleUp = false, brightness = false, contrast = false, saturation = false, border = false
+    dds.forEach(e => { const p = e.params || {}; mirror = mirror || p.mirror; scaleUp = scaleUp || p.scale; brightness = brightness || p.brightness; contrast = contrast || p.contrast; saturation = saturation || p.saturation; border = border || p.border })
+    const bg = getBackgroundEffects(compId).find(e => effectActiveAt(e, t)) || null
+    const tparts = []
+    if (rf.enabled) tparts.push(`scale(${rf.scale}) translate(${(rf.offsetX*100/rf.scale).toFixed(1)}%, ${(-rf.offsetY*100/rf.scale).toFixed(1)}%)`)
+    if (bg) tparts.push(`translate(${bg.videoX||0}%, ${bg.videoY||0}%) scale(${bg.videoScale||1})`)
+    if (scaleUp) tparts.push('scale(1.06)')
+    if (mirror) tparts.push('scaleX(-1)')
+    const fparts = []
+    if (brightness) fparts.push('brightness(1.06)')
+    if (contrast) fparts.push('contrast(1.08)')
+    if (saturation) fparts.push('saturate(1.12)')
+    return { transform: tparts.join(' '), filter: fparts.join(' '), bg, border, active: dds.length > 0 || !!bg }
+  }
+
+  // generic effect block drag (move / resize) on the effect timeline
+  function startEffectDrag(e, compId, field, eff, mode, totalDur) {
+    e.stopPropagation(); e.preventDefault()
+    stopRefinePlay()
+    setSelectedEffectId(eff.id)
+    const lane = e.currentTarget.closest('.refine-fx-track-lane'); if (!lane) return
+    const rect = lane.getBoundingClientRect()
+    const MIN = 0.4
+    effDragRef.current = { startX: e.clientX, origStart: eff.start ?? 0, origEnd: eff.end ?? totalDur, mode }
+    const onMove = (ev) => {
+      const d = effDragRef.current; if (!d) return
+      const dxRatio = (ev.clientX - d.startX) / rect.width
+      const dt = dxRatio * totalDur
+      let ns = d.origStart, ne = d.origEnd
+      if (d.mode === 'move') { ns = d.origStart + dt; ne = d.origEnd + dt; const len = d.origEnd - d.origStart; ns = Math.max(0, Math.min(totalDur - len, ns)); ne = ns + len }
+      else if (d.mode === 'l') { ns = Math.max(0, Math.min(d.origEnd - MIN, d.origStart + dt)) }
+      else if (d.mode === 'r') { ne = Math.min(totalDur, Math.max(d.origStart + MIN, d.origEnd + dt)) }
+      updateEffectItem(compId, field, eff.id, { start: r2(ns), end: r2(ne) })
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); effDragRef.current = null }
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+  }
+
+  // v0.9.8h1: 编辑片段调速（editSegs 模式）
+  function setEditSegSpeed(compId, esId, speed) {
+    setRefinedComps(prev => {
+      const rc = defaultRcFor(prev[compId])
+      const editSegs = (rc.editSegs || []).map(es => es.id === esId ? { ...es, speed } : es)
+      return { ...prev, [compId]: { ...rc, editSegs } }
     })
-    if (!synced) showToast('背景图已导入（仅预览）；本地导出服务未启动，请启动后再导出')
-    else showToast('背景图已导入并同步到本地导出服务')
   }
 
   // v0.9.5h2: subtitle undo helpers
@@ -2691,6 +2777,8 @@ export default function App() {
         origSubMode: origSubMode,
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
         stickers: rc.stickers || [],
+        dedupeEffects: rc.dedupeEffects || [],
+        backgroundEffects: rc.backgroundEffects || [],
         subtitleStyle: getCompSubStyle(compId),
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
         exportQuality: exportQuality,
@@ -2790,13 +2878,20 @@ export default function App() {
         burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
         origSubMode: origSubMode,
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
-        stickers: rc.stickers || [],
+        stickers: getCompStickers(compId),
         subtitleStyle: getCompSubStyle(compId),
         backgroundWrap: rc.backgroundWrap || { enabled: false },
+        // v0.9.8h1: 时间线效果层（带 start/end）
+        dedupeEffects: rc.dedupeEffects || [],
+        backgroundEffects: (rc.backgroundEffects || []).map(e => ({
+          id: e.id, type: e.type, label: e.label, start: e.start, end: e.end,
+          imageFileName: e.imageFileName, storedFileName: e.storedFileName, synced: e.synced,
+          videoScale: e.videoScale, videoX: e.videoX, videoY: e.videoY,
+        })),
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
         exportQuality: exportQuality,
       },
-      stickers: rc.stickers || [],
+      stickers: getCompStickers(compId),
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx, fileName: v.storedFileName || v.name, originalName: v.name,
         storedFileName: v.storedFileName || null, synced: !!v.synced, duration: v.dur,
@@ -2857,10 +2952,8 @@ export default function App() {
 
   // 用户在检查弹窗点击"继续导出"后实际执行的导出
   function doConfirmedExport(compId, comp) {
-    const rc = defaultRcFor(refinedComps[compId])
-    const dedupPerComp = rc.dedupOpts && Object.values(rc.dedupOpts).some(Boolean)
-      ? rc.dedupOpts : null
-    exportToLocalService(compId, comp, setRefineExportStatus, setRefineExportMsg, dedupPerComp)
+    // v0.9.8h1: 时间线效果层（dedupeEffects/backgroundEffects/stickers）由 payload 统一携带
+    exportToLocalService(compId, comp, setRefineExportStatus, setRefineExportMsg, null)
   }
 
   // v0.7.6: Import refine plan from JSON file
@@ -4047,7 +4140,7 @@ export default function App() {
                   onChange={e=>{ const f=e.target.files?.[0]; if(f) importVoiceFile(comp.id,f); e.target.value='' }} />
                 {/* Hidden background image input */}
                 <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{display:'none'}} ref={bgWrapInputRef}
-                  onChange={e=>{ const f=e.target.files?.[0]; if(f) importBgWrapFile(comp.id,f); e.target.value='' }} />
+                  onChange={e=>{ const f=e.target.files?.[0]; if(f) importBgImage(comp.id,f,derivedDur); e.target.value='' }} />
                 {/* Hidden plan JSON import input */}
                 <input type="file" accept=".json" style={{display:'none'}} ref={refinePlanImportRef}
                   onChange={e=>{ const f=e.target.files?.[0]; if(f) importRefinePlanFile(comp.id,f); e.target.value='' }} />
@@ -4213,6 +4306,7 @@ export default function App() {
                             bL=parseFloat(((100-bW)/2).toFixed(2));bT=parseFloat(((100-bH)/2).toFixed(2))
                           }
                           const aFSub=rc.finalSubtitles?.find(s=>refinePrevPos>=s.start&&refinePrevPos<s.end)
+                          const fx=getPreviewFx(comp.id,rf)
                           return (
                         <div className="refine-video-wrap"
                           onClick={()=>{
@@ -4230,13 +4324,10 @@ export default function App() {
                             const mu=()=>{document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',mu)}
                             document.addEventListener('mousemove',mv);document.addEventListener('mouseup',mu)
                           }:undefined}
-                          style={(()=>{
-                            const bw=getCompBgWrap(comp.id)
-                            return {
-                              cursor: rf.enabled?'grab':'pointer',
-                              ...(bw.enabled&&bw.imageUrl?{backgroundImage:`url(${bw.imageUrl})`,backgroundSize:'cover',backgroundPosition:'center'}:{}),
-                            }
-                          })()}
+                          style={{
+                            cursor: rf.enabled?'grab':'pointer',
+                            ...(fx.bg&&fx.bg.imageUrl?{backgroundImage:`url(${fx.bg.imageUrl})`,backgroundSize:'cover',backgroundPosition:'center'}:{}),
+                          }}
                         >
                           {curVid?(
                             <video
@@ -4247,7 +4338,7 @@ export default function App() {
                               playsInline
                               muted={muteOriginal}
                               className="refine-video"
-                              style={rf.enabled?{transform:`scale(${rf.scale}) translate(${(rf.offsetX*100/rf.scale).toFixed(1)}%, ${(-rf.offsetY*100/rf.scale).toFixed(1)}%)`,transformOrigin:'center center'}:{}}
+                              style={{transformOrigin:'center center',...(fx.transform?{transform:fx.transform}:{}),...(fx.filter?{filter:fx.filter}:{})}}
                               onPlay={()=>setRefineVidPlaying(true)}
                               onPause={()=>setRefineVidPlaying(false)}
                               onLoadedMetadata={()=>{
@@ -4335,6 +4426,9 @@ export default function App() {
                           {tRatio&&(
                             <div style={{position:'absolute',left:`${bL}%`,top:`${bT}%`,width:`${bW}%`,height:`${bH}%`,boxShadow:'0 0 0 9999px rgba(0,0,0,0.45)',border:'2px solid rgba(255,255,255,0.8)',pointerEvents:'none',zIndex:2,boxSizing:'border-box'}}/>
                           )}
+                          {fx.border&&(
+                            <div style={{position:'absolute',inset:0,border:'10px solid rgba(255,255,255,0.9)',pointerEvents:'none',zIndex:2,boxSizing:'border-box'}}/>
+                          )}
                           {aFSub&&(()=>{
                             const ss=getCompSubStyle(comp.id)
                             const previewFs=Math.round(ss.fontSize*270/1080)
@@ -4389,10 +4483,10 @@ export default function App() {
                               ?<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                               :<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>}
                           </div>
-                          {getCompStickers(comp.id).map(stk=>(
+                          {getCompStickers(comp.id).filter(stk=>effectActiveAt(stk,refinePrevPos)).map(stk=>(
                             <div key={stk.id}
-                              className={`refine-sticker${stk.isEmoji?' emoji':' badge'}`}
-                              style={{left:`${stk.x??50}%`,top:`${stk.y??50}%`,transform:`translate(-50%,-50%) scale(${stk.scale||1})`}}
+                              className={`refine-sticker${stk.isEmoji?' emoji':' badge'}${selectedEffectId===stk.id?' selected':''}`}
+                              style={{left:`${stk.x??50}%`,top:`${stk.y??50}%`,transform:`translate(-50%,-50%) scale(${stk.scale||1})`,opacity:stk.opacity??1}}
                               onMouseDown={e=>{
                                 e.stopPropagation()
                                 const startX=e.clientX,startY=e.clientY
@@ -4858,93 +4952,122 @@ export default function App() {
                       </div>
                     </div>{/* end refine-top */}
 
-                    {/* v0.9.6: sticker + dedup extra row */}
+                    {/* v0.9.8h1: 时间线效果层 — 添加贴图/去重/背景（都带 start/end，在下方效果轨控制时长）*/}
+                    {(()=>{
+                      const curEntry = hasEditSegs ? (curEsEntry||curDerivedEntry) : (derivedSegs.find(ds=>ds.segIdx===curSegIdx)||curDerivedEntry)
+                      const curRange = curEntry ? {start:r2(curEntry.compStart), end:r2(curEntry.compEnd)} : {start:0, end:r2(derivedDur)}
+                      const stickerList = getCompStickers(comp.id)
+                      const dedupeList = getDedupeEffects(comp.id)
+                      const bgList = getBackgroundEffects(comp.id)
+                      return (
                     <div className="refine-extra-row">
+                      {/* 贴图 */}
                       <div className="refine-extra-panel">
                         <div className="refine-extra-head" onClick={()=>setShowStickerPanel(v=>!v)}>
-                          🎨 贴图贴纸 ({getCompStickers(comp.id).length}) {showStickerPanel?'▾':'▸'}
+                          🎨 贴图贴纸 ({stickerList.length}) {showStickerPanel?'▾':'▸'}
                         </div>
-                        {showStickerPanel&&(
+                        {showStickerPanel&&(<>
+                          <div className="refine-fx-tip">点击添加 → 默认从播放头开始持续 3 秒 · 可在下方「贴图轨」拖动调整时段</div>
                           <div className="refine-sticker-grid">
                             {STICKER_PRESETS.map(p=>(
                               <button key={p.key} className="refine-sticker-preset"
-                                onClick={()=>addSticker(comp.id,p)}>
+                                onClick={()=>addSticker(comp.id,p,derivedDur)}>
                                 <span>{p.isEmoji?p.emoji:p.text}</span>
                                 <small>{p.label}</small>
                               </button>
                             ))}
-                            {getCompStickers(comp.id).length>0&&(
+                            {stickerList.length>0&&(
                               <button className="refine-sticker-preset" style={{borderColor:'var(--danger,#f33)',color:'var(--danger,#f33)'}}
-                                onClick={()=>updateRefinedComp(comp.id,{stickers:[]})}>
+                                onClick={()=>{updateRefinedComp(comp.id,{stickers:[]});setSelectedEffectId(null)}}>
                                 <span>🗑</span><small>清空</small>
                               </button>
                             )}
                           </div>
-                        )}
+                          <div className="refine-fx-note">说明：文字贴图可导出；emoji / 图片贴图暂不导出（导出前检查会提示）</div>
+                        </>)}
                       </div>
+                      {/* 去重/滤镜 */}
                       <div className="refine-extra-panel">
                         <div className="refine-extra-head" onClick={()=>setShowDedupPanel(v=>!v)}>
-                          ⚙ 去重包装 ({Object.values(getCompDedup(comp.id)).filter(Boolean).length}/5 已启用) {showDedupPanel?'▾':'▸'}
+                          ⚙ 去重 / 滤镜 ({dedupeList.length}) {showDedupPanel?'▾':'▸'}
                         </div>
-                        {showDedupPanel&&(
-                          <div className="dedup-grid">
-                            {[['mirror','镜像翻转','⇔'],['brightness','亮度微调','☀'],['contrast','对比度','◑'],['saturation','饱和度','🎨'],['lightScale','轻微缩放','⊞']].map(([k,label,ico])=>(
-                              <label key={k} className={`dedup-chip ${getCompDedup(comp.id)[k]?'on':''}`}>
-                                <input type="checkbox" checked={!!getCompDedup(comp.id)[k]} onChange={()=>toggleCompDedup(comp.id,k)}/>
-                                <span className="dedup-chip-ico">{ico}</span><span>{label}</span>
-                              </label>
+                        {showDedupPanel&&(<>
+                          <div className="refine-fx-tip">去重按片段/时段生效（不再整条统一）· 默认很轻，不加噪点</div>
+                          <div className="rss-row" style={{gap:6,flexWrap:'wrap'}}>
+                            <button className="refine-tb-btn primary" onClick={()=>addDedupeEffect(comp.id,curRange.start,curRange.end,curSeg?.label||'去重')}>＋ 作用当前片段</button>
+                            <button className="refine-tb-btn" onClick={()=>{const w=defaultEffWindow(derivedDur);addDedupeEffect(comp.id,w.start,w.end,'去重')}}>＋ 从播放头+3秒</button>
+                          </div>
+                          {dedupeList.length===0&&<div className="refine-fx-note">还没有去重效果。选中片段后点「作用当前片段」。</div>}
+                          {dedupeList.map(eff=>(
+                            <div key={eff.id} className={`refine-fx-item${selectedEffectId===eff.id?' selected':''}`} onClick={()=>setSelectedEffectId(eff.id)}>
+                              <div className="refine-fx-item-head">
+                                <span className="refine-fx-item-name">{eff.label||'去重'}</span>
+                                <span className="refine-fx-item-time">{fmt(eff.start)}–{fmt(eff.end)}</span>
+                                <button className="refine-fx-item-del" onClick={e=>{e.stopPropagation();deleteEffectItem(comp.id,'dedupeEffects',eff.id)}}>✕</button>
+                              </div>
+                              <div className="dedup-grid">
+                                {[['mirror','镜像','⇔'],['brightness','亮度','☀'],['contrast','对比','◑'],['saturation','饱和','🎨'],['scale','缩放','⊞'],['border','边框','▢']].map(([k,label,ico])=>(
+                                  <label key={k} className={`dedup-chip ${(eff.params||{})[k]?'on':''}`} onClick={e=>e.stopPropagation()}>
+                                    <input type="checkbox" checked={!!(eff.params||{})[k]} onChange={()=>toggleDedupeParam(comp.id,eff.id,k)}/>
+                                    <span className="dedup-chip-ico">{ico}</span><span>{label}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </>)}
+                      </div>
+                      {/* 背景包装 */}
+                      <div className="refine-extra-panel">
+                        <div className="refine-extra-head" onClick={()=>setShowBgWrapPanel(v=>!v)}>
+                          🖼 背景包装 ({bgList.length}) {showBgWrapPanel?'▾':'▸'}
+                        </div>
+                        {showBgWrapPanel&&(
+                          <div className="refine-bgwrap-panel">
+                            <div className="refine-fx-tip">导入背景图 → 默认作用全程 · 可在下方「背景轨」调整时段，并调视频主体位置/缩放</div>
+                            <div className="rss-row">
+                              <button className="refine-tb-btn primary" onClick={()=>bgWrapInputRef.current?.click()}>＋ 导入背景图</button>
+                            </div>
+                            {bgList.length===0&&<div className="refine-fx-note">还没有背景效果。</div>}
+                            {bgList.map(eff=>(
+                              <div key={eff.id} className={`refine-fx-item${selectedEffectId===eff.id?' selected':''}`} onClick={()=>setSelectedEffectId(eff.id)}>
+                                <div className="refine-fx-item-head">
+                                  {eff.imageUrl&&<div className="refine-bgwrap-preview" style={{backgroundImage:`url(${eff.imageUrl})`,width:28,height:28}}/>}
+                                  <span className="refine-fx-item-name">{eff.imageFileName||'背景'}</span>
+                                  <span className="refine-fx-item-time">{fmt(eff.start)}–{fmt(eff.end)}</span>
+                                  <button className="refine-fx-item-del" onClick={e=>{e.stopPropagation();deleteEffectItem(comp.id,'backgroundEffects',eff.id)}}>✕</button>
+                                </div>
+                                <div className="rss-row">
+                                  <button className="refine-tb-btn" style={{fontSize:10}} onClick={e=>{e.stopPropagation();updateEffectItem(comp.id,'backgroundEffects',eff.id,{start:0,end:r2(derivedDur)})}}>全程</button>
+                                  <button className="refine-tb-btn" style={{fontSize:10}} onClick={e=>{e.stopPropagation();updateEffectItem(comp.id,'backgroundEffects',eff.id,{start:curRange.start,end:curRange.end})}}>当前片段</button>
+                                </div>
+                                <div className="rss-row">
+                                  <span className="rss-label">视频缩放</span>
+                                  <input type="range" min="0.4" max="1.0" step="0.01" value={eff.videoScale||0.8} className="rss-range" style={{flex:1}}
+                                    onClick={e=>e.stopPropagation()} onChange={e=>updateEffectItem(comp.id,'backgroundEffects',eff.id,{videoScale:parseFloat(e.target.value)})}/>
+                                  <span className="rss-val">{Math.round((eff.videoScale||0.8)*100)}%</span>
+                                </div>
+                                <div className="rss-row">
+                                  <span className="rss-label">水平</span>
+                                  <input type="range" min="-40" max="40" step="1" value={eff.videoX||0} className="rss-range" style={{flex:1}}
+                                    onClick={e=>e.stopPropagation()} onChange={e=>updateEffectItem(comp.id,'backgroundEffects',eff.id,{videoX:parseFloat(e.target.value)})}/>
+                                  <span className="rss-val">{eff.videoX||0}%</span>
+                                </div>
+                                <div className="rss-row">
+                                  <span className="rss-label">垂直</span>
+                                  <input type="range" min="-40" max="40" step="1" value={eff.videoY||0} className="rss-range" style={{flex:1}}
+                                    onClick={e=>e.stopPropagation()} onChange={e=>updateEffectItem(comp.id,'backgroundEffects',eff.id,{videoY:parseFloat(e.target.value)})}/>
+                                  <span className="rss-val">{eff.videoY||0}%</span>
+                                </div>
+                                {!eff.storedFileName&&<div className="ep-ss-hint" style={{color:'var(--warn,#f59e0b)'}}>⚠ 背景图未同步到本地服务，导出时将跳过此背景</div>}
+                              </div>
                             ))}
                           </div>
                         )}
                       </div>
-                      <div className="refine-extra-panel">
-                        {(()=>{
-                          const bw = getCompBgWrap(comp.id)
-                          return (<>
-                            <div className="refine-extra-head" onClick={()=>setShowBgWrapPanel(v=>!v)}>
-                              🖼 背景包装 {bw.enabled?`(已启用${bw.storedFileName?'·已同步':bw.imageUrl?'·仅预览':'·未导入图'})`:'(未启用)'} {showBgWrapPanel?'▾':'▸'}
-                            </div>
-                            {showBgWrapPanel&&(
-                              <div className="refine-bgwrap-panel">
-                                {bw.imageUrl&&(
-                                  <div className="refine-bgwrap-preview" style={{backgroundImage:`url(${bw.imageUrl})`}}/>
-                                )}
-                                <div className="rss-row">
-                                  <button className="refine-tb-btn" onClick={()=>bgWrapInputRef.current?.click()}>
-                                    {bw.imageFileName?`更换图片 (${bw.imageFileName})`:'导入背景图'}
-                                  </button>
-                                  {bw.enabled&&<button className="refine-tb-btn danger" onClick={()=>setCompBgWrap(comp.id,{enabled:false,imageUrl:null,imageFileName:null,storedFileName:null})}>移除背景</button>}
-                                </div>
-                                {bw.enabled&&bw.imageUrl&&<>
-                                  <div className="rss-row">
-                                    <span className="rss-label">视频缩放</span>
-                                    <input type="range" min="0.5" max="1.0" step="0.01" value={bw.videoScale||1.0}
-                                      onChange={e=>setCompBgWrap(comp.id,{videoScale:parseFloat(e.target.value)})}
-                                      className="rss-range" style={{flex:1}}/>
-                                    <span className="rss-val">{Math.round((bw.videoScale||1.0)*100)}%</span>
-                                  </div>
-                                  <div className="rss-row">
-                                    <span className="rss-label">水平偏移</span>
-                                    <input type="range" min="-40" max="40" step="1" value={bw.videoX||0}
-                                      onChange={e=>setCompBgWrap(comp.id,{videoX:parseFloat(e.target.value)})}
-                                      className="rss-range" style={{flex:1}}/>
-                                    <span className="rss-val">{bw.videoX||0}%</span>
-                                  </div>
-                                  <div className="rss-row">
-                                    <span className="rss-label">垂直偏移</span>
-                                    <input type="range" min="-40" max="40" step="1" value={bw.videoY||0}
-                                      onChange={e=>setCompBgWrap(comp.id,{videoY:parseFloat(e.target.value)})}
-                                      className="rss-range" style={{flex:1}}/>
-                                    <span className="rss-val">{bw.videoY||0}%</span>
-                                  </div>
-                                  {!bw.storedFileName&&<div className="ep-ss-hint" style={{color:'var(--warn,#f59e0b)'}}>⚠ 背景图未同步到本地服务，导出时将跳过背景包装</div>}
-                                </>}
-                              </div>
-                            )}
-                          </>)
-                        })()}
-                      </div>
                     </div>
+                      )
+                    })()}
 
                     {/* Timeline (derived: deleted = absent, speed = width change) */}
                     <div className="refine-tl-section">
@@ -5025,6 +5148,43 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+
+                    {/* v0.9.8h1: 时间线效果轨 — 贴图 / 去重 / 背景，可拖动改时段、拖边缘改时长 */}
+                    {(()=>{
+                      const tracks = [
+                        { field:'stickers', label:'贴图', color:'#a855f7', items:getCompStickers(comp.id).map(s=>({...s, name:s.isEmoji?s.emoji:s.text})) },
+                        { field:'dedupeEffects', label:'去重', color:'#10b981', items:getDedupeEffects(comp.id).map(e=>({...e, name:Object.entries(e.params||{}).filter(([,v])=>v).map(([k])=>({mirror:'镜像',brightness:'亮度',contrast:'对比',saturation:'饱和',scale:'缩放',border:'边框'}[k])).join('+')||'去重'})) },
+                        { field:'backgroundEffects', label:'背景', color:'#f59e0b', items:getBackgroundEffects(comp.id).map(e=>({...e, name:e.imageFileName||'背景'})) },
+                      ]
+                      const pct = (v)=>derivedDur>0?Math.max(0,Math.min(100,(v/derivedDur)*100)):0
+                      return (
+                        <div className="refine-fx-tracks" ref={effTlRef}>
+                          {tracks.map(tr=>(
+                            <div key={tr.field} className="refine-fx-track">
+                              <span className="refine-fx-track-label" style={{color:tr.color}}>{tr.label}</span>
+                              <div className="refine-fx-track-lane">
+                                {tr.items.length===0&&<span className="refine-fx-track-empty">在上方面板添加{tr.label}效果</span>}
+                                {tr.items.map(it=>{
+                                  const left=pct(it.start), width=Math.max(2,pct(it.end)-pct(it.start))
+                                  return (
+                                    <div key={it.id}
+                                      className={`refine-fx-block${selectedEffectId===it.id?' selected':''}`}
+                                      style={{left:`${left}%`,width:`${width}%`,background:tr.color+(selectedEffectId===it.id?'ee':'aa'),borderColor:tr.color}}
+                                      title={`${it.name} ${fmt(it.start)}–${fmt(it.end)}`}
+                                      onMouseDown={e=>startEffectDrag(e,comp.id,tr.field,it,'move',derivedDur)}>
+                                      <span className="refine-fx-block-handle l" onMouseDown={e=>startEffectDrag(e,comp.id,tr.field,it,'l',derivedDur)}/>
+                                      <span className="refine-fx-block-name">{it.name}</span>
+                                      <span className="refine-fx-block-handle r" onMouseDown={e=>startEffectDrag(e,comp.id,tr.field,it,'r',derivedDur)}/>
+                                    </div>
+                                  )
+                                })}
+                                <div className="refine-fx-track-playhead" style={{left:`${playheadPct}%`}}/>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    })()}
 
                     {/* Voice track section */}
                     <div className="refine-voice-track">
@@ -5171,6 +5331,22 @@ export default function App() {
                                       <button className="refine-op-btn danger" onClick={()=>{ deleteEditSeg(comp.id,curEsEntry.esId); stopRefinePlay() }}>✕ 删除此小段</button>
                                     )}
                                   </div>
+                                  {!esDeleted&&(()=>{
+                                    const esSpd=(rc.editSegs||[]).find(s=>s.id===curEsEntry.esId)?.speed??1
+                                    return (
+                                      <div className="refine-speed-section">
+                                        <div className="refine-speed-label">⏩ 调速（只作用当前片段 · 对着配音调节节奏）</div>
+                                        <div className="refine-speed-row">
+                                          {[0.5,0.75,0.9,1,1.25,1.5,2].map(s=>(
+                                            <button key={s} className={`refine-speed-btn${esSpd===s?' active':''}`}
+                                              onClick={()=>{setEditSegSpeed(comp.id,curEsEntry.esId,s);stopRefinePlay();showToast(`${curSeg.label} 速度 ×${s}，成品时长 ${fmt(rawDur/s)}`)}}>
+                                              {s===1?'1× 默认':`×${s}`}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )
+                                  })()}
                                 </div>
                               )}
                               {/* EditSegs full summary */}
@@ -5245,7 +5421,7 @@ export default function App() {
                               )}
                             </div>
                             <div className="refine-speed-section">
-                              <div className="refine-speed-label">调速（成品时长随速度变化）</div>
+                              <div className="refine-speed-label">⏩ 调速（只作用当前选中片段 · 对着配音调节节奏）</div>
                               <div className="refine-speed-row">
                                 {[0.5,0.75,0.9,1,1.25,1.5,2].map(s=>(
                                   <button key={s}

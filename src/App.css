@@ -11860,3 +11860,39 @@ input[type=range] {
   border-radius: 4px; padding: 4px 8px;
   line-height: 1.4;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   v0.9.8-hotfix-1 — 时间线效果层（贴图/去重/背景 轨道 + 面板）
+   ══════════════════════════════════════════════════════════════ */
+.refine-fx-tip { font-size:10px; color:var(--text-muted); padding:3px 0 5px; line-height:1.4; }
+.refine-fx-note { font-size:10px; color:var(--text-muted); padding:5px 0 2px; opacity:.85; line-height:1.4; }
+
+.refine-fx-item {
+  border:1px solid var(--border); border-radius:6px; padding:6px 7px; margin-top:6px;
+  background:var(--bg-2); cursor:pointer; transition:border-color .12s;
+}
+.refine-fx-item.selected { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+.refine-fx-item-head { display:flex; align-items:center; gap:6px; margin-bottom:4px; }
+.refine-fx-item-name { font-size:11px; font-weight:600; color:var(--text); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.refine-fx-item-time { font-size:10px; color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.refine-fx-item-del { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:12px; padding:0 3px; }
+.refine-fx-item-del:hover { color:var(--danger); }
+
+/* effect tracks below the main timeline */
+.refine-fx-tracks { display:flex; flex-direction:column; gap:3px; margin-top:6px; padding:6px 0; border-top:1px dashed var(--border); }
+.refine-fx-track { display:flex; align-items:center; gap:6px; }
+.refine-fx-track-label { width:34px; flex-shrink:0; font-size:10px; font-weight:700; text-align:right; }
+.refine-fx-track-lane { position:relative; flex:1; height:22px; background:var(--bg-2); border-radius:4px; overflow:hidden; }
+.refine-fx-track-empty { position:absolute; left:8px; top:50%; transform:translateY(-50%); font-size:9px; color:var(--text-muted); opacity:.6; pointer-events:none; }
+.refine-fx-block {
+  position:absolute; top:2px; bottom:2px; border-radius:3px; border:1px solid;
+  display:flex; align-items:center; cursor:grab; overflow:hidden; min-width:8px;
+}
+.refine-fx-block.selected { z-index:3; }
+.refine-fx-block-name { flex:1; font-size:9px; color:#fff; padding:0 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none; text-shadow:0 1px 1px rgba(0,0,0,.5); }
+.refine-fx-block-handle { width:6px; flex-shrink:0; cursor:ew-resize; background:rgba(255,255,255,.45); height:100%; }
+.refine-fx-block-handle:hover { background:rgba(255,255,255,.8); }
+.refine-fx-track-playhead { position:absolute; top:0; bottom:0; width:2px; background:#fff; pointer-events:none; box-shadow:0 0 3px rgba(0,0,0,.6); }
+
+/* selected sticker highlight in preview */
+.refine-sticker.selected { outline:2px dashed var(--accent); outline-offset:2px; }

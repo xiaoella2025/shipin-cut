@@ -41,6 +41,29 @@ def _find_local_bin(names, subdir):
 FFMPEG  = _find_local_bin(["ffmpeg.exe", "ffmpeg"],   "ffmpeg") or "ffmpeg"
 FFPROBE = _find_local_bin(["ffprobe.exe", "ffprobe"],  "ffmpeg") or "ffprobe"
 
+def _find_cjk_font():
+    """查找系统中文字体（供 drawtext 文字贴图使用，否则中文会变成方块）。"""
+    candidates = [
+        r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhbd.ttc",
+        r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\simsun.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    ]
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    return None
+
+CJK_FONT = _find_cjk_font()
+
+def _ff_fontfile(path):
+    """把字体路径转成 ffmpeg filter 里安全的 fontfile= 片段（处理 Windows 盘符冒号）。"""
+    p = str(path).replace("\\", "/").replace(":", "\\:")
+    return f":fontfile='{p}'"
+
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 def log(msg):
     print(f"[shipin-cut] {msg}", flush=True)
@@ -67,6 +90,16 @@ def run(cmd, check=True, capture=False):
 
 def safe_name(s):
     return re.sub(r'[^\w一-鿿.-]', '_', s)
+
+# ── v0.9.8-hotfix-1: 时间线效果层辅助 ──────────────────────────────────────────
+def _fr(x):
+    """格式化数字用于 filter 表达式"""
+    return f"{float(x):.3f}"
+
+def _or_ranges(ranges):
+    """把多个 [start,end] 时间段合并成 ffmpeg enable 表达式（任一段命中即生效）"""
+    parts = [f"between(t,{_fr(s)},{_fr(e)})" for (s, e) in ranges]
+    return "+".join(parts) if parts else "0"
 
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac"}
 
@@ -578,7 +611,7 @@ def main():
     reframe_oy   = float(reframe_cfg.get("offsetY", 0.0))
 
     # v0.9.5h: output quality CRF
-    quality_crf_map = {"标准": 23, "高清": 20, "超清": 18}
+    quality_crf_map = {"标准": 22, "高清": 20, "超清": 18}
     export_quality = export_settings.get("exportQuality", "高清")
     crf = quality_crf_map.get(export_quality, 20)
     log(f"输出画质: {export_quality} (CRF {crf})")
@@ -670,64 +703,202 @@ def main():
             shutil.move(str(reframed_out), str(final_out))
             log(f"裁切完成 → {final_name}")
 
-    # v0.9.3/v0.9.4: 字幕 + 遮挡
-    need_cover   = (orig_sub_mode == "cover")
-    need_burn_sub = burn_sub
-    need_burn    = need_burn_sub or need_cover
+    # ════════════════════════════════════════════════════════════════════════
+    # v0.9.8-hotfix-1: 统一时间线效果层 —— 去重/背景/贴图/字幕 合并为「单次重编码」
+    # 旧版每个效果一次重编码（4~6 次），导致画面雪花/发糊。这里合并为一次 pass。
+    # ════════════════════════════════════════════════════════════════════════
+    out_w, out_h = get_video_dimensions(final_out)
 
-    if need_burn:
-        # 获取输出视频尺寸（用于 ASS PlayRes）
-        out_w, out_h = get_video_dimensions(final_out)
+    # ── 1) 收集去重效果（时间线数组；缺省时回退旧全局开关，作用全程）────────────
+    dedupe_effects = export_settings.get("dedupeEffects") or []
+    if not dedupe_effects:
+        lg = export_settings.get("dedupOpts") or {}
+        legacy_on = any(lg.get(k) for k in ("mirror", "brightness", "contrast", "saturation", "lightScale")) \
+            or export_settings.get("mirrorFlip") or export_settings.get("slightZoom")
+        if legacy_on:
+            dedupe_effects = [{"start": 0, "end": 1e9, "params": {
+                "mirror":     bool(lg.get("mirror") or export_settings.get("mirrorFlip")),
+                "scale":      bool(lg.get("lightScale") or export_settings.get("slightZoom")),
+                "brightness": bool(lg.get("brightness")),
+                "contrast":   bool(lg.get("contrast")),
+                "saturation": bool(lg.get("saturation")),
+                "border":     False,
+            }}]
 
-        sub_file = None
-        if need_burn_sub:
-            # v0.9.4: 优先使用用户逐句编辑的 finalSubtitles
-            if final_subtitles and len(final_subtitles) > 0:
-                subs = [
-                    {'start': s.get('start', 0), 'end': s.get('end', 0), 'text': s.get('text', '')}
-                    for s in final_subtitles
-                    if s.get('text', '').strip()
-                ]
-                log(f"使用用户编辑字幕，共 {len(subs)} 条")
-            elif summary_script:
-                total_dur = data.get("totalDuration") or sum(
-                    seg.get("actualDur", seg.get("endSec", 0) - seg.get("startSec", 0))
-                    for seg in timeline
-                )
-                subs = split_script_to_subtitles(summary_script, total_dur)
-                log(f"从字幕稿切分，共 {len(subs)} 条")
-            else:
-                subs = []
-                log("字幕稿为空，跳过字幕烧录")
+    # ── 2) 收集背景包装效果（时间线数组；缺省时回退旧 backgroundWrap）─────────────
+    bg_effects = export_settings.get("backgroundEffects") or []
+    if not bg_effects:
+        bw = export_settings.get("backgroundWrap") or {}
+        if bw.get("enabled") and bw.get("storedFileName"):
+            bg_effects = [{"start": 0, "end": 1e9, "storedFileName": bw.get("storedFileName"),
+                           "videoScale": bw.get("videoScale", 1.0),
+                           "videoX": bw.get("videoX", 0), "videoY": bw.get("videoY", 0)}]
+    valid_bg = []
+    for be in bg_effects:
+        sf = (be.get("storedFileName") or "").strip()
+        p = IMAGES_DIR / sf if sf else None
+        if p and p.exists():
+            valid_bg.append((be, p))
+        elif sf:
+            log(f"背景图文件未找到（{sf}），跳过该背景效果")
 
-            if subs:
-                sub_file = TEMP_DIR / "sub.ass"
-                write_ass_file(
-                    subs, sub_file,
-                    subtitle_style=subtitle_style,
-                    cover_pct=cover_pct if need_cover else 0.0,
-                    play_res_y=out_h,
-                )
-                log(f"字幕文件已生成，共 {len(subs)} 条")
+    # ── 3) 收集贴图（文字贴图导出；emoji/图片暂跳过并提示）────────────────────────
+    stickers = data.get("stickers") or export_settings.get("stickers") or []
+    text_stickers = [s for s in stickers if s and not s.get("isEmoji") and s.get("text")]
 
-        if sub_file or need_cover:
-            burned_out = OUTPUT_DIR / f"burned_{final_name}"
-            actual_cover = cover_pct if need_cover else 0.0
-            burn_sub_and_cover(
-                final_out, burned_out,
-                sub_name=sub_file.name if sub_file else None,
-                cover_pct=actual_cover,
-                crf=crf,
+    # ── 4) 字幕 ASS + 底部遮挡 ──────────────────────────────────────────────────
+    need_cover = (orig_sub_mode == "cover")
+    cover_for_pass = cover_pct if need_cover else 0.0
+    sub_file = None
+    if burn_sub:
+        if final_subtitles and len(final_subtitles) > 0:
+            subs = [
+                {'start': s.get('start', 0), 'end': s.get('end', 0), 'text': s.get('text', '')}
+                for s in final_subtitles if s.get('text', '').strip()
+            ]
+            log(f"使用用户编辑字幕，共 {len(subs)} 条")
+        elif summary_script:
+            total_dur = data.get("totalDuration") or sum(
+                seg.get("actualDur", seg.get("endSec", 0) - seg.get("startSec", 0)) for seg in timeline
             )
-            final_out.unlink()
-            shutil.move(str(burned_out), str(final_out))
-            log(f"字幕/遮挡烧录完成 → {final_name}")
+            subs = split_script_to_subtitles(summary_script, total_dur)
+            log(f"从字幕稿切分，共 {len(subs)} 条")
+        else:
+            subs = []
+            log("字幕稿为空，跳过字幕烧录")
+        if subs:
+            sub_file = TEMP_DIR / "sub.ass"
+            write_ass_file(subs, sub_file, subtitle_style=subtitle_style,
+                           cover_pct=cover_for_pass, play_res_y=out_h)
+            log(f"字幕文件已生成，共 {len(subs)} 条")
 
-        if sub_file and sub_file.exists():
-            try: sub_file.unlink()
-            except: pass
+    # ── 5) 输出分辨率（无 reframe 时按用户选择缩放，横竖屏自适应；保持清晰）────────
+    res_setting = export_settings.get("resolution")
+    target_h = {"1080p": 1080, "720p": 720}.get(res_setting)
+    reframe_active = reframe_on and reframe_asp and reframe_asp != "保留原比例"
+    res_filter = None
+    if target_h and not reframe_active:
+        res_filter = f"scale='if(gt(iw,ih),-2,{target_h})':'if(gt(iw,ih),{target_h},-2)':flags=lanczos"
 
-    # v0.9.5: Background music mixing
+    # ── 6) 组装单次 filter_complex 图 ───────────────────────────────────────────
+    fc = []
+    lbl = [0]
+    def nl():
+        lbl[0] += 1
+        return f"v{lbl[0]}"
+    cur = "0:v"
+    inputs = ["-i", str(final_out)]
+
+    # 6a 亮度/对比度/饱和度（eq，线性、可分时间段）
+    eq_filters = []
+    for eff in dedupe_effects:
+        p = eff.get("params") or {}
+        s = float(eff.get("start", 0)); e = float(eff.get("end", 1e9))
+        eqp = []
+        if p.get("brightness"): eqp.append("brightness=0.06")
+        if p.get("contrast"):   eqp.append("contrast=1.08")
+        if p.get("saturation"): eqp.append("saturation=1.12")
+        if eqp:
+            eq_filters.append(f"eq={':'.join(eqp)}:enable='between(t,{_fr(s)},{_fr(e)})'")
+    if eq_filters:
+        o = nl(); fc.append(f"[{cur}]" + ",".join(eq_filters) + f"[{o}]"); cur = o
+
+    # 6b 镜像翻转（overlay 分时间段，画质无损）
+    mirror_ranges = [(float(x.get("start", 0)), float(x.get("end", 1e9)))
+                     for x in dedupe_effects if (x.get("params") or {}).get("mirror")]
+    if mirror_ranges:
+        a, b = nl(), nl()
+        fc.append(f"[{cur}]split=2[{a}][{b}]")
+        mf = nl(); fc.append(f"[{b}]hflip[{mf}]")
+        o = nl(); fc.append(f"[{a}][{mf}]overlay=enable='{_or_ranges(mirror_ranges)}'[{o}]"); cur = o
+
+    # 6c 轻微缩放（overlay 分时间段；lanczos 保持清晰，不加噪点）
+    zoom_ranges = [(float(x.get("start", 0)), float(x.get("end", 1e9)))
+                   for x in dedupe_effects if (x.get("params") or {}).get("scale")]
+    if zoom_ranges:
+        a, b = nl(), nl()
+        fc.append(f"[{cur}]split=2[{a}][{b}]")
+        zs = nl(); fc.append(f"[{b}]scale=iw*1.06:ih*1.06:flags=lanczos,crop=iw/1.06:ih/1.06,setsar=1[{zs}]")
+        o = nl(); fc.append(f"[{a}][{zs}]overlay=enable='{_or_ranges(zoom_ranges)}'[{o}]"); cur = o
+
+    # 6d 背景包装（每个效果一张图：底图铺满 + 视频主体缩小叠加，仅在时间段内生效）
+    for k, (be, p) in enumerate(valid_bg, start=1):
+        inputs += ["-i", str(p)]
+        vs = float(be.get("videoScale", 1.0)); vx = float(be.get("videoX", 0)); vy = float(be.get("videoY", 0))
+        bs = float(be.get("start", 0)); be_e = float(be.get("end", 1e9))
+        vw = int(out_w * vs); vw -= vw % 2
+        vh = int(out_h * vs); vh -= vh % 2
+        ox = int((out_w - vw) / 2 + vx / 100.0 * out_w)
+        oy = int((out_h - vh) / 2 + vy / 100.0 * out_h)
+        base, src2 = nl(), nl()
+        fc.append(f"[{cur}]split=2[{base}][{src2}]")
+        bgl = nl(); fc.append(f"[{k}:v]scale={out_w}:{out_h},setsar=1[{bgl}]")
+        sm = nl(); fc.append(f"[{src2}]scale={vw}:{vh}[{sm}]")
+        cmp_ = nl(); fc.append(f"[{bgl}][{sm}]overlay=x={ox}:y={oy}[{cmp_}]")
+        o = nl(); fc.append(f"[{base}][{cmp_}]overlay=0:0:enable='between(t,{_fr(bs)},{_fr(be_e)})'[{o}]"); cur = o
+
+    # 6e 文字贴图 + 边框 + 遮挡条 + 字幕 + 分辨率（线性链，一次性收尾）
+    tail = []
+    for eff in dedupe_effects:
+        if (eff.get("params") or {}).get("border"):
+            s = float(eff.get("start", 0)); e = float(eff.get("end", 1e9))
+            tail.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=10:enable='between(t,{_fr(s)},{_fr(e)})'")
+    for stk in text_stickers:
+        x_pct = float(stk.get("x", 50)); y_pct = float(stk.get("y", 50))
+        scale_v = float(stk.get("scale", 1.0))
+        s = float(stk.get("start", 0)); e = float(stk.get("end", 1e9))
+        text_esc = (stk.get("text", "").replace("\\", "\\\\").replace("'", "\\'")
+                    .replace(":", "\\:").replace(",", "\\,"))
+        fs = max(20, int(out_h * 0.045 * scale_v))
+        px = int(x_pct / 100.0 * out_w); py = int(y_pct / 100.0 * out_h)
+        font_part = _ff_fontfile(CJK_FONT) if CJK_FONT else ""
+        tail.append(f"drawtext=text='{text_esc}':x={px}-tw/2:y={py}-th/2:fontsize={fs}:"
+                    f"fontcolor=white:box=1:boxcolor=red@0.85:boxborderw=8{font_part}:"
+                    f"enable='between(t,{_fr(s)},{_fr(e)})'")
+    if cover_for_pass > 0:
+        tail.append(f"drawbox=x=0:y=ih-ih*{cover_for_pass:.4f}:w=iw:h=ih*{cover_for_pass:.4f}:color=black:t=fill")
+    if sub_file:
+        tail.append(f"ass='{sub_file.name}'")
+    if res_filter:
+        tail.append(res_filter)
+
+    any_effect = bool(eq_filters or mirror_ranges or zoom_ranges or valid_bg or tail)
+    if any_effect:
+        tail.append("format=yuv420p")
+        vout = nl()
+        fc.append(f"[{cur}]" + ",".join(tail) + f"[{vout}]")
+        fx_out = OUTPUT_DIR / f"fx_{final_name}"
+        cmd = [FFMPEG, "-y"] + inputs + [
+            "-filter_complex", ";".join(fc),
+            "-map", f"[{vout}]", "-map", "0:a?",
+            "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+            "-c:a", "copy", str(fx_out.resolve()),
+        ]
+        log("运行(合并效果): " + " ".join(str(c) for c in cmd))
+        # cwd=TEMP_DIR 以便 ass 字幕按文件名引用，避免路径转义问题
+        subprocess.run([str(c) for c in cmd], check=True, cwd=str(TEMP_DIR))
+        final_out.unlink()
+        shutil.move(str(fx_out), str(final_out))
+        applied = []
+        if eq_filters or mirror_ranges or zoom_ranges:
+            applied.append(f"去重×{len(dedupe_effects)}")
+        if valid_bg:        applied.append(f"背景×{len(valid_bg)}")
+        if text_stickers:   applied.append(f"贴图×{len(text_stickers)}")
+        if sub_file:        applied.append("字幕")
+        if res_filter:      applied.append(res_setting)
+        log(f"效果合成完成（一次重编码：{' '.join(applied) or '基础'}）→ {final_name}")
+
+    if sub_file and sub_file.exists():
+        try: sub_file.unlink()
+        except: pass
+    if text_stickers and not CJK_FONT:
+        log("提示：未找到系统中文字体，文字贴图中的中文可能显示为方块。可在系统安装微软雅黑/思源黑体。")
+    if any(s.get("isEmoji") for s in stickers):
+        log("提示：emoji 贴图因字体依赖暂不导出，如需导出请改用文字贴图。")
+    if any(s.get("type") == "image" for s in stickers):
+        log("提示：图片贴图导出待完善，本次不包含图片贴图。")
+
+    # v0.9.5: 背景音乐混合（音频，视频流直接 copy，不影响清晰度）
     bgm_cfg = export_settings.get("bgm") or {}
     if bgm_cfg.get("enabled") and voice_path:
         bgm_name = bgm_cfg.get("fileName") or ""
@@ -742,124 +913,18 @@ def main():
             bgm_out = OUTPUT_DIR / f"bgm_{final_name}"
             log(f"正在混合背景音乐（音量 {int(bgm_volume*100)}%）: {bgm_path.name}")
             cmd = [
-                FFMPEG, "-y",
-                "-i", str(final_out),
-                "-i", str(bgm_path),
+                FFMPEG, "-y", "-i", str(final_out), "-i", str(bgm_path),
                 "-filter_complex",
                 f"[0:a]volume=1.0[main];[1:a]volume={bgm_volume:.2f},aloop=-1:size=2e+09[bgm];[main][bgm]amix=inputs=2:duration=first[aout]",
-                "-map", "0:v:0",
-                "-map", "[aout]",
-                "-c:v", "copy",
-                "-c:a", "aac",
-                str(bgm_out),
+                "-map", "0:v:0", "-map", "[aout]",
+                "-c:v", "copy", "-c:a", "aac", str(bgm_out),
             ]
             run(cmd)
             final_out.unlink()
             shutil.move(str(bgm_out), str(final_out))
             log(f"背景音乐混合完成 → {final_name}")
 
-    # v0.9.8: 背景包装（background wrap）— 在视频主体下方叠加背景图
-    bg_wrap = export_settings.get("backgroundWrap") or {}
-    if bg_wrap.get("enabled"):
-        bg_stored = (bg_wrap.get("storedFileName") or "").strip()
-        bg_path = IMAGES_DIR / bg_stored if bg_stored else None
-        if bg_path and bg_path.exists():
-            video_scale = float(bg_wrap.get("videoScale", 1.0))
-            video_x_pct = float(bg_wrap.get("videoX", 0))
-            video_y_pct = float(bg_wrap.get("videoY", 0))
-            wrap_out = OUTPUT_DIR / f"bgwrap_{final_name}"
-            out_w, out_h = get_video_dimensions(final_out)
-            vid_w = out_w * video_scale
-            vid_h = out_h * video_scale
-            # ensure even dimensions
-            vid_w = int(vid_w) - (int(vid_w) % 2)
-            vid_h = int(vid_h) - (int(vid_h) % 2)
-            ox = int((out_w - vid_w) / 2 + video_x_pct / 100.0 * out_w)
-            oy = int((out_h - vid_h) / 2 + video_y_pct / 100.0 * out_h)
-            fc = (
-                f"[1:v]scale={out_w}:{out_h},setsar=1[bg];"
-                f"[0:v]scale={vid_w}:{vid_h}[vid];"
-                f"[bg][vid]overlay=x={ox}:y={oy}"
-            )
-            cmd = [FFMPEG, "-y", "-i", str(final_out), "-i", str(bg_path),
-                   "-filter_complex", fc,
-                   "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
-                   "-c:a", "copy", str(wrap_out)]
-            run(cmd)
-            final_out.unlink()
-            shutil.move(str(wrap_out), str(final_out))
-            log(f"背景包装完成 → {final_name}")
-        elif bg_stored:
-            log(f"背景图文件未找到（{bg_stored}），跳过背景包装")
-
-    # v0.9.8: 去重处理（dedup effects）— mirror / brightness / contrast / saturation / lightScale
-    dedup_opts   = export_settings.get("dedupOpts") or {}
-    mirror_flip  = bool(dedup_opts.get("mirror") or export_settings.get("mirrorFlip", False))
-    light_scale  = bool(dedup_opts.get("lightScale") or export_settings.get("slightZoom", False))
-    brightness   = bool(dedup_opts.get("brightness", False))
-    contrast_en  = bool(dedup_opts.get("contrast", False))
-    saturation   = bool(dedup_opts.get("saturation", False))
-    if mirror_flip or light_scale or brightness or contrast_en or saturation:
-        dedup_vf = []
-        if mirror_flip:
-            dedup_vf.append("hflip")
-        if light_scale:
-            dedup_vf.append("scale=iw*1.03:ih*1.03:flags=lanczos,crop=iw/1.03:ih/1.03")
-        eq_params = []
-        if brightness:
-            eq_params.append("brightness=0.05")
-        if contrast_en:
-            eq_params.append("contrast=1.10")
-        if saturation:
-            eq_params.append("saturation=1.15")
-        if eq_params:
-            dedup_vf.append(f"eq={':'.join(eq_params)}")
-        dedup_out = OUTPUT_DIR / f"dedup_{final_name}"
-        cmd = [FFMPEG, "-y", "-i", str(final_out),
-               "-vf", ",".join(dedup_vf),
-               "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
-               "-c:a", "copy", str(dedup_out)]
-        run(cmd)
-        final_out.unlink()
-        shutil.move(str(dedup_out), str(final_out))
-        applied = [n for n, v in [("镜像",mirror_flip),("缩放",light_scale),("亮度",brightness),("对比度",contrast_en),("饱和度",saturation)] if v]
-        log(f"去重处理完成（{' '.join(applied)}）→ {final_name}")
-
-    # v0.9.8: 文字贴图烧录（sticker overlay）— isEmoji:false 用 drawtext 实现
-    stickers = data.get("stickers") or []
-    if not stickers:
-        stickers = export_settings.get("stickers") or []
-    text_stickers = [s for s in stickers if s and not s.get("isEmoji") and s.get("text")]
-    if text_stickers:
-        out_w2, out_h2 = get_video_dimensions(final_out)
-        stk_vf_parts = []
-        for stk in text_stickers:
-            x_pct = float(stk.get("x", 50))
-            y_pct = float(stk.get("y", 50))
-            scale_v = float(stk.get("scale", 1.0))
-            text_raw = stk.get("text", "")
-            text_esc = text_raw.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace(",", "\\,")
-            fs = max(16, int(24 * scale_v))
-            px = int(x_pct / 100.0 * out_w2)
-            py = int(y_pct / 100.0 * out_h2)
-            stk_vf_parts.append(
-                f"drawtext=text='{text_esc}':x={px}-tw/2:y={py}-th/2:"
-                f"fontsize={fs}:fontcolor=white:box=1:boxcolor=red@0.85:boxborderw=8"
-            )
-        if stk_vf_parts:
-            stk_out = OUTPUT_DIR / f"stk_{final_name}"
-            cmd = [FFMPEG, "-y", "-i", str(final_out),
-                   "-vf", ",".join(stk_vf_parts),
-                   "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
-                   "-c:a", "copy", str(stk_out)]
-            run(cmd)
-            final_out.unlink()
-            shutil.move(str(stk_out), str(final_out))
-            log(f"文字贴图烧录完成（{len(stk_vf_parts)} 个）→ {final_name}")
-    if any(s.get("isEmoji") for s in stickers):
-        log("提示：emoji 贴图因字体依赖暂不导出，如需导出请改用文字贴图。")
-    if any(s.get("type") == "image" for s in stickers):
-        log("提示：图片贴图导出待完善，本次不包含图片贴图。")
+    # v0.9.5h: 改善清晰度 —— 裁剪阶段已用 CRF 控制，合并 pass 用 preset medium 提升画质
 
     size_mb = final_out.stat().st_size / 1024 / 1024
     log(f"完成！输出文件: export_workspace/output/{final_name}  ({size_mb:.1f} MB)")
