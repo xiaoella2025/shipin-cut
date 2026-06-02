@@ -9193,6 +9193,15 @@ input[type=range] {
   color: #fca5a5;
 }
 .refine-tb-btn.danger:hover { background: rgba(239,68,68,.25); }
+/* v0.9.7: 自动对齐配音按钮（主流程，醒目） */
+.refine-tb-btn.align {
+  border-color: rgba(245,158,11,.6);
+  background: rgba(245,158,11,.16);
+  color: #fcd34d;
+  font-weight: 600;
+}
+.refine-tb-btn.align:hover:not(:disabled) { background: rgba(245,158,11,.3); }
+.refine-tb-btn:disabled { opacity: .55; cursor: default; }
 
 /* v0.9.2: summary script description */
 .refine-sc-desc {
@@ -10235,6 +10244,52 @@ input[type=range] {
   white-space: nowrap;
 }
 .refine-export-prep-btn:hover { background: rgba(16,185,129,.28); }
+
+/* v0.9.7: 精修页"导出当前成品视频"快捷按钮 */
+.refine-export-now-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 5px 13px;
+  border-radius: 6px;
+  border: 1px solid rgba(99,102,241,.55);
+  background: rgba(99,102,241,.2);
+  color: #c7d2fe;
+  cursor: pointer;
+  font-weight: 700;
+  transition: background .13s;
+  white-space: nowrap;
+}
+.refine-export-now-btn:hover:not(:disabled) { background: rgba(99,102,241,.36); }
+.refine-export-now-btn:disabled { opacity: .6; cursor: default; }
+.refine-export-now-msg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.refine-export-now-msg.loading { background: rgba(99,102,241,.14); color: #c7d2fe; border: 1px solid rgba(99,102,241,.3); }
+.refine-export-now-msg.success { background: rgba(16,185,129,.14); color: #6ee7b7; border: 1px solid rgba(16,185,129,.35); }
+.refine-export-now-msg.error   { background: rgba(239,68,68,.12);  color: #fca5a5; border: 1px solid rgba(239,68,68,.35); }
+.refine-export-now-close {
+  margin-left: auto;
+  background: none; border: none; cursor: pointer;
+  color: inherit; font-size: 16px; line-height: 1; opacity: .7; padding: 0 2px;
+}
+.refine-export-now-close:hover { opacity: 1; }
+.refine-export-now-spin {
+  width: 12px; height: 12px; flex-shrink: 0;
+  border: 2px solid rgba(199,210,254,.3);
+  border-top-color: #c7d2fe;
+  border-radius: 50%;
+  animation: refine-export-spin .7s linear infinite;
+}
+@keyframes refine-export-spin { to { transform: rotate(360deg); } }
 
 /* error fallback */
 .ep-error {

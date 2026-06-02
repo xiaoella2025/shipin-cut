@@ -1136,6 +1136,10 @@ export default function App() {
   // ── export-prep local export service (v0.9.1) ──
   const [epExportStatus, setEpExportStatus]     = useState('idle') // 'idle'|'loading'|'success'|'error'
   const [epExportMsg, setEpExportMsg]           = useState('')
+  // ── v0.9.7: refine-page quick export + subtitle auto-align ──
+  const [refineExportStatus, setRefineExportStatus] = useState('idle') // 'idle'|'loading'|'success'|'error'
+  const [refineExportMsg, setRefineExportMsg]       = useState('')
+  const [alignBusyId, setAlignBusyId]               = useState(null)   // compId currently aligning
 
   // ── step-2 refine (v0.7) ──
   const [refineCompId, setRefineCompId]         = useState(null)
@@ -2157,6 +2161,7 @@ export default function App() {
       reframe: null,  // v0.9.5: {enabled,aspect,scale,offsetX,offsetY} per-comp
       subtitleStyle: null,  // v0.9.5h4: per-comp subtitle style, null = use DEFAULT_SUB_STYLE
       stickers: null,  // v0.9.6: [{id,key,emoji,text,isEmoji,x,y,scale}] per-comp
+      subtitleAlign: null,  // v0.9.7: {status:'aligned',engine,alignedAt,message,mismatch}
       ...(existing||{}),
     }
   }
@@ -2204,8 +2209,74 @@ export default function App() {
     const dur = rc.voice?.duration || totalDuration || 60
     const subs = splitScriptToSubtitles(rc.summaryScript, dur)
     if (!subs.length) { showToast('字幕切分结果为空'); return }
-    updateRefinedComp(compId, {finalSubtitles: subs, finalSubtitlesSavedAt: null})
-    showToast(`已生成 ${subs.length} 句字幕，请检查后保存`)
+    // v0.9.7: 这是按字数粗切，未与配音对齐——清除对齐标记，提示用户去自动对齐
+    updateRefinedComp(compId, {finalSubtitles: subs, finalSubtitlesSavedAt: null, subtitleAlign: null})
+    showToast(`已粗略生成 ${subs.length} 句字幕（未与配音对齐），建议点击「自动对齐配音」`)
+  }
+
+  // v0.9.7: 用本条配音做本地语音识别，自动对齐字幕时间轴
+  async function alignSubtitles(compId, comp, rc) {
+    const voiceSrc = rc.voice || rc.voiceMeta
+    if (!voiceSrc || !(voiceSrc.storedFileName || voiceSrc.fileName)) {
+      showToast('请先导入本条配音，再自动对齐字幕。'); return
+    }
+    const hasSubs = rc.finalSubtitles && rc.finalSubtitles.length > 0
+    const hasScript = rc.summaryScript && rc.summaryScript.trim()
+    if (!hasSubs && !hasScript) {
+      showToast('请先保存最终字幕稿或生成成品字幕，再自动对齐。'); return
+    }
+    setAlignBusyId(compId)
+    showToast('正在分析本条配音并对齐字幕，请稍等……')
+    let result
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 10 * 60 * 1000)
+      const resp = await fetch('http://127.0.0.1:8765/align-subtitles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          compId: String(compId),
+          voice: {
+            fileName: voiceSrc.fileName || '',
+            storedFileName: voiceSrc.storedFileName || null,
+            originalName: voiceSrc.originalName || voiceSrc.fileName || '',
+          },
+          summaryScript: rc.summaryScript || '',
+          finalSubtitles: rc.finalSubtitles || null,
+        }),
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+      result = await resp.json()
+    } catch (e) {
+      setAlignBusyId(null)
+      if (e.name === 'AbortError') showToast('自动对齐超时，请尝试更短的配音或更小的模型。')
+      else if (e instanceof TypeError) showToast('自动对齐失败：本地导出服务未启动，请先启动本地导出服务。')
+      else showToast(`自动对齐失败：${e.message}`)
+      return
+    }
+    setAlignBusyId(null)
+    if (result.engine === 'unavailable') {
+      showToast(result.message || '当前未安装本地语音识别组件，无法自动对齐。')
+      return
+    }
+    if (!result.ok) {
+      showToast(result.error || '自动对齐失败，请检查本条配音文件是否已同步到本地服务。')
+      return
+    }
+    recordSubSnapshot(compId)
+    updateRefinedComp(compId, {
+      finalSubtitles: result.subtitles,
+      finalSubtitlesSavedAt: null,
+      subtitleAlign: {
+        status: 'aligned',
+        engine: result.engine || '',
+        alignedAt: new Date().toISOString(),
+        message: result.message || '',
+        mismatch: !!result.mismatch,
+      },
+    })
+    showToast(result.message || `已根据本条配音自动对齐 ${result.subtitles.length} 条字幕。`)
   }
 
   function updateSubText(compId, subId, text) {
@@ -2498,7 +2569,7 @@ export default function App() {
   }
 
   // v0.9.1: POST 当前草稿到本地导出服务
-  async function exportToLocalService(compId, comp) {
+  async function exportToLocalService(compId, comp, setStatus = setEpExportStatus, setMsg = setEpExportMsg) {
     if (!compId || !comp) return
     const rc = defaultRcFor(refinedComps[compId])
     const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
@@ -2565,8 +2636,8 @@ export default function App() {
       voiceDuration: voiceSrc ? voiceDuration : null,
       durationDiff,
     }
-    setEpExportStatus('loading')
-    setEpExportMsg('正在生成成品视频，请稍候...')
+    setStatus('loading')
+    setMsg('正在生成成品视频，请稍候...')
     let result
     try {
       const controller = new AbortController()
@@ -2581,23 +2652,57 @@ export default function App() {
       result = await resp.json()
     } catch (e) {
       const isConnRefused = e instanceof TypeError || (e.name === 'AbortError' && false)
-      setEpExportStatus('error')
+      setStatus('error')
       if (isConnRefused && !(e.name === 'AbortError')) {
-        setEpExportMsg('本地导出服务未启动。请先双击「启动本地导出服务.bat」，然后再点击「导出成品视频」。')
+        setMsg('本地导出服务未启动。请先双击「启动本地导出服务.bat」，然后再点击「导出成品视频」。')
       } else if (e.name === 'AbortError') {
-        setEpExportMsg('请求超时（超过10分钟），请检查服务窗口日志。')
+        setMsg('请求超时（超过10分钟），请检查服务窗口日志。')
       } else {
-        setEpExportMsg(`网络错误：${e.message}`)
+        setMsg(`网络错误：${e.message}`)
       }
       return
     }
     if (result.ok) {
-      setEpExportStatus('success')
-      setEpExportMsg(result.message || '生成成功！成品视频已保存到 export_workspace/output/')
+      setStatus('success')
+      setMsg(result.message || '生成成功！成品视频已保存到 export_workspace/output/')
     } else {
-      setEpExportStatus('error')
-      setEpExportMsg(result.error || '生成失败，请查看服务窗口日志。')
+      setStatus('error')
+      setMsg(result.error || '生成失败，请查看服务窗口日志。')
     }
+  }
+
+  // v0.9.7: 精修页快捷导出当前成品——复用 exportToLocalService，先做关键缺项检查
+  function exportCurrentFromRefine(compId, comp) {
+    if (!compId || !comp) return
+    const rc = defaultRcFor(refinedComps[compId])
+    const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
+    const { segments } = hasEditSegs
+      ? buildEditTimeline(rc.editSegs)
+      : buildDerivedTimeline(comp, rc.deletedSegIdxs, rc.speedMap)
+    if (!segments || segments.length === 0) {
+      setRefineExportStatus('error')
+      setRefineExportMsg('当前成品没有视频片段，无法导出。')
+      return
+    }
+    const voiceSrc = rc.voice || rc.voiceMeta
+    if (!voiceSrc || !(voiceSrc.storedFileName || voiceSrc.fileName)) {
+      setRefineExportStatus('error')
+      setRefineExportMsg('当前成品还没有本条配音，请先在配音区导入并同步配音后再导出。')
+      return
+    }
+    if (!voiceSrc.storedFileName) {
+      setRefineExportStatus('error')
+      setRefineExportMsg('本条配音尚未同步到本地服务，请在配音区重新导入/同步配音后再导出。')
+      return
+    }
+    // 软提示（不拦截导出）：贴图导出未闭环、字幕未自动对齐
+    if (rc.stickers && rc.stickers.length > 0) {
+      showToast('当前贴图导出仍在完善中，本次导出可能不包含贴图。')
+    }
+    if (rc.finalSubtitles && rc.finalSubtitles.length > 0 && rc.subtitleAlign?.status !== 'aligned') {
+      showToast('当前字幕尚未自动对齐配音，建议先点击「自动对齐配音」（仍可继续导出）。')
+    }
+    exportToLocalService(compId, comp, setRefineExportStatus, setRefineExportMsg)
   }
 
   // v0.7.6: Import refine plan from JSON file
@@ -3814,11 +3919,26 @@ export default function App() {
                     </button>
                     {planExportStatus&&<span className="refine-plan-io-status">{planExportStatus}</span>}
                     {planImportStatus&&<span className="refine-plan-io-status imported">{planImportStatus}</span>}
+                    <button className="refine-export-now-btn" disabled={refineExportStatus==='loading'}
+                      onClick={()=>{stopRefinePlay();exportCurrentFromRefine(comp.id,comp)}}
+                      title="用当前精修状态直接导出这一条成品视频到本地 output 目录">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      {refineExportStatus==='loading'?'导出中…':'导出当前成品视频'}
+                    </button>
                     <button className="refine-export-prep-btn" onClick={()=>{stopRefinePlay();setSubStep('export-prep')}}>
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
                       进入导出准备
                     </button>
                   </div>
+                  {refineExportStatus!=='idle'&&refineExportMsg&&(
+                    <div className={`refine-export-now-msg ${refineExportStatus}`}>
+                      {refineExportStatus==='loading'&&<span className="refine-export-now-spin"/>}
+                      {refineExportMsg}
+                      {refineExportStatus!=='loading'&&(
+                        <button className="refine-export-now-close" title="关闭" onClick={()=>{setRefineExportStatus('idle');setRefineExportMsg('')}}>×</button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* v0.7.6-hotfix: Plan import integrity panel */}
@@ -4272,14 +4392,21 @@ export default function App() {
                               <div className="refine-subs-status">
                                 {rc.finalSubtitles&&rc.finalSubtitles.length>0
                                   ?(rc.finalSubtitlesSavedAt
-                                    ?<span className="rs-status ok">成品字幕：已保存 {rc.finalSubtitles.length} 句</span>
-                                    :<span className="rs-status warn">成品字幕：{rc.finalSubtitles.length} 句（未保存）</span>)
+                                    ?<span className="rs-status ok">成品字幕：已保存 {rc.finalSubtitles.length} 句{rc.subtitleAlign?.status==='aligned'?' · 已自动对齐':''}</span>
+                                    :(rc.subtitleAlign?.status==='aligned'
+                                      ?<span className="rs-status warn">成品字幕：已自动对齐，未保存（{rc.finalSubtitles.length} 句）</span>
+                                      :<span className="rs-status warn">成品字幕：粗略生成，未与配音自动对齐（{rc.finalSubtitles.length} 句，未保存）</span>))
                                   :<span className="rs-status miss">成品字幕：最终导出使用，请先生成</span>}
                               </div>
                             </div>
                             <div className="refine-subs-toolbar">
                               <button className="refine-tb-btn primary" onClick={()=>handleGenerateSubs(comp.id,comp,rc)}>
                                 {rc.finalSubtitles&&rc.finalSubtitles.length>0?'重新生成':'从字幕稿生成'}
+                              </button>
+                              <button className="refine-tb-btn align" disabled={alignBusyId===comp.id}
+                                onClick={()=>alignSubtitles(comp.id,comp,rc)}
+                                title="用本条配音做本地语音识别，自动对齐字幕时间轴">
+                                {alignBusyId===comp.id?'对齐中…':'🎯 自动对齐配音'}
                               </button>
                               {rc.finalSubtitles&&rc.finalSubtitles.length>0&&<>
                                 <button className="refine-tb-btn" onClick={()=>clearSubPunct(comp.id)}>清理标点</button>

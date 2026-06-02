@@ -11,18 +11,22 @@ shipin-cut v0.9.3 — 本地导出服务
 import sys
 import json
 import re
+import shutil
+import tempfile
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-SCRIPT_DIR    = Path(__file__).resolve().parent
-WORKSPACE     = SCRIPT_DIR.parent / "export_workspace"
-DRAFTS_DIR    = WORKSPACE / "drafts"
-VIDEOS_DIR    = WORKSPACE / "videos"
-AUDIO_DIR     = WORKSPACE / "audio"
-EXPORT_SCRIPT = SCRIPT_DIR / "export_video.py"
-CURRENT_DRAFT = "web-export-current.json"
+SCRIPT_DIR     = Path(__file__).resolve().parent
+REPO_ROOT      = SCRIPT_DIR.parent
+WORKSPACE      = REPO_ROOT / "export_workspace"
+DRAFTS_DIR     = WORKSPACE / "drafts"
+VIDEOS_DIR     = WORKSPACE / "videos"
+AUDIO_DIR      = WORKSPACE / "audio"
+EXPORT_SCRIPT  = SCRIPT_DIR / "export_video.py"
+WHISPER_CONFIG = REPO_ROOT / "local-tools" / "whisper.config.json"
+CURRENT_DRAFT  = "web-export-current.json"
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -71,6 +75,161 @@ def parse_multipart(body, content_type):
     return fields, files
 
 
+# ── v0.9.7: 字幕↔配音自动对齐（本地 whisper.cpp，不接云 API）──────────────────────
+
+def check_whisper():
+    """
+    检测本地语音识别组件是否可用。
+    返回 (ok: bool, info: dict|None, reason: str)
+    info = {cli, model, language, threads}
+    """
+    if not WHISPER_CONFIG.exists():
+        return False, None, "未找到 local-tools/whisper.config.json 配置文件"
+    try:
+        cfg = json.loads(WHISPER_CONFIG.read_text(encoding="utf-8"))
+    except Exception as e:
+        return False, None, f"whisper 配置解析失败: {e}"
+    cli = (cfg.get("whisperCliPath") or "whisper-cli").strip()
+    model_raw = (cfg.get("modelPath") or "").strip()
+    if not model_raw:
+        return False, None, "whisper 配置缺少 modelPath"
+    model_path = Path(model_raw)
+    if not model_path.is_absolute():
+        model_path = (REPO_ROOT / model_raw)
+    # whisper-cli 可执行文件：PATH 中或显式路径存在
+    cli_ok = bool(shutil.which(cli)) or Path(cli).exists()
+    if not cli_ok:
+        return False, None, f"未找到本地语音识别组件 whisper-cli（配置: {cli}）"
+    if not model_path.exists():
+        return False, None, f"未找到 whisper 模型文件：{model_path}"
+    if not shutil.which("ffmpeg"):
+        return False, None, "未找到 ffmpeg，无法预处理配音音频"
+    return True, {
+        "cli": cli,
+        "model": str(model_path),
+        "language": cfg.get("language", "zh"),
+        "threads": int(cfg.get("threads", 4) or 4),
+    }, ""
+
+
+def _parse_srt(text):
+    """解析 SRT 文本 → [(start_sec, end_sec, text), ...]"""
+    segs = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        lines = [l for l in block.strip().splitlines()]
+        if len(lines) < 2:
+            continue
+        tl_idx = next((i for i, l in enumerate(lines) if "-->" in l), None)
+        if tl_idx is None:
+            continue
+        m = re.search(
+            r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)",
+            lines[tl_idx])
+        if not m:
+            continue
+        sh, sm, ss, sms, eh, em, es, ems = (int(x) for x in m.groups())
+        start = sh * 3600 + sm * 60 + ss + sms / 1000.0
+        end   = eh * 3600 + em * 60 + es + ems / 1000.0
+        txt = " ".join(lines[tl_idx + 1:]).strip()
+        if end > start:
+            segs.append((start, end, txt))
+    return segs
+
+
+def run_whisper(audio_path, info):
+    """把配音转 16k 单声道 WAV，调用 whisper-cli 识别，返回 [(start,end,text), ...]。"""
+    tmpdir = Path(tempfile.mkdtemp(prefix="align_"))
+    try:
+        wav = tmpdir / "audio16k.wav"
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(audio_path),
+             "-ar", "16000", "-ac", "1", str(wav)],
+            capture_output=True, check=True, timeout=300)
+        out_prefix = tmpdir / "out"
+        cmd = [info["cli"], "-m", info["model"], "-f", str(wav),
+               "-l", info["language"], "-t", str(info["threads"]),
+               "-osrt", "-of", str(out_prefix)]
+        subprocess.run(cmd, capture_output=True, check=True, timeout=600)
+        srt = out_prefix.with_suffix(".srt")
+        if not srt.exists():
+            return []
+        return _parse_srt(srt.read_text(encoding="utf-8", errors="replace"))
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _visible_len(s):
+    """字幕可见字符数（忽略空白与换行），最少 1。"""
+    return max(1, len(re.sub(r"\s+", "", s or "")))
+
+
+def _split_script_to_subs(script):
+    """没有 finalSubtitles 时，按标点/换行把字幕稿粗切成句（仅用于提供文本顺序）。"""
+    subs = []
+    for line in (script or "").strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        for part in re.split(r"(?<=[。！？；…])", line):
+            part = part.strip()
+            if not part:
+                continue
+            if len(part) > 20:
+                for sp in re.split(r"(?<=[，、：])", part):
+                    sp = sp.strip()
+                    while len(sp) > 20:
+                        subs.append(sp[:20]); sp = sp[20:]
+                    if sp:
+                        subs.append(sp)
+            else:
+                subs.append(part)
+    base = int(datetime.now().timestamp() * 1000)
+    return [{"id": f"sub-{base}-{i}", "start": 0, "end": 0, "text": t}
+            for i, t in enumerate(subs)]
+
+
+def align_subs_to_speech(user_subs, segs):
+    """
+    用 whisper 识别片段提供的真实时间轴，按字符占比把时间分配给用户字幕。
+    保留用户字幕文本，仅更新 start/end。比"按时长平均分配"更贴近真实配音节奏。
+    """
+    if not segs or not user_subs:
+        return None
+    seg_lens = [_visible_len(t) for (_, _, t) in segs]
+    total_chars = sum(seg_lens)
+    seg_start_c, c = [], 0
+    for L in seg_lens:
+        seg_start_c.append(c); c += L
+    speech_end = segs[-1][1]
+
+    def time_at(cp):
+        for i, (s, e, _) in enumerate(segs):
+            base_c, L = seg_start_c[i], seg_lens[i]
+            if cp <= base_c + L or i == len(segs) - 1:
+                frac = min(1.0, max(0.0, (cp - base_c) / L))
+                return s + (e - s) * frac
+        return speech_end
+
+    u_lens = [_visible_len(s.get("text", "")) for s in user_subs]
+    u_total = sum(u_lens) or 1
+    out, uc = [], 0
+    for i, sub in enumerate(user_subs):
+        cp_start = uc / u_total * total_chars
+        uc += u_lens[i]
+        cp_end = uc / u_total * total_chars
+        st = time_at(cp_start)
+        en = time_at(cp_end)
+        if en <= st:
+            en = st + 0.4
+        out.append({**sub, "start": round(st, 2), "end": round(en, 2)})
+    # 保证时间单调递增、不重叠
+    for i in range(1, len(out)):
+        if out[i]["start"] < out[i - 1]["end"]:
+            out[i]["start"] = out[i - 1]["end"]
+        if out[i]["end"] <= out[i]["start"]:
+            out[i]["end"] = round(out[i]["start"] + 0.4, 2)
+    return out
+
 
 class ExportHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -97,7 +256,10 @@ class ExportHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._json({"ok": True, "service": "shipin-cut-local-export", "version": "0.9.3"})
+            w_ok, _, w_reason = check_whisper()
+            self._json({"ok": True, "service": "shipin-cut-local-export",
+                        "version": "0.9.7",
+                        "whisper": {"available": w_ok, "reason": w_reason}})
         elif self.path == "/synced-files":
             VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
             AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -150,6 +312,96 @@ class ExportHandler(BaseHTTPRequestHandler):
             "size": size,
         })
 
+    def _handle_align(self):
+        """v0.9.7: 用本条配音做本地语音识别，对齐 finalSubtitles 的时间轴。"""
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        try:
+            data = json.loads(body)
+        except Exception as e:
+            self._json({"ok": False, "error": f"JSON 解析失败: {e}"})
+            return
+
+        # 1) 本地识别组件是否可用——不可用时明确告知，绝不假装对齐
+        ok, info, reason = check_whisper()
+        if not ok:
+            self._json({
+                "ok": False,
+                "engine": "unavailable",
+                "error": reason,
+                "message": f"当前未安装本地语音识别组件，无法自动对齐：{reason}",
+            })
+            return
+
+        # 2) 定位本条配音文件
+        voice = data.get("voice") or {}
+        names = [voice.get(k) for k in ("storedFileName", "fileName", "originalName")
+                 if isinstance(voice, dict) and voice.get(k)]
+        AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        audio_map = {f.name.lower(): f for f in AUDIO_DIR.iterdir()
+                     if f.is_file() and f.suffix.lower() in AUDIO_EXTS}
+        apath = None
+        for n in names:
+            if n and n.lower() in audio_map:
+                apath = audio_map[n.lower()]
+                break
+        if apath is None:
+            self._json({"ok": False,
+                        "error": "未找到本条配音文件，请先在精修页导入并同步配音到本地服务。"})
+            return
+
+        # 3) 准备用户字幕文本（优先 finalSubtitles，其次字幕稿）
+        user_subs = data.get("finalSubtitles") or []
+        from_script = False
+        if not user_subs:
+            script = (data.get("summaryScript") or "").strip()
+            if not script:
+                self._json({"ok": False,
+                            "error": "没有成品字幕或字幕稿，无法对齐。请先保存最终字幕稿或生成成品字幕。"})
+                return
+            user_subs = _split_script_to_subs(script)
+            from_script = True
+            if not user_subs:
+                self._json({"ok": False, "error": "字幕稿切分结果为空，无法对齐。"})
+                return
+
+        # 4) 本地识别
+        print(f"[服务] 自动对齐：识别配音 {apath.name} ...", flush=True)
+        try:
+            segs = run_whisper(apath, info)
+        except subprocess.TimeoutExpired:
+            self._json({"ok": False, "error": "语音识别超时，请尝试更短的配音或更小的模型。"})
+            return
+        except Exception as e:
+            self._json({"ok": False, "error": f"语音识别失败：{e}"})
+            return
+        if not segs:
+            self._json({"ok": False,
+                        "error": "语音识别未得到有效结果，请检查本条配音文件是否完好。"})
+            return
+
+        aligned = align_subs_to_speech(user_subs, segs)
+        if not aligned:
+            self._json({"ok": False, "error": "对齐失败：识别结果与字幕无法匹配。"})
+            return
+
+        mismatch = (len(segs) != len(user_subs))
+        msg = f"已根据本条配音自动对齐 {len(aligned)} 条字幕。"
+        if from_script:
+            msg += " （字幕由字幕稿切分生成）"
+        if mismatch:
+            msg += " 识别段数与字幕句数不完全一致，已按顺序自动匹配，可少量微调。"
+        engine = f"whisper.cpp({Path(info['model']).name})"
+        print(f"[服务] 自动对齐完成：{len(aligned)} 条，引擎 {engine}", flush=True)
+        self._json({
+            "ok": True,
+            "subtitles": aligned,
+            "engine": engine,
+            "mismatch": mismatch,
+            "segCount": len(segs),
+            "message": msg,
+        })
+
     def do_POST(self):
         if self.path == "/upload-video":
             self._handle_upload("video")
@@ -159,6 +411,9 @@ class ExportHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/upload-bgm":
             self._handle_upload("bgm")
+            return
+        if self.path == "/align-subtitles":
+            self._handle_align()
             return
         if self.path != "/export":
             self._json({"ok": False, "error": "not found"}, 404)

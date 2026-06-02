@@ -32,3 +32,4 @@ export_workspace/output/*
 export_workspace/temp/*
 !export_workspace/temp/.gitkeep
 export_workspace/drafts/*.json
+.claude/
