@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-shipin-cut v0.9.4 — 本地成品视频生成脚本
+shipin-cut v0.9.8 — 本地成品视频生成脚本
 用法: python export_video.py [草稿JSON路径]
      不传参数则自动扫描 export_workspace/drafts/ 下最新的 JSON
-依赖: Python 3.8+, FFmpeg（ffmpeg/ffprobe 必须在 PATH 中）
+依赖: Python 3.8+, FFmpeg（优先检测 local-tools/ffmpeg/，其次 PATH）
 """
 
 import sys
@@ -16,16 +16,30 @@ from pathlib import Path
 from datetime import datetime
 
 # ── 路径配置 ──────────────────────────────────────────────────────────────────
-SCRIPT_DIR = Path(__file__).resolve().parent
-WORKSPACE  = SCRIPT_DIR.parent / "export_workspace"
-DRAFTS_DIR = WORKSPACE / "drafts"
-VIDEOS_DIR = WORKSPACE / "videos"
-AUDIO_DIR  = WORKSPACE / "audio"
-OUTPUT_DIR = WORKSPACE / "output"
-TEMP_DIR   = WORKSPACE / "temp"
+SCRIPT_DIR  = Path(__file__).resolve().parent
+REPO_ROOT   = SCRIPT_DIR.parent
+WORKSPACE   = REPO_ROOT / "export_workspace"
+DRAFTS_DIR  = WORKSPACE / "drafts"
+VIDEOS_DIR  = WORKSPACE / "videos"
+AUDIO_DIR   = WORKSPACE / "audio"
+IMAGES_DIR  = WORKSPACE / "images"   # v0.9.8: background images & sticker images
+OUTPUT_DIR  = WORKSPACE / "output"
+TEMP_DIR    = WORKSPACE / "temp"
 
-for d in (DRAFTS_DIR, VIDEOS_DIR, AUDIO_DIR, OUTPUT_DIR, TEMP_DIR):
+for d in (DRAFTS_DIR, VIDEOS_DIR, AUDIO_DIR, IMAGES_DIR, OUTPUT_DIR, TEMP_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+# ── v0.9.8: 优先使用项目内 local-tools/ffmpeg/ 中的可执行文件 ────────────────
+def _find_local_bin(names, subdir):
+    """在 local-tools/<subdir>/ 中按名称列表查找可执行文件。"""
+    for name in names:
+        p = REPO_ROOT / "local-tools" / subdir / name
+        if p.exists():
+            return str(p)
+    return None
+
+FFMPEG  = _find_local_bin(["ffmpeg.exe", "ffmpeg"],   "ffmpeg") or "ffmpeg"
+FFPROBE = _find_local_bin(["ffprobe.exe", "ffprobe"],  "ffmpeg") or "ffprobe"
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 def log(msg):
@@ -35,11 +49,13 @@ def err(msg):
     print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
 
 def check_ffmpeg():
-    for tool in ("ffmpeg", "ffprobe"):
-        if not shutil.which(tool):
-            err(f"找不到 {tool}，请确认 FFmpeg 已安装并加入 PATH")
+    for label, path in [("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)]:
+        found = Path(path).exists() if path != label else bool(shutil.which(path))
+        if not found:
+            err(f"找不到 {label}（检查路径: {path}）。请把 ffmpeg/ffprobe 放入 local-tools/ffmpeg/ 或确认系统 PATH 中已安装。")
             sys.exit(1)
-    log("FFmpeg 检测通过")
+    src = "local-tools/ffmpeg/" if FFMPEG != "ffmpeg" else "系统 PATH"
+    log(f"FFmpeg 检测通过（{src}）")
 
 def run(cmd, check=True, capture=False):
     """运行 FFmpeg 命令，默认失败时抛出异常"""
@@ -196,7 +212,7 @@ def cut_segment(seg, video_path, out_path, speed=1.0, crf=20):
         vf = f"setpts={pts_val:.6f}*PTS"
 
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-ss", str(start),
         "-t",  str(dur),
         "-i",  video_path,
@@ -239,7 +255,7 @@ def concat_segments(clip_paths, out_path):
         for p in clip_paths:
             f.write(f"file '{p.resolve()}'\n")
     run([
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-f", "concat",
         "-safe", "0",
         "-i", list_file,
@@ -255,7 +271,7 @@ def mux_voice(video_path, voice_path, out_path, audio_policy):
         log("提示：当前 v0.9 暂不混合原声，仍使用最终语音作为主音轨。")
 
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-i", video_path,
         "-i", voice_path,
         "-map", "0:v:0",
@@ -273,7 +289,7 @@ def get_video_dimensions(video_path):
     """用 ffprobe 获取视频宽高，失败时返回 (1920, 1080)"""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+            [FFPROBE, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height",
              "-of", "csv=s=x:p=0", str(video_path)],
             capture_output=True, text=True, check=True
@@ -331,7 +347,7 @@ def reframe_video(in_path, out_path, W, H, scale=1.0, offset_x=0.0, offset_y=0.0
         f"crop={W}:{H}:{int(cx)}:{int(cy)}"
     )
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-i", str(in_path),
         "-vf", vf,
         "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
@@ -468,6 +484,21 @@ def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_
         margin_v = margin_v + cover_px
     # middle: marginV ignored by ASS
 
+    # v0.9.6/v0.9.8: custom drag position → \pos() override tag
+    sub_x_pct = st.get("subtitleX")  # None or 0–100 percentage of video width
+    sub_y_pct = st.get("subtitleY")  # None or 0–100 percentage of video height
+    use_custom_pos = (sub_x_pct is not None and sub_y_pct is not None)
+    if use_custom_pos:
+        try:
+            _px = int(float(sub_x_pct) / 100 * 1080)
+            _py = int(float(sub_y_pct) / 100 * play_res_y)
+            custom_pos_tag = f"{{\\an5\\pos({_px},{_py})}}"
+        except (TypeError, ValueError):
+            use_custom_pos = False
+            custom_pos_tag = ""
+    else:
+        custom_pos_tag = ""
+
     header = (
         "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\nScaledBorderAndShadow: yes\n"
         f"PlayResX: 1080\nPlayResY: {play_res_y}\n\n"
@@ -488,7 +519,7 @@ def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_
             start = _format_ass_time(sub['start'])
             end   = _format_ass_time(sub['end'])
             text  = sub['text'].replace('\n', '\\N')
-            f.write(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n")
+            f.write(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{custom_pos_tag}{text}\n")
 
     return out_path
 
@@ -510,7 +541,7 @@ def burn_sub_and_cover(in_path, out_path, sub_name=None, cover_pct=0.0, crf=20):
 
     vf = ",".join(vf_parts)
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-i", str(in_path.resolve()),
         "-vf", vf,
         "-c:v", "libx264",
@@ -711,7 +742,7 @@ def main():
             bgm_out = OUTPUT_DIR / f"bgm_{final_name}"
             log(f"正在混合背景音乐（音量 {int(bgm_volume*100)}%）: {bgm_path.name}")
             cmd = [
-                "ffmpeg", "-y",
+                FFMPEG, "-y",
                 "-i", str(final_out),
                 "-i", str(bgm_path),
                 "-filter_complex",
@@ -726,6 +757,109 @@ def main():
             final_out.unlink()
             shutil.move(str(bgm_out), str(final_out))
             log(f"背景音乐混合完成 → {final_name}")
+
+    # v0.9.8: 背景包装（background wrap）— 在视频主体下方叠加背景图
+    bg_wrap = export_settings.get("backgroundWrap") or {}
+    if bg_wrap.get("enabled"):
+        bg_stored = (bg_wrap.get("storedFileName") or "").strip()
+        bg_path = IMAGES_DIR / bg_stored if bg_stored else None
+        if bg_path and bg_path.exists():
+            video_scale = float(bg_wrap.get("videoScale", 1.0))
+            video_x_pct = float(bg_wrap.get("videoX", 0))
+            video_y_pct = float(bg_wrap.get("videoY", 0))
+            wrap_out = OUTPUT_DIR / f"bgwrap_{final_name}"
+            out_w, out_h = get_video_dimensions(final_out)
+            vid_w = out_w * video_scale
+            vid_h = out_h * video_scale
+            # ensure even dimensions
+            vid_w = int(vid_w) - (int(vid_w) % 2)
+            vid_h = int(vid_h) - (int(vid_h) % 2)
+            ox = int((out_w - vid_w) / 2 + video_x_pct / 100.0 * out_w)
+            oy = int((out_h - vid_h) / 2 + video_y_pct / 100.0 * out_h)
+            fc = (
+                f"[1:v]scale={out_w}:{out_h},setsar=1[bg];"
+                f"[0:v]scale={vid_w}:{vid_h}[vid];"
+                f"[bg][vid]overlay=x={ox}:y={oy}"
+            )
+            cmd = [FFMPEG, "-y", "-i", str(final_out), "-i", str(bg_path),
+                   "-filter_complex", fc,
+                   "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
+                   "-c:a", "copy", str(wrap_out)]
+            run(cmd)
+            final_out.unlink()
+            shutil.move(str(wrap_out), str(final_out))
+            log(f"背景包装完成 → {final_name}")
+        elif bg_stored:
+            log(f"背景图文件未找到（{bg_stored}），跳过背景包装")
+
+    # v0.9.8: 去重处理（dedup effects）— mirror / brightness / contrast / saturation / lightScale
+    dedup_opts   = export_settings.get("dedupOpts") or {}
+    mirror_flip  = bool(dedup_opts.get("mirror") or export_settings.get("mirrorFlip", False))
+    light_scale  = bool(dedup_opts.get("lightScale") or export_settings.get("slightZoom", False))
+    brightness   = bool(dedup_opts.get("brightness", False))
+    contrast_en  = bool(dedup_opts.get("contrast", False))
+    saturation   = bool(dedup_opts.get("saturation", False))
+    if mirror_flip or light_scale or brightness or contrast_en or saturation:
+        dedup_vf = []
+        if mirror_flip:
+            dedup_vf.append("hflip")
+        if light_scale:
+            dedup_vf.append("scale=iw*1.03:ih*1.03:flags=lanczos,crop=iw/1.03:ih/1.03")
+        eq_params = []
+        if brightness:
+            eq_params.append("brightness=0.05")
+        if contrast_en:
+            eq_params.append("contrast=1.10")
+        if saturation:
+            eq_params.append("saturation=1.15")
+        if eq_params:
+            dedup_vf.append(f"eq={':'.join(eq_params)}")
+        dedup_out = OUTPUT_DIR / f"dedup_{final_name}"
+        cmd = [FFMPEG, "-y", "-i", str(final_out),
+               "-vf", ",".join(dedup_vf),
+               "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
+               "-c:a", "copy", str(dedup_out)]
+        run(cmd)
+        final_out.unlink()
+        shutil.move(str(dedup_out), str(final_out))
+        applied = [n for n, v in [("镜像",mirror_flip),("缩放",light_scale),("亮度",brightness),("对比度",contrast_en),("饱和度",saturation)] if v]
+        log(f"去重处理完成（{' '.join(applied)}）→ {final_name}")
+
+    # v0.9.8: 文字贴图烧录（sticker overlay）— isEmoji:false 用 drawtext 实现
+    stickers = data.get("stickers") or []
+    if not stickers:
+        stickers = export_settings.get("stickers") or []
+    text_stickers = [s for s in stickers if s and not s.get("isEmoji") and s.get("text")]
+    if text_stickers:
+        out_w2, out_h2 = get_video_dimensions(final_out)
+        stk_vf_parts = []
+        for stk in text_stickers:
+            x_pct = float(stk.get("x", 50))
+            y_pct = float(stk.get("y", 50))
+            scale_v = float(stk.get("scale", 1.0))
+            text_raw = stk.get("text", "")
+            text_esc = text_raw.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace(",", "\\,")
+            fs = max(16, int(24 * scale_v))
+            px = int(x_pct / 100.0 * out_w2)
+            py = int(y_pct / 100.0 * out_h2)
+            stk_vf_parts.append(
+                f"drawtext=text='{text_esc}':x={px}-tw/2:y={py}-th/2:"
+                f"fontsize={fs}:fontcolor=white:box=1:boxcolor=red@0.85:boxborderw=8"
+            )
+        if stk_vf_parts:
+            stk_out = OUTPUT_DIR / f"stk_{final_name}"
+            cmd = [FFMPEG, "-y", "-i", str(final_out),
+                   "-vf", ",".join(stk_vf_parts),
+                   "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
+                   "-c:a", "copy", str(stk_out)]
+            run(cmd)
+            final_out.unlink()
+            shutil.move(str(stk_out), str(final_out))
+            log(f"文字贴图烧录完成（{len(stk_vf_parts)} 个）→ {final_name}")
+    if any(s.get("isEmoji") for s in stickers):
+        log("提示：emoji 贴图因字体依赖暂不导出，如需导出请改用文字贴图。")
+    if any(s.get("type") == "image" for s in stickers):
+        log("提示：图片贴图导出待完善，本次不包含图片贴图。")
 
     size_mb = final_out.stat().st_size / 1024 / 1024
     log(f"完成！输出文件: export_workspace/output/{final_name}  ({size_mb:.1f} MB)")

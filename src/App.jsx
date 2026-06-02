@@ -985,6 +985,126 @@ function VideoOverviewCard({ video, analysis, vidIdx, isActive, onSelect }) {
   )
 }
 
+// v0.9.8: Export pre-check modal ─────────────────────────────────────────────
+function ExportCheckModal({ rc, comp, sourceVideos, onClose, onConfirm, exporting }) {
+  const voice = rc.voice || rc.voiceMeta
+  const stickers = rc.stickers || []
+  const dedup = rc.dedupOpts || {}
+  const bw = rc.backgroundWrap || {}
+  const dedupCount = Object.values(dedup).filter(Boolean).length
+  const checks = []
+
+  // ── 强拦截项 ──────────────────────────────────────────────────────────────
+  const hasSegs = !!(rc.editSegs?.length > 0 ||
+    (comp?.segments?.length > 0 &&
+     (rc.deletedSegIdxs?.length || 0) < (comp?.segments?.length || 0)))
+  checks.push({
+    type: hasSegs ? 'ok' : 'error',
+    label: '视频片段',
+    detail: hasSegs ? `${comp?.segments?.length || 0} 个片段已就绪` : '无视频片段，无法导出',
+  })
+
+  const voiceOk = !!(voice?.storedFileName)
+  const voiceWarn = !!(voice && !voice.storedFileName)
+  checks.push({
+    type: voiceOk ? 'ok' : voiceWarn ? 'error' : 'error',
+    label: '本条配音',
+    detail: voiceOk ? `已同步 · ${voice.originalName || voice.fileName || ''}` :
+            voiceWarn ? '配音未同步到本地服务，请重新导入配音' :
+            '未导入本条配音，无法导出',
+  })
+
+  // ── 软提示项（不拦截） ────────────────────────────────────────────────────
+  const hasFinalSubs = !!(rc.finalSubtitles?.length > 0)
+  const subsSaved = !!rc.finalSubtitlesSavedAt
+  const subsAligned = rc.subtitleAlign?.status === 'aligned'
+  if (!hasFinalSubs) {
+    checks.push({ type: 'warn', label: '成品字幕', detail: '尚未生成成品字幕，将按字幕稿粗切导出' })
+  } else if (!subsSaved) {
+    checks.push({ type: 'warn', label: '成品字幕', detail: `${rc.finalSubtitles.length} 句（未保存），建议先保存` })
+  } else if (!subsAligned) {
+    checks.push({ type: 'warn', label: '成品字幕', detail: `已保存 ${rc.finalSubtitles.length} 句，但未自动对齐配音` })
+  } else {
+    checks.push({ type: 'ok', label: '成品字幕', detail: `已保存 ${rc.finalSubtitles.length} 句 · 已自动对齐配音` })
+  }
+
+  checks.push({
+    type: 'ok', label: '字幕样式',
+    detail: rc.subtitleStyle ? '已自定义样式' : '默认样式',
+  })
+
+  const rf = rc.reframe
+  checks.push({
+    type: 'ok', label: '取景',
+    detail: rf?.enabled ? `${rf.aspect} · 缩放 ${(rf.scale * 100).toFixed(0)}%` : '默认（保留原比例）',
+  })
+
+  if (stickers.length > 0) {
+    const textCount = stickers.filter(s => !s.isEmoji && s.text).length
+    const emojiCount = stickers.filter(s => s.isEmoji).length
+    const imgCount = stickers.filter(s => s.type === 'image').length
+    const parts = []
+    if (textCount) parts.push(`文字 ${textCount} 个（可导出）`)
+    if (emojiCount) parts.push(`emoji ${emojiCount} 个（暂不导出，字体依赖）`)
+    if (imgCount)   parts.push(`图片 ${imgCount} 个（暂不导出，待完善）`)
+    checks.push({ type: emojiCount > 0 || imgCount > 0 ? 'warn' : 'ok', label: '贴图贴纸', detail: parts.join(' · ') })
+  } else {
+    checks.push({ type: 'ok', label: '贴图贴纸', detail: '无' })
+  }
+
+  if (dedupCount > 0) {
+    const labels = Object.entries(dedup).filter(([,v])=>v).map(([k])=>({mirror:'镜像',brightness:'亮度',contrast:'对比度',saturation:'饱和度',lightScale:'缩放'}[k]||k)).join('、')
+    checks.push({ type: 'ok', label: '去重包装', detail: `已启用 ${dedupCount} 项：${labels}` })
+  } else {
+    checks.push({ type: 'ok', label: '去重包装', detail: '未启用' })
+  }
+
+  if (bw.enabled) {
+    checks.push({
+      type: bw.storedFileName ? 'ok' : 'warn',
+      label: '背景包装',
+      detail: bw.storedFileName ? `已导入 · 位移 ${bw.videoX||0}% / ${bw.videoY||0}%` : '已启用但背景图未同步到本地服务',
+    })
+  } else {
+    checks.push({ type: 'ok', label: '背景包装', detail: '未启用' })
+  }
+
+  const hasBlocker = checks.some(c => c.type === 'error')
+  const ICON = { ok: '✅', warn: '⚠️', error: '❌' }
+
+  return (
+    <div className="ecm-overlay" onClick={onClose}>
+      <div className="ecm-panel" onClick={e => e.stopPropagation()}>
+        <div className="ecm-header">
+          <span className="ecm-title">导出前检查</span>
+          <span className="ecm-comp-name">{comp?.name || ''}</span>
+          <button className="ecm-close" onClick={onClose}>×</button>
+        </div>
+        <div className="ecm-list">
+          {checks.map((c, i) => (
+            <div key={i} className={`ecm-row ${c.type}`}>
+              <span className="ecm-ico">{ICON[c.type]}</span>
+              <span className="ecm-label">{c.label}</span>
+              <span className="ecm-detail">{c.detail}</span>
+            </div>
+          ))}
+        </div>
+        {hasBlocker && (
+          <div className="ecm-blocker-hint">
+            ❌ 有关键项未就绪，请返回精修页处理后再导出。
+          </div>
+        )}
+        <div className="ecm-actions">
+          <button className="ecm-btn-cancel" onClick={onClose}>返回精修继续修改</button>
+          <button className="ecm-btn-confirm" disabled={hasBlocker || exporting} onClick={onConfirm}>
+            {exporting ? '导出中…' : '继续导出当前成品'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const REFRAME_ASPECTS = [
   {key:'保留原比例', label:'原比例', ratio:null},
   {key:'16:9', label:'16:9 横屏', ratio:16/9},
@@ -1140,6 +1260,10 @@ export default function App() {
   const [refineExportStatus, setRefineExportStatus] = useState('idle') // 'idle'|'loading'|'success'|'error'
   const [refineExportMsg, setRefineExportMsg]       = useState('')
   const [alignBusyId, setAlignBusyId]               = useState(null)   // compId currently aligning
+  // ── v0.9.8: export pre-check modal + per-comp panels ──
+  const [showExportCheck, setShowExportCheck]       = useState(false)
+  const [exportCheckComp, setExportCheckComp]       = useState(null)   // {comp, rc} snapshot
+  const [showBgWrapPanel, setShowBgWrapPanel]       = useState(false)
 
   // ── step-2 refine (v0.7) ──
   const [refineCompId, setRefineCompId]         = useState(null)
@@ -1252,6 +1376,7 @@ export default function App() {
   const rfDraggedRef = useRef(false)  // v0.9.5h: suppress click after reframe drag
   const subEditSnapRef = useRef(null) // v0.9.5h2: tracks focused subtitle to snapshot once per focus
   const subDragRef = useRef(false)    // v0.9.6: true while subtitle overlay is being dragged
+  const bgWrapInputRef = useRef(null) // v0.9.8: background image file input
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -2162,6 +2287,8 @@ export default function App() {
       subtitleStyle: null,  // v0.9.5h4: per-comp subtitle style, null = use DEFAULT_SUB_STYLE
       stickers: null,  // v0.9.6: [{id,key,emoji,text,isEmoji,x,y,scale}] per-comp
       subtitleAlign: null,  // v0.9.7: {status:'aligned',engine,alignedAt,message,mismatch}
+      dedupOpts: null,      // v0.9.8: per-comp {mirror,brightness,contrast,saturation,lightScale}
+      backgroundWrap: null, // v0.9.8: {enabled,imageUrl,imageFileName,storedFileName,videoScale,videoX,videoY}
       ...(existing||{}),
     }
   }
@@ -2354,6 +2481,43 @@ export default function App() {
   }
   function deleteSticker(compId, sid) {
     updateRefinedComp(compId, { stickers: getCompStickers(compId).filter(s => s.id!==sid) })
+  }
+
+  // v0.9.8: per-comp dedup helpers
+  const COMP_DEDUP_DEFAULT = { mirror: false, brightness: false, contrast: false, saturation: false, lightScale: false }
+  function getCompDedup(compId) {
+    return { ...COMP_DEDUP_DEFAULT, ...(refinedComps[compId]?.dedupOpts || {}) }
+  }
+  function toggleCompDedup(compId, key) {
+    const cur = getCompDedup(compId)
+    updateRefinedComp(compId, { dedupOpts: { ...cur, [key]: !cur[key] } })
+  }
+
+  // v0.9.8: per-comp background wrap helpers
+  const BG_WRAP_DEFAULT = { enabled: false, imageUrl: null, imageFileName: null, storedFileName: null, videoScale: 1.0, videoX: 0, videoY: 0 }
+  function getCompBgWrap(compId) {
+    return { ...BG_WRAP_DEFAULT, ...(refinedComps[compId]?.backgroundWrap || {}) }
+  }
+  function setCompBgWrap(compId, updates) {
+    updateRefinedComp(compId, { backgroundWrap: { ...getCompBgWrap(compId), ...updates } })
+  }
+  async function importBgWrapFile(compId, file) {
+    if (!file) return
+    const url = URL.createObjectURL(file)
+    let synced = false, storedFileName = null
+    try {
+      const r = await uploadToLocalService('/upload-image', file, file.name, {compId: String(compId)})
+      synced = true; storedFileName = r.fileName
+    } catch(e) { /* service may be down - still allow preview */ }
+    setCompBgWrap(compId, {
+      enabled: true,
+      imageUrl: url,
+      imageFileName: file.name,
+      storedFileName,
+      synced,
+    })
+    if (!synced) showToast('背景图已导入（仅预览）；本地导出服务未启动，请启动后再导出')
+    else showToast('背景图已导入并同步到本地导出服务')
   }
 
   // v0.9.5h2: subtitle undo helpers
@@ -2569,7 +2733,7 @@ export default function App() {
   }
 
   // v0.9.1: POST 当前草稿到本地导出服务
-  async function exportToLocalService(compId, comp, setStatus = setEpExportStatus, setMsg = setEpExportMsg) {
+  async function exportToLocalService(compId, comp, setStatus = setEpExportStatus, setMsg = setEpExportMsg, dedupOverride = null) {
     if (!compId || !comp) return
     const rc = defaultRcFor(refinedComps[compId])
     const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
@@ -2606,10 +2770,21 @@ export default function App() {
       voice: exportedVoice,
       exportSettings: {
         aspectRatio: ratio, resolution: exportRes, fps: exportFps,
-        cropEdge: dedup.crop||false, slightZoom: dedup.scale||false,
-        mirrorFlip: dedup.mirror||false, speedProcess: dedup.speed||false,
-        backgroundBase: dedup.bgImage||false, visiblePip: dedup.picInPic||false,
-        subtitleJitter: dedup.subDistort||false, endCardImage: dedup.endImage||false,
+        // v0.9.8: per-comp dedup overrides global if provided
+        ...(dedupOverride
+          ? {
+              dedupOpts: dedupOverride,
+              mirrorFlip: !!(dedupOverride.mirror), slightZoom: !!(dedupOverride.lightScale),
+              cropEdge: false, speedProcess: false, backgroundBase: false,
+              visiblePip: false, subtitleJitter: false, endCardImage: false,
+            }
+          : {
+              cropEdge: dedup.crop||false, slightZoom: dedup.scale||false,
+              mirrorFlip: dedup.mirror||false, speedProcess: dedup.speed||false,
+              backgroundBase: dedup.bgImage||false, visiblePip: dedup.picInPic||false,
+              subtitleJitter: dedup.subDistort||false, endCardImage: dedup.endImage||false,
+              dedupOpts: null,
+            }),
         keepOriginalAudio: keepAudio, backgroundMusic: addMusic,
         autoSubtitle: autoSub, subtitlePosition: subPos, mixStrength: intensity,
         burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
@@ -2617,9 +2792,11 @@ export default function App() {
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
         stickers: rc.stickers || [],
         subtitleStyle: getCompSubStyle(compId),
+        backgroundWrap: rc.backgroundWrap || { enabled: false },
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
         exportQuality: exportQuality,
       },
+      stickers: rc.stickers || [],
       sourceVideos: uploadedVideos.map((v, idx) => ({
         index: idx, fileName: v.storedFileName || v.name, originalName: v.name,
         storedFileName: v.storedFileName || null, synced: !!v.synced, duration: v.dur,
@@ -2671,38 +2848,19 @@ export default function App() {
     }
   }
 
-  // v0.9.7: 精修页快捷导出当前成品——复用 exportToLocalService，先做关键缺项检查
+  // v0.9.8: 精修页"导出当前成品视频" → 先弹导出前检查弹窗
   function exportCurrentFromRefine(compId, comp) {
     if (!compId || !comp) return
+    setExportCheckComp({ compId, comp })
+    setShowExportCheck(true)
+  }
+
+  // 用户在检查弹窗点击"继续导出"后实际执行的导出
+  function doConfirmedExport(compId, comp) {
     const rc = defaultRcFor(refinedComps[compId])
-    const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
-    const { segments } = hasEditSegs
-      ? buildEditTimeline(rc.editSegs)
-      : buildDerivedTimeline(comp, rc.deletedSegIdxs, rc.speedMap)
-    if (!segments || segments.length === 0) {
-      setRefineExportStatus('error')
-      setRefineExportMsg('当前成品没有视频片段，无法导出。')
-      return
-    }
-    const voiceSrc = rc.voice || rc.voiceMeta
-    if (!voiceSrc || !(voiceSrc.storedFileName || voiceSrc.fileName)) {
-      setRefineExportStatus('error')
-      setRefineExportMsg('当前成品还没有本条配音，请先在配音区导入并同步配音后再导出。')
-      return
-    }
-    if (!voiceSrc.storedFileName) {
-      setRefineExportStatus('error')
-      setRefineExportMsg('本条配音尚未同步到本地服务，请在配音区重新导入/同步配音后再导出。')
-      return
-    }
-    // 软提示（不拦截导出）：贴图导出未闭环、字幕未自动对齐
-    if (rc.stickers && rc.stickers.length > 0) {
-      showToast('当前贴图导出仍在完善中，本次导出可能不包含贴图。')
-    }
-    if (rc.finalSubtitles && rc.finalSubtitles.length > 0 && rc.subtitleAlign?.status !== 'aligned') {
-      showToast('当前字幕尚未自动对齐配音，建议先点击「自动对齐配音」（仍可继续导出）。')
-    }
-    exportToLocalService(compId, comp, setRefineExportStatus, setRefineExportMsg)
+    const dedupPerComp = rc.dedupOpts && Object.values(rc.dedupOpts).some(Boolean)
+      ? rc.dedupOpts : null
+    exportToLocalService(compId, comp, setRefineExportStatus, setRefineExportMsg, dedupPerComp)
   }
 
   // v0.7.6: Import refine plan from JSON file
@@ -3193,7 +3351,7 @@ export default function App() {
           <div className="logo-text"><span className="logo-title">视频混剪工具</span><span className="logo-ver">v0.4</span></div>
         </div>
         <nav className="step-nav">
-          {[{n:1,label:'素材准备'},{n:2,label:'字幕分段'},{n:3,label:'预览导出'}].flatMap(({n,label},i)=>{
+          {[{n:1,label:'素材准备'},{n:2,label:'字幕分段'},{n:3,label:'精修导出'}].flatMap(({n,label},i)=>{
             const isActive=step===n, isDone=step>n, isLocked=n===3&&!isGenerated&&step<3
             return [
               i>0&&<div key={`sep-${n}`} className={`step-nav-sep ${isDone?'done':''}`}/>,
@@ -3887,9 +4045,26 @@ export default function App() {
                 {/* Hidden voice file input */}
                 <input type="file" accept="audio/*" style={{display:'none'}} ref={refineVoiceInputRef}
                   onChange={e=>{ const f=e.target.files?.[0]; if(f) importVoiceFile(comp.id,f); e.target.value='' }} />
+                {/* Hidden background image input */}
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{display:'none'}} ref={bgWrapInputRef}
+                  onChange={e=>{ const f=e.target.files?.[0]; if(f) importBgWrapFile(comp.id,f); e.target.value='' }} />
                 {/* Hidden plan JSON import input */}
                 <input type="file" accept=".json" style={{display:'none'}} ref={refinePlanImportRef}
                   onChange={e=>{ const f=e.target.files?.[0]; if(f) importRefinePlanFile(comp.id,f); e.target.value='' }} />
+                {/* v0.9.8: Export pre-check modal */}
+                {showExportCheck && exportCheckComp?.compId === comp.id && (
+                  <ExportCheckModal
+                    comp={exportCheckComp.comp}
+                    rc={defaultRcFor(refinedComps[exportCheckComp.compId])}
+                    sourceVideos={uploadedVideos}
+                    exporting={refineExportStatus === 'loading'}
+                    onClose={()=>setShowExportCheck(false)}
+                    onConfirm={()=>{
+                      setShowExportCheck(false)
+                      doConfirmedExport(exportCheckComp.compId, exportCheckComp.comp)
+                    }}
+                  />
+                )}
                 {/* Banner */}
                 <div className="refine-banner">
                   <button className="refine-back-btn" onClick={()=>{stopRefinePlay();setSubStep('compose')}}>
@@ -3921,13 +4096,14 @@ export default function App() {
                     {planImportStatus&&<span className="refine-plan-io-status imported">{planImportStatus}</span>}
                     <button className="refine-export-now-btn" disabled={refineExportStatus==='loading'}
                       onClick={()=>{stopRefinePlay();exportCurrentFromRefine(comp.id,comp)}}
-                      title="用当前精修状态直接导出这一条成品视频到本地 output 目录">
+                      title="弹出导出前检查，确认后直接导出这一条成品视频">
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                       {refineExportStatus==='loading'?'导出中…':'导出当前成品视频'}
                     </button>
-                    <button className="refine-export-prep-btn" onClick={()=>{stopRefinePlay();setSubStep('export-prep')}}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-                      进入导出准备
+                    <button className="refine-export-prep-btn refine-export-prep-alt"
+                      onClick={()=>{stopRefinePlay();setSubStep('export-prep')}}
+                      title="高级导出检查（批量导出备用入口）">
+                      高级 ›
                     </button>
                   </div>
                   {refineExportStatus!=='idle'&&refineExportMsg&&(
@@ -4054,7 +4230,13 @@ export default function App() {
                             const mu=()=>{document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',mu)}
                             document.addEventListener('mousemove',mv);document.addEventListener('mouseup',mu)
                           }:undefined}
-                          style={{cursor:rf.enabled?'grab':'pointer'}}
+                          style={(()=>{
+                            const bw=getCompBgWrap(comp.id)
+                            return {
+                              cursor: rf.enabled?'grab':'pointer',
+                              ...(bw.enabled&&bw.imageUrl?{backgroundImage:`url(${bw.imageUrl})`,backgroundSize:'cover',backgroundPosition:'center'}:{}),
+                            }
+                          })()}
                         >
                           {curVid?(
                             <video
@@ -4702,9 +4884,65 @@ export default function App() {
                       </div>
                       <div className="refine-extra-panel">
                         <div className="refine-extra-head" onClick={()=>setShowDedupPanel(v=>!v)}>
-                          ⚙ 去重包装 ({Object.values(dedup).filter(Boolean).length}/8) {showDedupPanel?'▾':'▸'}
+                          ⚙ 去重包装 ({Object.values(getCompDedup(comp.id)).filter(Boolean).length}/5 已启用) {showDedupPanel?'▾':'▸'}
                         </div>
-                        {showDedupPanel&&dedupBlock}
+                        {showDedupPanel&&(
+                          <div className="dedup-grid">
+                            {[['mirror','镜像翻转','⇔'],['brightness','亮度微调','☀'],['contrast','对比度','◑'],['saturation','饱和度','🎨'],['lightScale','轻微缩放','⊞']].map(([k,label,ico])=>(
+                              <label key={k} className={`dedup-chip ${getCompDedup(comp.id)[k]?'on':''}`}>
+                                <input type="checkbox" checked={!!getCompDedup(comp.id)[k]} onChange={()=>toggleCompDedup(comp.id,k)}/>
+                                <span className="dedup-chip-ico">{ico}</span><span>{label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="refine-extra-panel">
+                        {(()=>{
+                          const bw = getCompBgWrap(comp.id)
+                          return (<>
+                            <div className="refine-extra-head" onClick={()=>setShowBgWrapPanel(v=>!v)}>
+                              🖼 背景包装 {bw.enabled?`(已启用${bw.storedFileName?'·已同步':bw.imageUrl?'·仅预览':'·未导入图'})`:'(未启用)'} {showBgWrapPanel?'▾':'▸'}
+                            </div>
+                            {showBgWrapPanel&&(
+                              <div className="refine-bgwrap-panel">
+                                {bw.imageUrl&&(
+                                  <div className="refine-bgwrap-preview" style={{backgroundImage:`url(${bw.imageUrl})`}}/>
+                                )}
+                                <div className="rss-row">
+                                  <button className="refine-tb-btn" onClick={()=>bgWrapInputRef.current?.click()}>
+                                    {bw.imageFileName?`更换图片 (${bw.imageFileName})`:'导入背景图'}
+                                  </button>
+                                  {bw.enabled&&<button className="refine-tb-btn danger" onClick={()=>setCompBgWrap(comp.id,{enabled:false,imageUrl:null,imageFileName:null,storedFileName:null})}>移除背景</button>}
+                                </div>
+                                {bw.enabled&&bw.imageUrl&&<>
+                                  <div className="rss-row">
+                                    <span className="rss-label">视频缩放</span>
+                                    <input type="range" min="0.5" max="1.0" step="0.01" value={bw.videoScale||1.0}
+                                      onChange={e=>setCompBgWrap(comp.id,{videoScale:parseFloat(e.target.value)})}
+                                      className="rss-range" style={{flex:1}}/>
+                                    <span className="rss-val">{Math.round((bw.videoScale||1.0)*100)}%</span>
+                                  </div>
+                                  <div className="rss-row">
+                                    <span className="rss-label">水平偏移</span>
+                                    <input type="range" min="-40" max="40" step="1" value={bw.videoX||0}
+                                      onChange={e=>setCompBgWrap(comp.id,{videoX:parseFloat(e.target.value)})}
+                                      className="rss-range" style={{flex:1}}/>
+                                    <span className="rss-val">{bw.videoX||0}%</span>
+                                  </div>
+                                  <div className="rss-row">
+                                    <span className="rss-label">垂直偏移</span>
+                                    <input type="range" min="-40" max="40" step="1" value={bw.videoY||0}
+                                      onChange={e=>setCompBgWrap(comp.id,{videoY:parseFloat(e.target.value)})}
+                                      className="rss-range" style={{flex:1}}/>
+                                    <span className="rss-val">{bw.videoY||0}%</span>
+                                  </div>
+                                  {!bw.storedFileName&&<div className="ep-ss-hint" style={{color:'var(--warn,#f59e0b)'}}>⚠ 背景图未同步到本地服务，导出时将跳过背景包装</div>}
+                                </>}
+                              </div>
+                            )}
+                          </>)
+                        })()}
                       </div>
                     </div>
 

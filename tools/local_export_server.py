@@ -24,9 +24,12 @@ WORKSPACE      = REPO_ROOT / "export_workspace"
 DRAFTS_DIR     = WORKSPACE / "drafts"
 VIDEOS_DIR     = WORKSPACE / "videos"
 AUDIO_DIR      = WORKSPACE / "audio"
+IMAGES_DIR     = WORKSPACE / "images"   # v0.9.8: background images
 EXPORT_SCRIPT  = SCRIPT_DIR / "export_video.py"
 WHISPER_CONFIG = REPO_ROOT / "local-tools" / "whisper.config.json"
 CURRENT_DRAFT  = "web-export-current.json"
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -77,36 +80,75 @@ def parse_multipart(body, content_type):
 
 # ── v0.9.7: 字幕↔配音自动对齐（本地 whisper.cpp，不接云 API）──────────────────────
 
+def _find_local_tool(names, subdir):
+    """在 local-tools/<subdir>/ 中查找可执行文件，找到返回路径字符串，否则 None。"""
+    for name in names:
+        p = REPO_ROOT / "local-tools" / subdir / name
+        if p.exists():
+            return str(p)
+    return None
+
+
 def check_whisper():
     """
     检测本地语音识别组件是否可用。
+    v0.9.8: 优先使用 local-tools/whisper/ 内置路径，再 fallback 到配置文件 / PATH。
     返回 (ok: bool, info: dict|None, reason: str)
-    info = {cli, model, language, threads}
     """
-    if not WHISPER_CONFIG.exists():
-        return False, None, "未找到 local-tools/whisper.config.json 配置文件"
-    try:
-        cfg = json.loads(WHISPER_CONFIG.read_text(encoding="utf-8"))
-    except Exception as e:
-        return False, None, f"whisper 配置解析失败: {e}"
-    cli = (cfg.get("whisperCliPath") or "whisper-cli").strip()
-    model_raw = (cfg.get("modelPath") or "").strip()
-    if not model_raw:
-        return False, None, "whisper 配置缺少 modelPath"
-    model_path = Path(model_raw)
-    if not model_path.is_absolute():
-        model_path = (REPO_ROOT / model_raw)
-    # whisper-cli 可执行文件：PATH 中或显式路径存在
+    # 1) 优先检测项目内 local-tools/whisper/
+    local_cli = _find_local_tool(
+        ["whisper-cli.exe", "whisper-cli", "main.exe", "main"],
+        "whisper"
+    )
+    # 2) 从 whisper.config.json 读取额外配置（语言、线程等）
+    cfg = {}
+    if WHISPER_CONFIG.exists():
+        try:
+            cfg = json.loads(WHISPER_CONFIG.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    cli = local_cli or (cfg.get("whisperCliPath") or "whisper-cli").strip()
+
+    # 3) 模型文件：优先 local-tools/whisper/models/
+    local_model_dir = REPO_ROOT / "local-tools" / "whisper" / "models"
+    local_model = None
+    if local_model_dir.exists():
+        for pattern in ("ggml-small.bin", "ggml-base.bin", "ggml-tiny.bin"):
+            p = local_model_dir / pattern
+            if p.exists():
+                local_model = str(p)
+                break
+        if not local_model:
+            # any ggml-*.bin
+            for p in sorted(local_model_dir.glob("ggml-*.bin")):
+                local_model = str(p); break
+    if not local_model:
+        model_raw = (cfg.get("modelPath") or "").strip()
+        if model_raw:
+            mp = Path(model_raw)
+            if not mp.is_absolute():
+                mp = REPO_ROOT / model_raw
+            if mp.exists():
+                local_model = str(mp)
+
+    # 4) ffmpeg 可用性（优先 local-tools/ffmpeg/）
+    local_ff = _find_local_tool(["ffmpeg.exe", "ffmpeg"], "ffmpeg")
+    ff_ok = bool(local_ff) or bool(shutil.which("ffmpeg"))
+    if not ff_ok:
+        return False, None, "未找到 ffmpeg（local-tools/ffmpeg/ 或系统 PATH）"
+
     cli_ok = bool(shutil.which(cli)) or Path(cli).exists()
     if not cli_ok:
-        return False, None, f"未找到本地语音识别组件 whisper-cli（配置: {cli}）"
-    if not model_path.exists():
-        return False, None, f"未找到 whisper 模型文件：{model_path}"
-    if not shutil.which("ffmpeg"):
-        return False, None, "未找到 ffmpeg，无法预处理配音音频"
+        return False, None, f"未找到 whisper-cli（{cli}）；请将 whisper-cli 放入 local-tools/whisper/ 目录"
+    if not local_model:
+        return False, None, "未找到 whisper 模型文件；请将 ggml-*.bin 放入 local-tools/whisper/models/"
+
+    ff_cmd = local_ff or "ffmpeg"
     return True, {
         "cli": cli,
-        "model": str(model_path),
+        "model": local_model,
+        "ffmpeg": ff_cmd,
         "language": cfg.get("language", "zh"),
         "threads": int(cfg.get("threads", 4) or 4),
     }, ""
@@ -139,10 +181,11 @@ def _parse_srt(text):
 def run_whisper(audio_path, info):
     """把配音转 16k 单声道 WAV，调用 whisper-cli 识别，返回 [(start,end,text), ...]。"""
     tmpdir = Path(tempfile.mkdtemp(prefix="align_"))
+    ff_cmd = info.get("ffmpeg") or "ffmpeg"
     try:
         wav = tmpdir / "audio16k.wav"
         subprocess.run(
-            ["ffmpeg", "-y", "-i", str(audio_path),
+            [ff_cmd, "-y", "-i", str(audio_path),
              "-ar", "16000", "-ac", "1", str(wav)],
             capture_output=True, check=True, timeout=300)
         out_prefix = tmpdir / "out"
@@ -256,10 +299,23 @@ class ExportHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            w_ok, _, w_reason = check_whisper()
-            self._json({"ok": True, "service": "shipin-cut-local-export",
-                        "version": "0.9.7",
-                        "whisper": {"available": w_ok, "reason": w_reason}})
+            w_ok, w_info, w_reason = check_whisper()
+            local_ff = _find_local_tool(["ffmpeg.exe", "ffmpeg"], "ffmpeg")
+            self._json({
+                "ok": True,
+                "service": "shipin-cut-local-export",
+                "version": "0.9.8",
+                "whisper": {
+                    "available": w_ok,
+                    "reason": w_reason,
+                    "cli": w_info.get("cli", "") if w_info else "",
+                    "model": w_info.get("model", "") if w_info else "",
+                },
+                "ffmpeg": {
+                    "path": local_ff or "系统 PATH",
+                    "local": bool(local_ff),
+                },
+            })
         elif self.path == "/synced-files":
             VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
             AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -289,6 +345,8 @@ class ExportHandler(BaseHTTPRequestHandler):
             target_dir, prefix, default_ext = VIDEOS_DIR, "video", ".mp4"
         elif kind == "bgm":
             target_dir, prefix, default_ext = AUDIO_DIR, "bgm", ".mp3"
+        elif kind == "image":
+            target_dir, prefix, default_ext = IMAGES_DIR, "img", ".jpg"
         else:
             target_dir, prefix, default_ext = AUDIO_DIR, "audio", ".mp3"
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -412,6 +470,9 @@ class ExportHandler(BaseHTTPRequestHandler):
         if self.path == "/upload-bgm":
             self._handle_upload("bgm")
             return
+        if self.path == "/upload-image":
+            self._handle_upload("image")
+            return
         if self.path == "/align-subtitles":
             self._handle_align()
             return
@@ -506,6 +567,7 @@ def main():
     server = HTTPServer((HOST, PORT), ExportHandler)
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     print("=" * 56, flush=True)
     print(" shipin-cut v0.9.3  本地导出服务", flush=True)
