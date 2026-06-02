@@ -410,6 +410,13 @@ def write_ass_file(subs, out_path, subtitle_style=None, cover_pct=0.0, play_res_
     def color_to_ass(c, alpha=0):
         # ASS color format: &HAABBGGRR (alpha=0 means opaque)
         a = format(alpha, '02X')
+        # Support hex colors like #RRGGBB
+        if c and isinstance(c, str) and c.startswith('#') and len(c) == 7:
+            try:
+                r, g, b = c[1:3], c[3:5], c[5:7]
+                return f'&H{a}{b}{g}{r}'
+            except Exception:
+                pass
         table = {
             'white':  f'&H{a}FFFFFF',
             'yellow': f'&H{a}00FFFF',

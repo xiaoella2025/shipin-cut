@@ -1000,14 +1000,16 @@ const DEFAULT_SUB_STYLE = {
   fontFamily: 'Microsoft YaHei',
   fontSize: 72,
   color: 'white',
-  outline: true,
   outlineColor: 'black',
+  outline: true,
   outlineWidth: 4,
   backgroundMode: 'none',
   backgroundColor: 'black',
   backgroundOpacity: 0.45,
   position: 'bottom',
   marginV: 60,
+  subtitleX: null,
+  subtitleY: null,
 }
 const FONT_OPTIONS = [
   ['Microsoft YaHei', '微软雅黑'],
@@ -1041,6 +1043,24 @@ const COLOR_OPTIONS = [
   ['orange', '#f90', '橙'],
   ['pink', '#f8a', '粉'],
   ['purple', '#b5f', '紫'],
+]
+
+const STICKER_PRESETS = [
+  {key:'thumbs', emoji:'👍', label:'点赞', isEmoji:true},
+  {key:'star',   emoji:'⭐', label:'星星', isEmoji:true},
+  {key:'fire',   emoji:'🔥', label:'火爆', isEmoji:true},
+  {key:'heart',  emoji:'❤️', label:'心心', isEmoji:true},
+  {key:'arrow',  emoji:'➡️', label:'看这', isEmoji:true},
+  {key:'wow',    emoji:'😱', label:'震惊', isEmoji:true},
+  {key:'clap',   emoji:'👏', label:'鼓掌', isEmoji:true},
+  {key:'bulb',   emoji:'💡', label:'干货', isEmoji:true},
+  {key:'follow', text:'关注', label:'关注', isEmoji:false},
+  {key:'save',   text:'收藏', label:'收藏', isEmoji:false},
+  {key:'share',  text:'转发', label:'转发', isEmoji:false},
+  {key:'learn',  text:'学会了', label:'学会了', isEmoji:false},
+  {key:'step1',  text:'①', label:'步骤①', isEmoji:false},
+  {key:'step2',  text:'②', label:'步骤②', isEmoji:false},
+  {key:'hot',    text:'爆款', label:'爆款', isEmoji:false},
 ]
 
 // ─── main app ────────────────────────────────────────────────────────────────
@@ -1134,6 +1154,8 @@ export default function App() {
   const [splitMenuSubId, setSplitMenuSubId] = useState(null)  // v0.9.5h: open split-menu row
   const [subHistory, setSubHistory] = useState({})  // v0.9.5h2: per-comp subtitle undo history
   const [showSubStylePanel, setShowSubStylePanel] = useState(false)  // v0.9.5h4: per-comp style panel open
+  const [showStickerPanel, setShowStickerPanel]   = useState(false)  // v0.9.6: sticker panel
+  const [showDedupPanel, setShowDedupPanel]       = useState(false)  // v0.9.6: dedup in refine
 
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
@@ -1225,6 +1247,7 @@ export default function App() {
   const refineEditTimelineRef = useRef(null)  // populated only during editSegs playback
   const rfDraggedRef = useRef(false)  // v0.9.5h: suppress click after reframe drag
   const subEditSnapRef = useRef(null) // v0.9.5h2: tracks focused subtitle to snapshot once per focus
+  const subDragRef = useRef(false)    // v0.9.6: true while subtitle overlay is being dragged
 
   useEffect(() => { uploadedVideosRef.current = uploadedVideos }, [uploadedVideos])
   useEffect(() => { videoAnalysisRef.current = videoAnalysis  }, [videoAnalysis])
@@ -2133,6 +2156,7 @@ export default function App() {
       finalSubtitlesSavedAt: null,  // v0.9.4: timestamp when finalSubtitles was saved
       reframe: null,  // v0.9.5: {enabled,aspect,scale,offsetX,offsetY} per-comp
       subtitleStyle: null,  // v0.9.5h4: per-comp subtitle style, null = use DEFAULT_SUB_STYLE
+      stickers: null,  // v0.9.6: [{id,key,emoji,text,isEmoji,x,y,scale}] per-comp
       ...(existing||{}),
     }
   }
@@ -2241,6 +2265,24 @@ export default function App() {
   }
   function setCompSubStyle(compId, updates) {
     updateRefinedComp(compId, { subtitleStyle: { ...getCompSubStyle(compId), ...updates } })
+  }
+
+  // v0.9.6: sticker helpers
+  function getCompStickers(compId) {
+    return refinedComps[compId]?.stickers || []
+  }
+  function addSticker(compId, preset) {
+    const s = { id: Date.now().toString(), ...preset, x: 50, y: 50, scale: 1 }
+    updateRefinedComp(compId, { stickers: [...getCompStickers(compId), s] })
+  }
+  function updateStickerPos(compId, sid, x, y) {
+    updateRefinedComp(compId, { stickers: getCompStickers(compId).map(s => s.id===sid ? {...s, x, y} : s) })
+  }
+  function resizeSticker(compId, sid, delta) {
+    updateRefinedComp(compId, { stickers: getCompStickers(compId).map(s => s.id===sid ? {...s, scale: Math.max(0.3, Math.min(4, (s.scale||1)+delta))} : s) })
+  }
+  function deleteSticker(compId, sid) {
+    updateRefinedComp(compId, { stickers: getCompStickers(compId).filter(s => s.id!==sid) })
   }
 
   // v0.9.5h2: subtitle undo helpers
@@ -2413,6 +2455,7 @@ export default function App() {
         coverOrigSubHeight: coverOrigSubHeight,
         origSubMode: origSubMode,
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
+        stickers: rc.stickers || [],
         subtitleStyle: getCompSubStyle(compId),
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
         exportQuality: exportQuality,
@@ -2501,6 +2544,7 @@ export default function App() {
         burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
         origSubMode: origSubMode,
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
+        stickers: rc.stickers || [],
         subtitleStyle: getCompSubStyle(compId),
         bgm: bgmFile&&addMusic?{enabled:true,fileName:bgmFile.storedFileName||bgmFile.fileName,originalName:bgmFile.originalName,volume:bgmVolume}:{enabled:false},
         exportQuality: exportQuality,
@@ -3992,15 +4036,44 @@ export default function App() {
                           {aFSub&&(()=>{
                             const ss=getCompSubStyle(comp.id)
                             const previewFs=Math.round(ss.fontSize*270/1080)
-                            const col=COLOR_OPTIONS.find(([c])=>c===ss.color)?.[1]||'#fff'
-                            const ts=ss.outline?`0 0 ${ss.outlineWidth}px ${ss.outlineColor==='black'?'#000':'#fff'},1px 1px ${Math.ceil(ss.outlineWidth/2)}px ${ss.outlineColor==='black'?'#000':'#fff'}`:'none'
+                            const namedCol=COLOR_OPTIONS.find(([c])=>c===ss.color)?.[1]
+                            const col=namedCol||(ss.color?.startsWith('#')?ss.color:'#fff')
+                            const namedOC=ss.outlineColor==='black'?'#000':ss.outlineColor==='white'?'#fff':(ss.outlineColor?.startsWith('#')?ss.outlineColor:'#000')
+                            const ts=ss.outline?`0 0 ${ss.outlineWidth}px ${namedOC},1px 1px ${Math.ceil(ss.outlineWidth/2)}px ${namedOC}`:'none'
                             const bMode=ss.backgroundMode||'none'
                             const bgAlpha=ss.backgroundOpacity??0.45
                             const bgCss={'black':`rgba(0,0,0,${bgAlpha})`,'white':`rgba(255,255,255,${bgAlpha})`,'yellow':`rgba(255,255,0,${bgAlpha})`,'red':`rgba(255,51,51,${bgAlpha})`}[ss.backgroundColor||'black']||`rgba(0,0,0,${bgAlpha})`
                             const outerBg=bMode==='bar'?bgCss:'transparent'
                             const fontFam=FONT_FAMILY_CSS[ss.fontFamily]||ss.fontFamily||'sans-serif'
+                            const hasCustomPos=ss.subtitleX!=null&&ss.subtitleY!=null
+                            const posStyle=hasCustomPos
+                              ?{left:`${ss.subtitleX}%`,top:`${ss.subtitleY}%`,transform:'translate(-50%,-50%)',width:`${bW}%`}
+                              :{left:`${bL}%`,bottom:`calc(${bT}% + 6px)`,width:`${bW}%`}
                             return (
-                            <div style={{position:'absolute',left:`${bL}%`,bottom:`calc(${bT}% + 6px)`,width:`${bW}%`,textAlign:'center',color:col,fontSize:previewFs,fontWeight:700,textShadow:ts,background:outerBg,pointerEvents:'none',zIndex:3,lineHeight:1.5,boxSizing:'border-box',fontFamily:fontFam,padding:bMode==='bar'?'2px 4px':0}}>
+                            <div
+                              style={{position:'absolute',...posStyle,textAlign:'center',color:col,fontSize:previewFs,fontWeight:700,textShadow:ts,background:outerBg,pointerEvents:'auto',zIndex:3,lineHeight:1.5,boxSizing:'border-box',fontFamily:fontFam,padding:bMode==='bar'?'2px 4px':0,cursor:'grab',userSelect:'none'}}
+                              onMouseDown={e=>{
+                                e.stopPropagation()
+                                const startX=e.clientX,startY=e.clientY
+                                const sx=ss.subtitleX??50,sy=ss.subtitleY??85
+                                const cr=e.currentTarget.parentElement.getBoundingClientRect()
+                                let dragged=false
+                                const mv=(me)=>{
+                                  const dx=(me.clientX-startX)/cr.width*100
+                                  const dy=(me.clientY-startY)/cr.height*100
+                                  if(!dragged&&Math.abs(dx)<0.5&&Math.abs(dy)<0.5)return
+                                  dragged=true; subDragRef.current=true
+                                  setCompSubStyle(comp.id,{subtitleX:Math.max(2,Math.min(98,sx+dx)),subtitleY:Math.max(2,Math.min(98,sy+dy))})
+                                }
+                                const mu=()=>{
+                                  document.removeEventListener('mousemove',mv)
+                                  document.removeEventListener('mouseup',mu)
+                                  setTimeout(()=>{subDragRef.current=false},100)
+                                }
+                                document.addEventListener('mousemove',mv)
+                                document.addEventListener('mouseup',mu)
+                              }}
+                            >
                               {aFSub.text.split('\n').map((l,li)=>(
                                 bMode==='text'
                                   ?<div key={li}><span style={{background:bgCss,padding:'2px 8px',borderRadius:3,display:'inline-block'}}>{l||' '}</span></div>
@@ -4014,6 +4087,31 @@ export default function App() {
                               ?<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                               :<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21 6 3"/></svg>}
                           </div>
+                          {getCompStickers(comp.id).map(stk=>(
+                            <div key={stk.id}
+                              className={`refine-sticker${stk.isEmoji?' emoji':' badge'}`}
+                              style={{left:`${stk.x??50}%`,top:`${stk.y??50}%`,transform:`translate(-50%,-50%) scale(${stk.scale||1})`}}
+                              onMouseDown={e=>{
+                                e.stopPropagation()
+                                const startX=e.clientX,startY=e.clientY
+                                const sx=stk.x??50,sy=stk.y??50
+                                const cr=e.currentTarget.parentElement.getBoundingClientRect()
+                                const mv=(me)=>{
+                                  rfDraggedRef.current=true
+                                  updateStickerPos(comp.id,stk.id,
+                                    Math.max(0,Math.min(100,sx+(me.clientX-startX)/cr.width*100)),
+                                    Math.max(0,Math.min(100,sy+(me.clientY-startY)/cr.height*100)))
+                                }
+                                const mu=()=>{document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',mu)}
+                                document.addEventListener('mousemove',mv);document.addEventListener('mouseup',mu)
+                              }}
+                            >
+                              {stk.isEmoji?stk.emoji:stk.text}
+                              <span className="refine-sticker-del" onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();deleteSticker(comp.id,stk.id)}}>×</span>
+                              <span className="refine-sticker-scale-up" onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();resizeSticker(comp.id,stk.id,0.2)}}>+</span>
+                              <span className="refine-sticker-scale-dn" onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();resizeSticker(comp.id,stk.id,-0.2)}}>−</span>
+                            </div>
+                          ))}
                         </div>
                           )
                         })()}
@@ -4113,6 +4211,7 @@ export default function App() {
                               </span>
                             )}
                           </button>
+                          <button className={`refine-sc-tab${refineSubTab==='style'?' active':''}`} onClick={()=>setRefineSubTab('style')}>🎨 字幕样式</button>
                         </div>
                         {refineSubTab==='script'&&<>
                         <div className="refine-col-head">
@@ -4192,131 +4291,6 @@ export default function App() {
                                 <button className="refine-tb-btn success" onClick={()=>saveFinalSubtitles(comp.id)}>保存字幕</button>
                               </>}
                             </div>
-                            {/* v0.9.5h4c: enhanced subtitle style panel */}
-                            <div className="refine-sub-style-wrap">
-                              <button className="refine-sub-style-toggle" onClick={()=>setShowSubStylePanel(v=>!v)}>
-                                字幕样式 {showSubStylePanel?'▾':'▸'}
-                                {(()=>{
-                                  const ss=getCompSubStyle(comp.id)
-                                  const fn=FONT_OPTIONS.find(([f])=>f===ss.fontFamily)?.[1]||ss.fontFamily
-                                  const cn=COLOR_OPTIONS.find(([c])=>c===ss.color)?.[2]||ss.color
-                                  const bm={'none':'无背景','text':'文字底板','bar':'整行底条'}[ss.backgroundMode||'none']||'无背景'
-                                  const pos={'bottom':'底部','lower':'中下','middle':'中间','top':'顶部'}[ss.position]||ss.position
-                                  return <span className="refine-sub-style-summary">{fn} · {ss.fontSize}px · {cn}字{ss.outline?` ${ss.outlineWidth}px${ss.outlineColor==='black'?'黑':'白'}边`:' 无描边'} · {bm} · {pos}</span>
-                                })()}
-                              </button>
-                              {showSubStylePanel&&(()=>{
-                                const ss=getCompSubStyle(comp.id)
-                                const bMode=ss.backgroundMode||'none'
-                                const bgAlpha=ss.backgroundOpacity??0.45
-                                const bgCss={'black':`rgba(0,0,0,${bgAlpha})`,'white':`rgba(255,255,255,${bgAlpha})`,'yellow':`rgba(255,255,0,${bgAlpha})`,'red':`rgba(255,51,51,${bgAlpha})`}[ss.backgroundColor||'black']||`rgba(0,0,0,${bgAlpha})`
-                                const textCol=COLOR_OPTIONS.find(([c])=>c===ss.color)?.[1]||'#fff'
-                                const ts=ss.outline?`0 0 ${ss.outlineWidth}px ${ss.outlineColor==='black'?'#000':'#fff'},1px 1px ${Math.ceil(ss.outlineWidth/2)}px ${ss.outlineColor==='black'?'#000':'#fff'}`:'none'
-                                const fontFam=FONT_FAMILY_CSS[ss.fontFamily]||ss.fontFamily
-                                return (
-                                <div className="refine-sub-style-panel">
-                                  {/* 字体 */}
-                                  <div className="rss-section">
-                                    <span className="rss-label">字体</span>
-                                    <div className="rss-btn-wrap">
-                                      {FONT_OPTIONS.map(([f,l])=>(
-                                        <button key={f} className={`rss-btn ${ss.fontFamily===f?'active':''}`}
-                                          style={{fontFamily:FONT_FAMILY_CSS[f]||f}}
-                                          onClick={()=>setCompSubStyle(comp.id,{fontFamily:f})}>{l}</button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                  {/* 字号 */}
-                                  <div className="rss-row">
-                                    <span className="rss-label">字号</span>
-                                    <div className="rss-btn-wrap" style={{gap:3}}>
-                                      {[['小',48],['中',60],['大',72],['超大',90]].map(([l,n])=>(
-                                        <button key={n} className={`rss-btn ${ss.fontSize===n?'active':''}`}
-                                          onClick={()=>setCompSubStyle(comp.id,{fontSize:n})}>{l}</button>
-                                      ))}
-                                    </div>
-                                    <input type="range" min="32" max="120" step="2" value={ss.fontSize}
-                                      onChange={e=>setCompSubStyle(comp.id,{fontSize:parseInt(e.target.value)})}
-                                      className="rss-range" style={{flex:1,margin:'0 6px'}}/>
-                                    <span className="rss-val rss-val-lg">{ss.fontSize}<small>px</small></span>
-                                  </div>
-                                  {/* 颜色 */}
-                                  <div className="rss-row">
-                                    <span className="rss-label">颜色</span>
-                                    <div className="rss-btn-wrap">
-                                      {COLOR_OPTIONS.map(([c,hex,l])=>(
-                                        <button key={c} className={`rss-color-btn ${ss.color===c?'active':''}`}
-                                          style={{background:hex}} title={l}
-                                          onClick={()=>setCompSubStyle(comp.id,{color:c})}/>
-                                      ))}
-                                    </div>
-                                    <span className="rss-label" style={{marginLeft:2}}>{COLOR_OPTIONS.find(([c])=>c===ss.color)?.[2]||''}</span>
-                                  </div>
-                                  {/* 描边 */}
-                                  <div className="rss-row">
-                                    <span className="rss-label">描边</span>
-                                    <button className={`rss-btn ${!ss.outline?'active':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:false})}>无</button>
-                                    <button className={`rss-btn ${ss.outline&&ss.outlineColor==='black'&&ss.outlineWidth<6?'active':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:true,outlineColor:'black',outlineWidth:4})}>黑边</button>
-                                    <button className={`rss-btn ${ss.outline&&ss.outlineColor==='white'&&ss.outlineWidth<6?'active':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:true,outlineColor:'white',outlineWidth:4})}>白边</button>
-                                    <button className={`rss-btn ${ss.outline&&ss.outlineWidth>=6?'active':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:true,outlineColor:'black',outlineWidth:7})}>粗黑边</button>
-                                    {ss.outline&&<>
-                                      <input type="range" min="1" max="8" step="1" value={ss.outlineWidth}
-                                        onChange={e=>setCompSubStyle(comp.id,{outlineWidth:parseInt(e.target.value)})}
-                                        className="rss-range" style={{width:60,margin:'0 4px'}}/>
-                                      <span className="rss-val">{ss.outlineWidth}px</span>
-                                    </>}
-                                  </div>
-                                  {/* 背景 */}
-                                  <div className="rss-row">
-                                    <span className="rss-label">背景</span>
-                                    {[['none','无'],['text','文字板'],['bar','整行条']].map(([m,l])=>(
-                                      <button key={m} className={`rss-btn ${bMode===m?'active':''}`}
-                                        onClick={()=>setCompSubStyle(comp.id,{backgroundMode:m})}>{l}</button>
-                                    ))}
-                                    {bMode!=='none'&&<>
-                                      {[['black','黑'],['white','白'],['yellow','黄'],['red','红']].map(([c,l])=>(
-                                        <button key={c} className={`rss-btn ${(ss.backgroundColor||'black')===c?'active':''}`}
-                                          onClick={()=>setCompSubStyle(comp.id,{backgroundColor:c})}>{l}</button>
-                                      ))}
-                                      <input type="range" min="0.1" max="0.85" step="0.05" value={bgAlpha}
-                                        onChange={e=>setCompSubStyle(comp.id,{backgroundOpacity:parseFloat(e.target.value)})}
-                                        className="rss-range" style={{width:60,margin:'0 4px'}}/>
-                                      <span className="rss-val">{Math.round(bgAlpha*100)}%</span>
-                                    </>}
-                                  </div>
-                                  {/* 位置 + 边距 */}
-                                  <div className="rss-row">
-                                    <span className="rss-label">位置</span>
-                                    {[['bottom','底部'],['lower','中下'],['middle','中间'],['top','顶部']].map(([p,l])=>(
-                                      <button key={p} className={`rss-btn ${ss.position===p?'active':''}`}
-                                        onClick={()=>setCompSubStyle(comp.id,{position:p})}>{l}</button>
-                                    ))}
-                                    <span className="rss-label" style={{marginLeft:6}}>边距</span>
-                                    <input type="range" min="10" max="300" step="5" value={ss.marginV}
-                                      onChange={e=>setCompSubStyle(comp.id,{marginV:parseInt(e.target.value)})}
-                                      className="rss-range" style={{flex:1,margin:'0 4px'}}/>
-                                    <span className="rss-val">{ss.marginV}px</span>
-                                  </div>
-                                  {/* 预览 */}
-                                  <div className="rss-preview-wrap">
-                                    <div className="rss-preview" style={{
-                                      fontFamily:fontFam,color:textCol,textShadow:ts,
-                                      background:bMode==='bar'?bgCss:'transparent',
-                                      padding:bMode==='bar'?'3px 8px':0,
-                                    }}>
-                                      <span style={{
-                                        background:bMode==='text'?bgCss:'transparent',
-                                        padding:bMode==='text'?'3px 10px':0,
-                                        borderRadius:bMode==='text'?3:0,
-                                        display:'inline-block',
-                                      }}>字幕样式预览 · 欢迎使用烧录</span>
-                                    </div>
-                                    <button className="rss-btn rss-reset-btn" onClick={()=>setCompSubStyle(comp.id,{...DEFAULT_SUB_STYLE})}>恢复默认</button>
-                                  </div>
-                                </div>
-                                )
-                              })()}
-                            </div>
                             {!(rc.finalSubtitles&&rc.finalSubtitles.length>0)?(
                               <div className="refine-subs-empty">
                                 {rc.summaryScript?.trim()
@@ -4381,6 +4355,137 @@ export default function App() {
                             )}
                           </div>
                         )}
+                        {refineSubTab==='style'&&(()=>{
+                          const ss=getCompSubStyle(comp.id)
+                          const bMode=ss.backgroundMode||'none'
+                          const bgAlpha=ss.backgroundOpacity??0.45
+                          const bgCss={'black':`rgba(0,0,0,${bgAlpha})`,'white':`rgba(255,255,255,${bgAlpha})`,'yellow':`rgba(255,255,0,${bgAlpha})`,'red':`rgba(255,51,51,${bgAlpha})`}[ss.backgroundColor||'black']||`rgba(0,0,0,${bgAlpha})`
+                          const namedCol=COLOR_OPTIONS.find(([c])=>c===ss.color)?.[1]
+                          const textCol=namedCol||(ss.color?.startsWith('#')?ss.color:'#fff')
+                          const namedOC=ss.outlineColor==='black'?'#000':ss.outlineColor==='white'?'#fff':(ss.outlineColor?.startsWith('#')?ss.outlineColor:'#000')
+                          const ts=ss.outline?`0 0 ${ss.outlineWidth}px ${namedOC},1px 1px ${Math.ceil(ss.outlineWidth/2)}px ${namedOC}`:'none'
+                          const fontFam=FONT_FAMILY_CSS[ss.fontFamily]||ss.fontFamily
+                          const pickerVal=namedCol||ss.color||'#ffffff'
+                          const outPickerVal=ss.outlineColor?.startsWith('#')?ss.outlineColor:(ss.outlineColor==='black'?'#000000':'#ffffff')
+                          return (
+                          <div className="refine-style-tab" style={{overflowY:'auto',flex:1}}>
+                            {/* 字体 */}
+                            <div className="rss-section">
+                              <span className="rss-label">字体</span>
+                              <div className="rss-btn-wrap">
+                                {FONT_OPTIONS.map(([f,l])=>(
+                                  <button key={f} className={`rss-btn ${ss.fontFamily===f?'active':''}`}
+                                    style={{fontFamily:FONT_FAMILY_CSS[f]||f}}
+                                    onClick={()=>setCompSubStyle(comp.id,{fontFamily:f})}>{l}</button>
+                                ))}
+                              </div>
+                            </div>
+                            {/* 字号 */}
+                            <div className="rss-row">
+                              <span className="rss-label">字号</span>
+                              <div className="rss-btn-wrap" style={{gap:3}}>
+                                {[['小',48],['中',60],['大',72],['超大',90]].map(([l,n])=>(
+                                  <button key={n} className={`rss-btn ${ss.fontSize===n?'active':''}`}
+                                    onClick={()=>setCompSubStyle(comp.id,{fontSize:n})}>{l}</button>
+                                ))}
+                              </div>
+                              <input type="range" min="32" max="120" step="2" value={ss.fontSize}
+                                onChange={e=>setCompSubStyle(comp.id,{fontSize:parseInt(e.target.value)})}
+                                className="rss-range" style={{flex:1,margin:'0 6px'}}/>
+                              <span className="rss-val rss-val-lg">{ss.fontSize}<small>px</small></span>
+                            </div>
+                            {/* 颜色 */}
+                            <div className="rss-row">
+                              <span className="rss-label">字色</span>
+                              <div className="rss-btn-wrap">
+                                {COLOR_OPTIONS.map(([c,hex,l])=>(
+                                  <button key={c} className={`rss-color-btn ${ss.color===c?'active':''}`}
+                                    style={{background:hex}} title={l}
+                                    onClick={()=>setCompSubStyle(comp.id,{color:c})}/>
+                                ))}
+                              </div>
+                              <input type="color" value={pickerVal.length===7?pickerVal:'#ffffff'}
+                                onChange={e=>setCompSubStyle(comp.id,{color:e.target.value})}
+                                className="rss-color-picker" title="自定义颜色"/>
+                            </div>
+                            {/* 描边 */}
+                            <div className="rss-row">
+                              <span className="rss-label">描边</span>
+                              <button className={`rss-btn ${!ss.outline?'active':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:false})}>无</button>
+                              <button className={`rss-btn ${ss.outline&&ss.outlineColor==='black'&&ss.outlineWidth<6?'active':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:true,outlineColor:'black',outlineWidth:4})}>黑边</button>
+                              <button className={`rss-btn ${ss.outline&&ss.outlineColor==='white'&&ss.outlineWidth<6?'active':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:true,outlineColor:'white',outlineWidth:4})}>白边</button>
+                              <button className={`rss-btn ${ss.outline&&ss.outlineWidth>=6?'active':''}`} onClick={()=>setCompSubStyle(comp.id,{outline:true,outlineColor:'black',outlineWidth:7})}>粗黑边</button>
+                              {ss.outline&&<>
+                                <input type="range" min="1" max="8" step="1" value={ss.outlineWidth}
+                                  onChange={e=>setCompSubStyle(comp.id,{outlineWidth:parseInt(e.target.value)})}
+                                  className="rss-range" style={{width:60,margin:'0 4px'}}/>
+                                <span className="rss-val">{ss.outlineWidth}px</span>
+                                <input type="color" value={outPickerVal}
+                                  onChange={e=>setCompSubStyle(comp.id,{outlineColor:e.target.value})}
+                                  className="rss-color-picker" title="描边颜色"/>
+                              </>}
+                            </div>
+                            {/* 背景 */}
+                            <div className="rss-row">
+                              <span className="rss-label">背景</span>
+                              {[['none','无'],['text','文字板'],['bar','整行条']].map(([m,l])=>(
+                                <button key={m} className={`rss-btn ${bMode===m?'active':''}`}
+                                  onClick={()=>setCompSubStyle(comp.id,{backgroundMode:m})}>{l}</button>
+                              ))}
+                              {bMode!=='none'&&<>
+                                {[['black','黑'],['white','白'],['yellow','黄'],['red','红']].map(([c,l])=>(
+                                  <button key={c} className={`rss-btn ${(ss.backgroundColor||'black')===c?'active':''}`}
+                                    onClick={()=>setCompSubStyle(comp.id,{backgroundColor:c})}>{l}</button>
+                                ))}
+                                <input type="range" min="0.1" max="0.85" step="0.05" value={bgAlpha}
+                                  onChange={e=>setCompSubStyle(comp.id,{backgroundOpacity:parseFloat(e.target.value)})}
+                                  className="rss-range" style={{width:60,margin:'0 4px'}}/>
+                                <span className="rss-val">{Math.round(bgAlpha*100)}%</span>
+                              </>}
+                            </div>
+                            {/* 位置 + 边距 */}
+                            <div className="rss-row">
+                              <span className="rss-label">位置</span>
+                              {[['bottom','底部'],['lower','中下'],['middle','中间'],['top','顶部']].map(([p,l])=>(
+                                <button key={p} className={`rss-btn ${ss.position===p?'active':''}`}
+                                  onClick={()=>setCompSubStyle(comp.id,{position:p})}>{l}</button>
+                              ))}
+                              <span className="rss-label" style={{marginLeft:6}}>边距</span>
+                              <input type="range" min="10" max="300" step="5" value={ss.marginV}
+                                onChange={e=>setCompSubStyle(comp.id,{marginV:parseInt(e.target.value)})}
+                                className="rss-range" style={{flex:1,margin:'0 4px'}}/>
+                              <span className="rss-val">{ss.marginV}px</span>
+                            </div>
+                            {/* 拖动位置 */}
+                            {(ss.subtitleX!=null||ss.subtitleY!=null)&&(
+                              <div className="rss-row" style={{marginTop:4}}>
+                                <span className="rss-label" style={{color:'var(--accent)'}}>拖动中</span>
+                                <span style={{fontSize:10,color:'var(--text-muted)',flex:1}}>X:{Math.round(ss.subtitleX??50)}% Y:{Math.round(ss.subtitleY??85)}%</span>
+                                <button className="rss-btn" onClick={()=>setCompSubStyle(comp.id,{subtitleX:null,subtitleY:null})}>重置位置</button>
+                              </div>
+                            )}
+                            {(ss.subtitleX==null&&ss.subtitleY==null)&&(
+                              <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4}}>💡 在左侧视频画面拖动字幕可自定义位置</div>
+                            )}
+                            {/* 预览 */}
+                            <div className="rss-preview-wrap" style={{marginTop:8}}>
+                              <div className="rss-preview" style={{
+                                fontFamily:fontFam,color:textCol,textShadow:ts,
+                                background:bMode==='bar'?bgCss:'transparent',
+                                padding:bMode==='bar'?'3px 8px':0,
+                              }}>
+                                <span style={{
+                                  background:bMode==='text'?bgCss:'transparent',
+                                  padding:bMode==='text'?'3px 10px':0,
+                                  borderRadius:bMode==='text'?3:0,
+                                  display:'inline-block',
+                                }}>字幕样式预览 · 欢迎使用</span>
+                              </div>
+                              <button className="rss-btn rss-reset-btn" onClick={()=>setCompSubStyle(comp.id,{...DEFAULT_SUB_STYLE})}>恢复默认</button>
+                            </div>
+                          </div>
+                          )
+                        })()}
                       </div>
 
                       {/* Col 4: Copywriting (dropdown-based) */}
@@ -4443,6 +4548,38 @@ export default function App() {
                         </div>
                       </div>
                     </div>{/* end refine-top */}
+
+                    {/* v0.9.6: sticker + dedup extra row */}
+                    <div className="refine-extra-row">
+                      <div className="refine-extra-panel">
+                        <div className="refine-extra-head" onClick={()=>setShowStickerPanel(v=>!v)}>
+                          🎨 贴图贴纸 ({getCompStickers(comp.id).length}) {showStickerPanel?'▾':'▸'}
+                        </div>
+                        {showStickerPanel&&(
+                          <div className="refine-sticker-grid">
+                            {STICKER_PRESETS.map(p=>(
+                              <button key={p.key} className="refine-sticker-preset"
+                                onClick={()=>addSticker(comp.id,p)}>
+                                <span>{p.isEmoji?p.emoji:p.text}</span>
+                                <small>{p.label}</small>
+                              </button>
+                            ))}
+                            {getCompStickers(comp.id).length>0&&(
+                              <button className="refine-sticker-preset" style={{borderColor:'var(--danger,#f33)',color:'var(--danger,#f33)'}}
+                                onClick={()=>updateRefinedComp(comp.id,{stickers:[]})}>
+                                <span>🗑</span><small>清空</small>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="refine-extra-panel">
+                        <div className="refine-extra-head" onClick={()=>setShowDedupPanel(v=>!v)}>
+                          ⚙ 去重包装 ({Object.values(dedup).filter(Boolean).length}/8) {showDedupPanel?'▾':'▸'}
+                        </div>
+                        {showDedupPanel&&dedupBlock}
+                      </div>
+                    </div>
 
                     {/* Timeline (derived: deleted = absent, speed = width change) */}
                     <div className="refine-tl-section">
