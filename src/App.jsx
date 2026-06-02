@@ -3981,10 +3981,10 @@ export default function App() {
                               <div className="refine-rf-row">
                                 <span className="ep-ss-lbl" style={{width:36}}>放大</span>
                                 <span className="refine-rf-mm">×1</span>
-                                <input type="range" min="1.0" max="1.5" step="0.01" value={rf.scale}
+                                <input type="range" min="1.0" max="3.0" step="0.05" value={rf.scale}
                                   onChange={e=>setCompReframe(comp.id,{scale:parseFloat(e.target.value)})}
                                   className="ep-range" style={{flex:1}}/>
-                                <span className="refine-rf-mm">×1.5</span>
+                                <span className="refine-rf-mm">×3</span>
                                 <span className="ep-ss-val" style={{minWidth:34}}>{Math.round(rf.scale*100)}%</span>
                                 <button className="refine-rf-rst" onClick={()=>setCompReframe(comp.id,{scale:1.0})} title="重置放大">↺</button>
                               </div>
@@ -4008,7 +4008,12 @@ export default function App() {
                                 <span className="ep-ss-val" style={{minWidth:34}}>{rf.offsetX>0?'+':''}{Math.round(rf.offsetX*100)}%</span>
                                 <button className="refine-rf-rst" onClick={()=>setCompReframe(comp.id,{offsetX:0})} title="重置右移">↺</button>
                               </div>
-                              <div className="ep-ss-hint" style={{marginTop:4}}>放大+上移可把底部原字幕裁出画面</div>
+                              <div className="ep-ss-hint" style={{marginTop:6}}>放大+上移可把底部原字幕裁出画面</div>
+                              {rf.aspect&&rf.aspect!=='保留原比例'&&rf.scale<1.5&&(
+                                <div className="ep-ss-hint" style={{marginTop:3,color:'var(--warn,#f59e0b)'}}>
+                                  ⚠ 画面较小，导出可能出现黑边，请手动放大或移动
+                                </div>
+                              )}
                             </>)}
                           </>)
                         })()}
@@ -4135,6 +4140,7 @@ export default function App() {
                                         value={sub.text}
                                         rows={sub.text.includes('\n')?2:1}
                                         onChange={e=>updateSubText(comp.id,sub.id||`s${i}`,e.target.value)}
+                                        onKeyDown={e=>e.stopPropagation()}
                                         onFocus={()=>{
                                           const k=comp.id+':'+(sub.id||`s${i}`)
                                           if(subEditSnapRef.current!==k){recordSubSnapshot(comp.id);subEditSnapRef.current=k}
@@ -4146,7 +4152,7 @@ export default function App() {
                                           <button className="rs-op rs-split-btn" title="拆分字幕" onClick={e=>{e.stopPropagation();const k=sub.id||`s${i}`;setSplitMenuSubId(splitMenuSubId===k?null:k)}}>拆分</button>
                                           {splitMenuSubId===(sub.id||`s${i}`)&&(
                                             <div className="rs-split-menu">
-                                              <button className="rs-split-opt" onClick={()=>{addSubNewline(comp.id,sub.id||`s${i}`);setSplitMenuSubId(null)}}>换成两行</button>
+                                              <button className="rs-split-opt" onClick={()=>{showToast('请把光标移到想断行的位置，直接按 Enter 即可换成两行');setSplitMenuSubId(null)}}>换成两行（手动回车）</button>
                                               <button className="rs-split-opt" onClick={()=>{
                                                 const sk=sub.id||`s${i}`
                                                 const t1=window.prompt('前半句：',sub.text.split(/[，,。！？；]/)[0]||sub.text.slice(0,Math.ceil(sub.text.length/2)))
