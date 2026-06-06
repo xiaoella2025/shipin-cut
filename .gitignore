@@ -21,6 +21,7 @@ tools/*
 !tools/.gitkeep
 !tools/export_video.py
 !tools/local_export_server.py
+!tools/jianying_draft/
 
 # export_workspace 中的实际媒体文件不提交，只保留目录结构
 export_workspace/videos/*
