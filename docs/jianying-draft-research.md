@@ -167,3 +167,66 @@ The safest minimal path is:
 9. Update readable `Timelines/project.json` names and timestamps.
 
 Risk: because root `draft_content.json` and `draft_meta_info.json` are encrypted or encoded in this Jianying version, Jianying may still rely on them when opening a local draft. If the generated draft does not open, the next fix should focus on how Jianying regenerates or accepts those encrypted root files, not on adding stickers, filters, packaging, or frontend integration.
+
+## Step1 Composition Export
+
+The GUI validation for step0 confirmed the low-risk approach works: copy a real template draft, keep encrypted root JSON files unchanged, and write the readable timeline template under `Timelines/<timeline-id>/template.json`.
+
+Step1 uses `tools/jianying_draft/create_comp_draft.py` with an intermediate JSON file. The intended command is:
+
+```powershell
+python tools/jianying_draft/create_comp_draft.py --input export_workspace/drafts/current_comp_for_jianying.json --overwrite
+```
+
+Input shape:
+
+```json
+{
+  "title": "成品001",
+  "templateDraftDir": "F:/shipin-cut/sample_drafts/jianying/5月12日",
+  "outputDraftDir": "C:/Users/Admin/AppData/Local/JianyingPro/User Data/Projects/com.lveditor.draft/成品001",
+  "canvas": {
+    "ratio": "9:16",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "segments": [
+    {
+      "sourceVideo": "F:/shipin-cut/export_workspace/videos/source1.mp4",
+      "sourceStartUs": 0,
+      "sourceDurationUs": 3000000,
+      "timelineStartUs": 0,
+      "timelineDurationUs": 3000000,
+      "speed": 1.0
+    }
+  ],
+  "voice": {
+    "path": "F:/shipin-cut/export_workspace/audio/voice.mp3",
+    "timelineStartUs": 0,
+    "durationUs": 24000000
+  },
+  "subtitles": [
+    {
+      "text": "第一句字幕",
+      "startUs": 0,
+      "durationUs": 1800000
+    }
+  ]
+}
+```
+
+Mapping rules:
+
+- All timeline times are microseconds.
+- `segments[]` becomes one video track with one segment per source video.
+- Each video material is copied to `Timelines/<timeline-id>/materials/video/`.
+- Each video segment writes `target_timerange` from `timelineStartUs/timelineDurationUs`.
+- Each video segment writes `source_timerange` from `sourceStartUs/sourceDurationUs`.
+- `voice` becomes one audio material and one audio track segment.
+- `subtitles[]` becomes editable subtitle materials and one text track with multiple segments.
+- Manual line breaks are preserved in `recognize_text` and `content`.
+- Timeline `duration` is the max of video end, audio end, and subtitle end.
+- The draft display name uses the output draft folder name.
+
+Speed note: `speed` is currently written to `segment.speed`, but the script does not yet generate the richer `materials.speeds` helper entries used by Jianying for complex variable speed behavior. For the first formal export pass, 1x video/audio/subtitle timing is the supported path.
