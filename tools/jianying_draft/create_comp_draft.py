@@ -32,6 +32,7 @@ from create_minimal_draft import (  # noqa: E402
     now_us,
     read_json,
     update_project_json,
+    update_timeline_layout,
     write_json,
 )
 
@@ -283,11 +284,9 @@ def create_comp_draft_from_data(data: dict, overwrite: bool = False) -> SimpleNa
 
     timeline["tracks"] = tracks
 
-    for name in ("template.tmp", "template.json"):
-        path = output_timeline_dir / name
-        if path.exists():
-            write_json(path, timeline)
+    write_timeline_content_files(output_dir, output_timeline_dir, timeline)
     update_project_json(output_dir, title)
+    update_timeline_layout(output_dir, source_timeline_dir.name, title)
 
     return SimpleNamespace(
         output_dir=output_dir,
@@ -297,6 +296,26 @@ def create_comp_draft_from_data(data: dict, overwrite: bool = False) -> SimpleNa
         video_segments=len(video_segments),
         subtitle_segments=len(text_segments),
     )
+
+
+def write_timeline_content_files(output_dir: Path, output_timeline_dir: Path, timeline: dict) -> None:
+    timeline_files = (
+        "template.tmp",
+        "template.json",
+        "draft_content.json",
+        "draft_content.json.bak",
+        "template-2.tmp",
+    )
+    for name in timeline_files:
+        path = output_timeline_dir / name
+        if path.exists() or name in {"template.tmp", "template.json"}:
+            write_json(path, timeline)
+
+    root_files = ("draft_content.json", "draft_content.json.bak", "template-2.tmp")
+    for name in root_files:
+        path = output_dir / name
+        if path.exists():
+            write_json(path, timeline)
 
 
 def create_comp_draft(input_path: str | Path, overwrite: bool = False) -> SimpleNamespace:

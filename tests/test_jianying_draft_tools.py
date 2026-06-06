@@ -31,17 +31,16 @@ def make_template(tmp_path):
     (draft / "Resources").mkdir()
     (draft / "draft_content.json").write_text("encrypted-content", encoding="utf-8")
     (draft / "draft_meta_info.json").write_text("encrypted-meta", encoding="utf-8")
-    write_json(
-        draft / "Timelines" / "project.json",
-        {
-            "id": "PROJECT-1",
-            "main_timeline_id": timeline_id,
-            "timelines": [{"id": timeline_id, "name": "时间线01"}],
-            "create_time": 1,
-            "update_time": 1,
-            "version": 0,
-        },
-    )
+    project = {
+        "id": "PROJECT-1",
+        "main_timeline_id": timeline_id,
+        "timelines": [{"id": timeline_id, "name": "时间线01"}],
+        "create_time": 1,
+        "update_time": 1,
+        "version": 0,
+    }
+    write_json(draft / "Timelines" / "project.json", project)
+    write_json(draft / "Timelines" / "project.json.bak", project)
     base = {
         "id": "OLD-DRAFT",
         "name": "old",
@@ -60,6 +59,38 @@ def make_template(tmp_path):
     write_json(timeline / "template.tmp", base)
     write_json(timeline / "template.json", base)
     return draft
+
+
+def old_rich_timeline():
+    return {
+        "id": "OLD-RICH",
+        "name": "old-rich",
+        "duration": 23_833_333,
+        "fps": 30,
+        "canvas_config": {"height": 1280, "ratio": "9:16", "width": 720},
+        "materials": {
+            "videos": [{"id": f"old-video-{index}", "path": f"old{index}.mp4"} for index in range(9)],
+            "audios": [{"id": f"old-audio-{index}", "path": f"old{index}.mp3"} for index in range(9)],
+            "texts": [{"id": f"old-text-{index}", "recognize_text": f"old {index}"} for index in range(11)],
+        },
+        "tracks": [
+            {
+                "id": "old-video-track",
+                "type": "video",
+                "segments": [{"id": f"old-vs-{index}", "material_id": f"old-video-{index}"} for index in range(9)],
+            },
+            {
+                "id": "old-audio-track",
+                "type": "audio",
+                "segments": [{"id": f"old-as-{index}", "material_id": f"old-audio-{index}"} for index in range(9)],
+            },
+            {
+                "id": "old-text-track",
+                "type": "text",
+                "segments": [{"id": f"old-ts-{index}", "material_id": f"old-text-{index}"} for index in range(11)],
+            },
+        ],
+    }
 
 
 def make_comp_input(tmp_path, template, output, videos, audio, subtitles):
@@ -299,6 +330,87 @@ class JianyingDraftToolsTest(unittest.TestCase):
         data = create_comp.load_comp_input(input_path)
 
         self.assertEqual(data, {})
+
+    def test_create_comp_draft_overwrites_timeline_content_candidates(self):
+        create_comp = load_module(
+            "create_comp_draft", "tools/jianying_draft/create_comp_draft.py"
+        )
+        template = make_template(self.tmp_path)
+        timeline_dir = template / "Timelines" / "TL-1"
+        old = old_rich_timeline()
+        for name in ("draft_content.json", "draft_content.json.bak", "template-2.tmp"):
+            write_json(timeline_dir / name, old)
+        for name in ("draft_content.json", "draft_content.json.bak", "template-2.tmp"):
+            write_json(template / name, old)
+        video = self.tmp_path / "source.mp4"
+        audio = self.tmp_path / "voice.mp3"
+        video.write_bytes(b"video")
+        audio.write_bytes(b"audio")
+        output = self.tmp_path / "clean-output"
+        comp = make_comp_input(
+            self.tmp_path,
+            template,
+            output,
+            [
+                {
+                    "sourceVideo": str(video),
+                    "sourceStartUs": 0,
+                    "sourceDurationUs": 2_000_000,
+                    "timelineStartUs": 0,
+                    "timelineDurationUs": 2_000_000,
+                    "speed": 1.0,
+                }
+            ],
+            audio,
+            [{"text": "干净字幕", "startUs": 0, "durationUs": 1_000_000}],
+        )
+        comp["voice"]["durationUs"] = 2_000_000
+
+        result = create_comp.create_comp_draft_from_data(comp, overwrite=False)
+
+        output_timeline_dir = output / "Timelines" / result.timeline_id
+        for path in [
+            output_timeline_dir / "template.json",
+            output_timeline_dir / "draft_content.json",
+            output_timeline_dir / "draft_content.json.bak",
+            output_timeline_dir / "template-2.tmp",
+            output / "draft_content.json",
+            output / "draft_content.json.bak",
+            output / "template-2.tmp",
+        ]:
+            timeline = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(timeline["duration"], 2_000_000)
+            self.assertEqual(len(timeline["materials"]["videos"]), 1, path)
+            self.assertEqual(len(timeline["materials"]["audios"]), 1, path)
+            self.assertEqual(len(timeline["materials"]["texts"]), 1, path)
+            self.assertEqual(
+                [(track["type"], len(track["segments"])) for track in timeline["tracks"]],
+                [("video", 1), ("audio", 1), ("text", 1)],
+                path,
+            )
+        project = json.loads((output / "Timelines" / "project.json").read_text(encoding="utf-8"))
+        project_bak = json.loads((output / "Timelines" / "project.json.bak").read_text(encoding="utf-8"))
+        self.assertEqual(project_bak["main_timeline_id"], project["main_timeline_id"])
+        self.assertEqual(project_bak["timelines"][0]["name"], "clean-output")
+
+    def test_inspect_all_timelines_lists_active_and_old_content_candidate(self):
+        inspect_draft = load_module(
+            "inspect_draft", "tools/jianying_draft/inspect_draft.py"
+        )
+        draft = make_template(self.tmp_path)
+        second = draft / "Timelines" / "TL-2"
+        second.mkdir()
+        write_json(second / "template.json", old_rich_timeline())
+
+        summaries = inspect_draft.inspect_all_timelines(draft)
+
+        by_id = {summary["timeline_id"]: summary for summary in summaries}
+        self.assertEqual(set(by_id), {"TL-1", "TL-2"})
+        self.assertTrue(by_id["TL-1"]["is_active"])
+        self.assertFalse(by_id["TL-2"]["is_active"])
+        self.assertEqual(by_id["TL-2"]["video_materials_count"], 9)
+        self.assertEqual(by_id["TL-2"]["audio_materials_count"], 9)
+        self.assertEqual(by_id["TL-2"]["text_materials_count"], 11)
 
 
 if __name__ == "__main__":

@@ -303,6 +303,25 @@ def update_project_json(output_dir: Path, title: str) -> None:
             timeline["create_time"] = stamp
             timeline["update_time"] = stamp
     write_json(project_path, project)
+    project_bak_path = output_dir / "Timelines" / "project.json.bak"
+    if project_bak_path.exists():
+        write_json(project_bak_path, project)
+
+
+def update_timeline_layout(output_dir: Path, timeline_id: str, title: str) -> None:
+    layout_path = output_dir / "timeline_layout.json"
+    if not layout_path.exists():
+        return
+    try:
+        layout = read_json(layout_path)
+    except json.JSONDecodeError:
+        return
+    layout["activeTimeline"] = timeline_id
+    for dock_item in layout.get("dockItems", []):
+        if isinstance(dock_item, dict):
+            dock_item["timelineIds"] = [timeline_id]
+            dock_item["timelineNames"] = [title]
+    write_json(layout_path, layout)
 
 
 def create_minimal_draft(
@@ -381,6 +400,7 @@ def create_minimal_draft(
         if path.exists():
             write_json(path, timeline)
     update_project_json(output_dir, title)
+    update_timeline_layout(output_dir, source_timeline_dir.name, title)
 
     return SimpleNamespace(
         output_dir=output_dir,

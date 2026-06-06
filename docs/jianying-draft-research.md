@@ -230,3 +230,25 @@ Mapping rules:
 - The draft display name uses the output draft folder name.
 
 Speed note: `speed` is currently written to `segment.speed`, but the script does not yet generate the richer `materials.speeds` helper entries used by Jianying for complex variable speed behavior. For the first formal export pass, 1x video/audio/subtitle timing is the supported path.
+
+## Step1 Content File Fix
+
+GUI validation showed that writing only `Timelines/<timeline-id>/template.json` is not enough. Jianying can still open the draft from other content candidates copied from the template, especially:
+
+- root `draft_content.json`
+- root `draft_content.json.bak`
+- root `template-2.tmp`
+- `Timelines/<timeline-id>/draft_content.json`
+- `Timelines/<timeline-id>/draft_content.json.bak`
+- `Timelines/<timeline-id>/template-2.tmp`
+- `Timelines/<timeline-id>/template.tmp`
+
+If those files still contain the original template timeline, Jianying may show the old 9-video / 9-audio / 11-subtitle content even while `template.json` looks correct.
+
+The step1 generator now writes the generated timeline JSON to all of those content candidates. It also updates:
+
+- `Timelines/project.json`
+- `Timelines/project.json.bak`
+- `timeline_layout.json`
+
+`inspect_draft.py --all-timelines <draft_dir>` now lists every timeline folder, marks the active one using `project.json` and `timeline_layout.json`, and reports each candidate content file. A generated step1 draft is considered structurally clean only when no active timeline candidate reports the old `videos=9, audios=9, texts=11` shape.
