@@ -12,11 +12,13 @@ tests/test_jianying_draft_tools.py
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "tools" / "jianying_draft"))
@@ -27,6 +29,7 @@ from create_draft_info_test import (
     collect_material_paths_from_data,
     TOTAL_DURATION_US,
     new_hex_id,
+    run,
 )
 from inspect_draft import (
     load_main_json,
@@ -734,6 +737,114 @@ class TestIDFormat(unittest.TestCase):
                 mid = m["id"]
                 self.assertEqual(len(mid), 32, f"{k} material id 应为 32 字符: {mid}")
                 self.assertEqual(mid, mid.lower(), f"{k} material id 应全小写: {mid}")
+
+
+# ────────────────────────────────────────────────
+# TestCLIInputValidation
+# ────────────────────────────────────────────────
+
+class TestCLIInputValidation(unittest.TestCase):
+    """测试 run() 的参数验证：输入文件不存在时应 sys.exit(1)"""
+
+    def _make_args(self, template_dir, video_paths, audio_paths):
+        class Args:
+            template = str(template_dir)
+            output   = str(template_dir.parent / "output_test")
+            video    = video_paths
+            audio    = audio_paths
+        return Args()
+
+    def _make_template_dir(self, tmp: Path) -> Path:
+        """在 tmp 下创建合法模板目录（含 draft_info.json）"""
+        tpl = tmp / "template"
+        tpl.mkdir()
+        draft = {
+            "id": "DEADBEEF-0000-0000-0000-000000000000",
+            "duration": 5_000_000,
+            "fps": 30.0,
+            "canvas_config": {"width": 1920, "height": 1080, "ratio": "original"},
+            "version": 360000,
+            "new_version": "107.0.0",
+            "tracks": [],
+            "materials": {
+                "videos": [], "audios": [], "texts": [],
+                "speeds": [], "stickers": [], "effects": [], "transitions": [],
+            },
+            "keyframes": {
+                "adjusts": [], "audios": [], "effects": [], "filters": [],
+                "handwrites": [], "stickers": [], "texts": [], "videos": [],
+            },
+            "keyframe_graph_list": [],
+        }
+        (tpl / "draft_info.json").write_text(json.dumps(draft), encoding="utf-8")
+        return tpl
+
+    def test_run_exits_when_template_dir_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            fake_tpl = Path(td) / "no_such_dir"
+            fake_vid = Path(td) / "v.mp4"
+            fake_vid.touch()
+            fake_aud = Path(td) / "a.mp3"
+            fake_aud.touch()
+            args = self._make_args(fake_tpl, [str(fake_vid)], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_run_exits_when_draft_info_missing_in_template(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = Path(td) / "empty_template"
+            tpl.mkdir()
+            fake_vid = Path(td) / "v.mp4"
+            fake_vid.touch()
+            fake_aud = Path(td) / "a.mp3"
+            fake_aud.touch()
+            args = self._make_args(tpl, [str(fake_vid)], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_run_exits_when_video_file_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = self._make_template_dir(Path(td))
+            fake_vid = Path(td) / "nonexistent_video.mp4"   # 不建
+            fake_aud = Path(td) / "a.mp3"
+            fake_aud.touch()
+            args = self._make_args(tpl, [str(fake_vid)], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_run_exits_when_audio_file_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = self._make_template_dir(Path(td))
+            fake_vid = Path(td) / "v.mp4"
+            fake_vid.touch()
+            fake_aud = Path(td) / "nonexistent_audio.mp3"   # 不建
+            args = self._make_args(tpl, [str(fake_vid)], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_run_exits_when_no_video_provided(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = self._make_template_dir(Path(td))
+            fake_aud = Path(td) / "a.mp3"
+            fake_aud.touch()
+            args = self._make_args(tpl, [], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_run_exits_when_no_audio_provided(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = self._make_template_dir(Path(td))
+            fake_vid = Path(td) / "v.mp4"
+            fake_vid.touch()
+            args = self._make_args(tpl, [str(fake_vid)], [])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
 
 
 if __name__ == "__main__":
