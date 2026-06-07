@@ -455,16 +455,34 @@
 
 ---
 
-## 11. 已验证的草稿可打开性
+## 11. 当前实现状态（v0.9.9-step2）
 
-- `CLEAN_DRAFT_INFO_3V_1A_3T_5S_20260607`（本地 Codex 生成）可在剪映里打开
-- 但打开后仍显示旧 Storybound 内容（tracks/materials 没有真正清空）
-- **本轮修复目标**：用正确结构真正清空并重建 tracks/materials
+`tools/jianying_draft/create_draft_info_test.py` 已基于真实 Storybound 字段结构完成：
+
+- `rebuild_draft_info()` 真正清空并重建 tracks / materials.videos、audios、texts、speeds
+- 生成 3 video segment（等分 5 秒）+ 1 audio segment + 3 subtitle segment
+- keyframes 全 8 个 key（adjusts/audios/effects/filters/handwrites/stickers/texts/videos）全部清空为 `[]`
+- keyframe_graph_list 清空为 `[]`
+- draft id 保持模板原值（匹配 `Timelines/<id>/` 文件夹）
+- 输入 video/audio 不存在时 `sys.exit(1)`，不生成假草稿
+- 素材 path 写绝对路径，指向 `output/assets/video/` 和 `output/assets/audio/`
+
+**单元测试**：71/71 通过（`python -m unittest tests.test_jianying_draft_tools -v`）
 
 ---
 
-## 12. 验证日志
+## 12. ⚠ 云端限制 — 必须用户本地验证
 
+云端 Claude Code 无法访问剪映 GUI，无法打开草稿验证。
+
+**脚本层结构检查通过，但以下验证必须由用户本地完成**：
+
+1. 将输出草稿目录复制到剪映草稿目录：  
+   `C:\Users\Admin\AppData\Local\JianyingPro\User Data\Projects\com.lveditor.draft\`
+2. 打开剪映专业版，找到该草稿
+3. 确认：时长 5 秒 / 3 个视频片段 / 1 个音频片段 / 3 条字幕 / 无 Media Not Found
+
+**运行 inspect_draft.py 核查（本地执行后粘贴输出）**：
 ```
-（运行 inspect_draft.py 后粘贴输出）
+python tools/jianying_draft/inspect_draft.py "<输出草稿目录>" --check-media-paths
 ```
