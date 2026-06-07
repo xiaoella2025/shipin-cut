@@ -68,10 +68,15 @@ def load_main_json(draft_dir: Path):
 
 
 def collect_material_paths(materials: dict) -> list[str]:
+    """
+    从 materials 提取所有素材路径。
+    Storybound 格式只有 path 字段；旧格式还有 file_Path。
+    media_path 通常为空字符串，跳过。
+    """
     paths = []
     for mkey in ["videos", "audios", "images"]:
         for item in (materials.get(mkey) or []):
-            for pk in ["path", "file_Path", "media_path"]:
+            for pk in ["path", "file_Path"]:
                 v = item.get(pk)
                 if v and isinstance(v, str) and v.strip() and v not in paths:
                     paths.append(v)

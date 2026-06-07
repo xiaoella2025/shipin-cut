@@ -1,227 +1,267 @@
-# 剪映草稿 draft_info.json 结构分析
+# 剪映草稿 draft_info.json 结构分析（基于真实 Storybound 包）
 
-## 状态
-
-- [x] 结构描述来源：用户提供的 Storybound 草稿结构包说明 + JianyingPro 5.x 社区分析
-- [ ] 用户本地 inspect_draft.py 实际输出（待填入）
-- [ ] GUI 验证结果（待填入）
+> **数据来源**：用户上传的 `storybound_draft_structure_pack.zip`（2026-06-07）  
+> **已验证**：通过 Python 解析 draft_info.json（1.77MB）得出以下所有字段
 
 ---
 
-## 1. Storybound 草稿目录结构总结
+## 1. Storybound 草稿目录结构
 
 ```
 <草稿根目录>/
-  draft_info.json           ← 主明文时间线入口（~1.77MB，可直接编辑）
-  draft_info.json.bak
-  draft_content.json        ← 可能是 opaque/编码内容，不要碰
-  draft_content.json.bak
-  draft_meta_info.json      ← 草稿列表元信息
-  draft_biz_config.json
-  draft_agency_config.json
-  draft_virtual_store.json
-  timeline_layout.json      ← 指向 active timeline ID
-  attachment_editing.json
-  attachment_pc_common.json
-  performance_opt_info.json
-  template.tmp              ← opaque，不要碰
-  template-2.tmp            ← opaque，不要碰
-  tree.txt
-  report.txt
+  draft_info.json           ← 主明文时间线入口（1.77MB，含全部 tracks/materials）
+  draft_info.json.bak       ← 旧版本备份（tracks=[], duration=0，无实际数据）
+  draft_content.json        ← opaque（base64 编码，与 template-2.tmp 完全一致）
+  draft_content.json.bak    ← opaque
+  draft_meta_info.json      ← opaque（18KB，无法直接读写）
+  template.tmp              ← 明文 JSON，但 tracks=[], duration=0（旧版空模板）
+  template-2.tmp            ← opaque（与 draft_content.json 完全相同）
+  timeline_layout.json      ← 明文，指向 activeTimeline ID
+  attachment_editing.json   ← 明文
+  attachment_pc_common.json ← 明文
+  draft_agency_config.json  ← 明文
+  draft_biz_config.json     ← 空文件
+  draft_virtual_store.json  ← 明文
+  performance_opt_info.json ← 明文
+  tree.txt / report.txt     ← 文字说明
   Timelines/
     <timeline-id>/
-      draft_content.json    ← opaque
-      template.tmp          ← opaque
-      template-2.tmp        ← opaque
-    project.json
-    project.json.bak
-    common_attachment/
-      ...
+      draft_content.json    ← opaque（与根目录 draft_content.json 完全相同）
+      template-2.tmp        ← opaque（与根目录完全相同）
+      template.tmp          ← 明文 JSON，但 tracks=0（旧版空模板）
+      common_attachment/    ← 明文 JSON 附件
 ```
 
 **关键结论**：
-- 只修改 `draft_info.json`（根目录），这是剪映真正读取时间线数据的明文入口
-- `draft_content.json` 和 `template*.tmp` 是 opaque 文件，不要尝试解析或替换
-- Timelines 目录下没有传统 `template.json`，那些也是 opaque
+- `draft_info.json`（根目录）是唯一有效的明文时间线数据源
+- `draft_content.json`、`template-2.tmp`、`draft_meta_info.json` 全是 opaque，不要碰
+- `timeline_layout.json` 只引用 activeTimeline ID，不含时间线数据
+- `Timelines/<id>/` 下的 `template.tmp` 也是空模板（tracks=0）
 
 ---
 
-## 2. draft_info.json 顶层字段
+## 2. draft_info.json 顶层字段（已确认）
 
 ```json
 {
-  "canvas_config": { "height": 1920, "ratio": "9:16", "width": 1080 },
+  "canvas_config": { "width": 1080, "height": 1920, "ratio": "original" },
   "color_space": 0,
+  "config": { "adjust_max_index": 1, "attachment_info": [], ... },
   "cover": "",
-  "duration": 10000000,           ← 单位微秒 (µs)，10s = 10,000,000
+  "create_time": 0,
+  "duration": 712099999,
   "extra_info": null,
-  "fps": 30.0,                    ← 浮点，30 或 29.97
+  "fps": 30,
   "free_render_index_mode_on": false,
-  "id": "<uuid>",
+  "group_container": null,
+  "id": "91E08AC5-22FB-47e2-9AA0-7DC300FAEA2B",
   "keyframe_graph_list": [],
-  "keyframes": { ... },           ← 见第 3 节
-  "last_modified_platform": { ... },
-  "materials": { ... },           ← 见第 5 节
+  "keyframes": { "adjusts": [], "audios": [], "effects": [], "filters": [],
+                 "handwrites": [], "stickers": [], "texts": [], "videos": [] },
+  "last_modified_platform": { "app_id": 359289, "app_source": "cc",
+    "app_version": "6.5.0", "device_id": "...", "os": "mac", "os_version": "15.5" },
+  "materials": { ... },
+  "mutable_config": null,
+  "name": "",
   "new_version": "100.0.0",
-  "platform": { "app_version": "5.x.x", "os": "windows", ... },
+  "platform": { ... },
   "relationships": [],
-  "render_index_track_mode_on": false,
+  "render_index_track_mode_on": true,
   "retouch_cover": "",
   "source": "default",
   "static_cover_image_path": "",
   "time_marks": null,
-  "tracks": [ ... ],              ← 见第 4 节
-  "update_time": 1234567890000,
+  "tracks": [ ... ],
+  "update_time": 0,
   "version": 360000
 }
 ```
 
+**重要差异（与旧预测不同）**：
+- `fps`: 整数 `30`，不是 `30.0`
+- `id`: **大写 UUID + 连字符**（草稿 ID 格式）
+- `render_index_track_mode_on`: `true`（不是 false）
+- `update_time`: 0（不更新）
+- `create_time`: 0
+
 ---
 
-## 3. keyframes 字段结构
-
-keyframes 里各 sub-array 存储关键帧，**清空时间线时必须一并清空**，否则残留关键帧会导致 Media Not Found 或崩溃：
+## 3. keyframes 结构（已确认）
 
 ```json
 "keyframes": {
-  "adjusts": [],
-  "beats": [],
-  "color_curves": [],
-  "color_wheels": [],
-  "effects": [],
-  "flowers": [],
+  "adjusts":    [],
+  "audios":     [],
+  "effects":    [],
+  "filters":    [],
   "handwrites": [],
-  "stickers": [],
-  "texts": [],
-  "videos": []
+  "stickers":   [],
+  "texts":      [],
+  "videos":     []
 }
 ```
 
-`keyframe_graph_list` 也要清空（`[]`）。
+⚠️ **与旧预测不同**：keyframes keys 是 `audios/filters/videos`，不是 `beats/color_curves/color_wheels`
 
 ---
 
 ## 4. tracks 结构
 
-### track 对象
+### 4.1 track 对象
 
 ```json
 {
   "attribute": 0,
   "flag": 0,
-  "id": "<uuid>",
-  "is_default_name": true,
-  "name": "",
-  "segments": [ ... ],
-  "type": "video"    ← "video" | "audio" | "text" | "sticker" | "effect"
+  "id": "fefc392cf05b44e39f2048c6ffdb27b9",  ← 32位小写十六进制（无连字符）
+  "is_default_name": false,
+  "name": "image_main",
+  "type": "video"
 }
 ```
 
-### video/audio segment
+**ID 格式**：track/segment/material 使用 **32位小写十六进制**（如 `fefc392cf05b44e39f2048c6ffdb27b9`），
+草稿 ID 本身使用 **大写 UUID 带连字符**（如 `91E08AC5-22FB-47e2-9AA0-7DC300FAEA2B`）
+
+### 4.2 video segment（已确认）
 
 ```json
 {
-  "cartoon": false,
+  "enable_adjust": true,
+  "enable_color_correct_adjust": false,
+  "enable_color_curves": true,
+  "enable_color_match_adjust": false,
+  "enable_color_wheels": true,
+  "enable_lut": true,
+  "enable_smart_color_adjust": false,
+  "last_nonzero_volume": 1.0,
+  "reverse": false,
+  "track_attribute": 0,
+  "track_render_index": 0,
+  "visible": true,
+  "id": "<hex32>",
+  "material_id": "<hex32>",
+  "target_timerange": { "start": 0, "duration": 10200000 },
+  "source_timerange": { "start": 0, "duration": 10200000 },
+  "common_keyframes": [],
+  "keyframe_refs": [],
+  "speed": null,
+  "volume": 1.0,
+  "extra_material_refs": [ "<speed_mat_id>" ],
   "clip": {
     "alpha": 1.0,
     "flip": { "horizontal": false, "vertical": false },
     "rotation": 0.0,
     "scale": { "x": 1.0, "y": 1.0 },
-    "translation": { "x": 0.0, "y": 0.0 }
+    "transform": { "x": 0.0, "y": 0.0 }    ← transform，不是 translation！
   },
-  "common_keyframes": [],
-  "enable_adjust": true,
-  "extra_material_refs": [],
-  "group_id": "",
-  "hdr_settings": null,
-  "id": "<uuid>",
-  "intensifies_audio": false,
-  "is_placeholder": false,
-  "is_tone_modify": false,
-  "material_id": "<material-uuid>",    ← 关联 materials 里的 id
-  "render_index": 0,
-  "reverse": false,
-  "source_timerange": { "duration": 5000000, "start": 0 },   ← 素材本身时间范围
-  "speed": 1.0,
-  "target_timerange": { "duration": 5000000, "start": 0 },   ← 时间线上的位置
-  "template_id": "",
-  "template_scene": "default",
-  "track_attribute": 0,
-  "track_render_index": 0,
-  "uniform_scale": null,
-  "visible": true,
-  "volume": 1.0
+  "uniform_scale": { "on": true, "value": 1.0 },   ← 不是 null！
+  "hdr_settings": { "intensity": 1.0, "mode": 1, "nits": 1000 },
+  "render_index": 0
 }
 ```
 
-### text segment
+⚠️ **关键差异**：
+- `clip.transform` ≠ `clip.translation`
+- `uniform_scale: {"on":true,"value":1.0}` ≠ `null`
+- `keyframe_refs: []` 是新字段，必须有
+- `speed: null`（不是 1.0）
+- `hdr_settings` 有实际内容
 
-text segment 与 video segment 结构相同，差异：
-- `translation.y` 通常设为 `0.8`（靠近底部）
-- `source_timerange.start` 固定为 `0`
-- `target_timerange` 指向字幕显示时间区间
-
----
-
-## 5. materials 字段结构
-
-### materials.videos 单条
+### 4.3 audio segment（已确认）
 
 ```json
 {
-  "aigc_type": "none",
+  "enable_adjust": true, "enable_color_correct_adjust": false,
+  "enable_color_curves": true, "enable_color_match_adjust": false,
+  "enable_color_wheels": true, "enable_lut": true,
+  "enable_smart_color_adjust": false,
+  "last_nonzero_volume": 1.0,
+  "reverse": false, "track_attribute": 0, "track_render_index": 0, "visible": true,
+  "id": "<hex32>",
+  "material_id": "<hex32>",
+  "target_timerange": { "start": 0, "duration": 10200000 },
+  "source_timerange": { "start": 0, "duration": 10200000 },
+  "common_keyframes": [], "keyframe_refs": [],
+  "speed": 1.0,
+  "volume": 10.0,
+  "extra_material_refs": [ "<speed_mat_id>" ],
+  "clip": null,
+  "hdr_settings": null,
+  "render_index": 0
+}
+```
+
+### 4.4 text segment（已确认）
+
+```json
+{
+  "enable_adjust": true, "enable_color_correct_adjust": false,
+  "enable_color_curves": true, "enable_color_match_adjust": false,
+  "enable_color_wheels": true, "enable_lut": true,
+  "enable_smart_color_adjust": false,
+  "last_nonzero_volume": 1.0,
+  "reverse": false, "track_attribute": 0, "track_render_index": 0, "visible": true,
+  "id": "<hex32>",
+  "material_id": "<hex32>",
+  "target_timerange": { "start": 0, "duration": 3308000 },
+  "source_timerange": null,                   ← null，不是 {start:0,duration:...}
+  "common_keyframes": [], "keyframe_refs": [],
+  "speed": 1.0,
+  "volume": 1.0,
+  "extra_material_refs": [],
+  "clip": {
+    "alpha": 1.0,
+    "flip": { "horizontal": false, "vertical": false },
+    "rotation": 0.0,
+    "scale": { "x": 1.0, "y": 1.0 },
+    "transform": { "x": 0.0, "y": -0.215 }  ← y 为负数 = 靠近顶部
+  },
+  "uniform_scale": { "on": true, "value": 1.0 },
+  "render_index": 15999                         ← 文字轨 render_index 约 15000-15999
+}
+```
+
+---
+
+## 5. materials 结构
+
+### 5.1 materials.videos（Storybound 用 photo 类型！）
+
+**重要**：Storybound 的"视频"素材实际上是 **PNG 图片**（`type: "photo"`）。
+用户提供真实 mp4 时，应使用 `type: "video"`。
+
+```json
+{
   "audio_fade": null,
-  "cartoon_path": "",
   "category_id": "",
   "category_name": "local",
   "check_flag": 63487,
   "crop": {
-    "lower_left_x": 0.0, "lower_left_y": 1.0,
-    "lower_right_x": 1.0, "lower_right_y": 1.0,
     "upper_left_x": 0.0, "upper_left_y": 0.0,
-    "upper_right_x": 1.0, "upper_right_y": 0.0
+    "upper_right_x": 1.0, "upper_right_y": 0.0,
+    "lower_left_x": 0.0, "lower_left_y": 1.0,
+    "lower_right_x": 1.0, "lower_right_y": 1.0
   },
   "crop_ratio": "free",
   "crop_scale": 1.0,
-  "duration": 10000000,
-  "extra_type_option": 0,
-  "file_Path": "C:\\abs\\path\\to\\video.mp4",
-  "formula_id": "",
-  "freeze": null,
-  "has_audio": true,
+  "duration": 10200000,                         ← µs，实际视频时长
   "height": 1920,
-  "id": "<uuid>",
-  "import_time": 1234567890,
-  "import_time_ms": 1234567890123,
-  "is_ai_matting_valid_cache": false,
-  "is_unified_beauty_valid_cache": false,
-  "local_material_id": "<uuid>",
-  "material_id": "<uuid>",
-  "material_name": "video.mp4",
-  "material_url": "",
-  "matting": { "flag": 0, "has_use_quick_brush": false, "has_use_quick_eraser": false,
-               "interactiveTime": [], "path": "", "strokes": [] },
+  "id": "<hex32>",
+  "local_material_id": "<hex32>",              ← video 类型设同 id
+  "material_id": "<hex32>",
+  "material_name": "clip.mp4",
   "media_path": "",
-  "object_file_key": "",
-  "path": "C:\\abs\\path\\to\\video.mp4",    ← 绝对路径
-  "picture_from": "none",
-  "picture_set_category_id": "",
-  "picture_set_category_name": "",
-  "request_id": "",
-  "reverse_path": "",
-  "smart_motion": null,
-  "source": "none",
-  "source_platform": 0,
-  "stable": null,
-  "team_id": "",
-  "type": "video",
-  "video_algorithm": { "algorithms": [], "deflicker": null, "motion_blur_config": null,
-                       "noise_reduction": null, "path": "", "quality_enhance": null, "time_range": null },
+  "path": "D:\\JianyingPro Drafts\\<name>\\assets\\video\\clip.mp4",  ← 绝对路径
+  "remote_url": null,
+  "type": "video",                             ← 真实视频用 "video"
   "width": 1080
 }
 ```
 
-### materials.audios 单条
+⚠️ **注意**：没有 `file_Path`、`aigc_type`、`matting`、`has_audio` 字段（Storybound 结构更简洁）
+
+### 5.2 materials.audios（已确认）
 
 ```json
 {
@@ -229,148 +269,202 @@ text segment 与 video segment 结构相同，差异：
   "category_id": "",
   "category_name": "local",
   "check_flag": 1,
-  "duration": 10000000,
+  "copyright_limit_type": "none",
+  "duration": 10200000,
   "effect_id": "",
   "formula_id": "",
-  "id": "<uuid>",
+  "id": "<hex32>",
   "intensifies_path": "",
-  "local_material_id": "<uuid>",
-  "material_id": "<uuid>",
-  "material_name": "audio.mp3",
-  "material_url": "",
-  "name": "audio",
-  "path": "C:\\abs\\path\\to\\audio.mp3",    ← 绝对路径
+  "is_ai_clone_tone": false,
+  "is_text_edit_overdub": false,
+  "is_ugc": false,
+  "local_material_id": "<hex32>",
+  "music_id": "<hex32>",           ← 与 id 相同，是 Storybound 格式特有字段
+  "name": "audio.mp3",             ← 注意是 name，不是 material_name
+  "path": "D:\\JianyingPro Drafts\\<name>\\assets\\audio\\audio.mp3",
+  "remote_url": null,
+  "query": "",
   "request_id": "",
+  "resource_id": "",
   "search_id": "",
+  "source_from": "",
   "source_platform": 0,
   "team_id": "",
-  "text": "",
-  "tone_folder_path": "",
+  "text_id": "",
+  "tone_category_id": "", "tone_category_name": "", "tone_effect_id": "",
+  "tone_effect_name": "", "tone_platform": "",
+  "tone_second_category_id": "", "tone_second_category_name": "",
+  "tone_speaker": "", "tone_type": "",
   "type": "extract_music",
+  "video_id": "",
   "wave_points": []
 }
 ```
 
-### materials.texts 单条
-
-**注意**：`content` 字段是一个嵌套 JSON 字符串（字符串里面是 JSON）：
+### 5.3 materials.texts（已确认，type 是 "subtitle"！）
 
 ```json
 {
+  "id": "<hex32>",
+  "content": "{\"styles\":[{\"fill\":{\"alpha\":1.0,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1.0,\"color\":[1.0,1.0,1.0]}}},\"range\":[0,7],\"size\":12.0,\"bold\":false,\"italic\":false,\"underline\":false,\"strokes\":[{\"content\":{\"solid\":{\"alpha\":0.0,\"color\":[0.0,0.0,0.0]}},\"width\":0.0}]}],\"text\":\"CLEAN字幕\"}",
+  "typesetting": 0,
   "alignment": 1,
-  "content": "{\"styles\":[{\"fill\":{\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1.0,\"color\":[1.0,1.0,1.0]}}},\"range\":[0,5],\"useStyle\":\"\"}],\"text\":\"字幕文字\"}",
-  "font_size": 8.0,
-  "id": "<uuid>",
-  "italic": false,
   "letter_spacing": 0.0,
-  "line_max_width": 0.82,
   "line_spacing": 0.02,
-  "name": "",
-  "text_alpha": 1.0,
-  "text_color": "#FFFFFF",
-  "text_size": 30,
-  "type": "text",
-  "underline": false,
-  ...
+  "line_feed": 1,
+  "line_max_width": 1.0,         ← 1.0，不是 0.82
+  "force_apply_line_max_width": false,
+  "check_flag": 31,              ← 31，不是 63487
+  "type": "subtitle",            ← "subtitle"，不是 "text"！
+  "fixed_width": -1,
+  "fixed_height": -1,
+  "font_category_id": "",
+  "font_category_name": "",
+  "font_id": "",
+  "font_name": "",
+  "font_path": "",
+  "font_resource_id": "",        ← 新字段
+  "font_size": 15.0,
+  "font_source_platform": 0,     ← 新字段
+  "font_team_id": "",            ← 新字段
+  "font_title": "none",          ← 新字段
+  "font_url": "",                ← 新字段
+  "fonts": [],
+  "background_style": 0,
+  "background_color": "#000000",
+  "background_alpha": 0.5,
+  "background_round_radius": 0.3,
+  "background_height": 0.14,
+  "background_width": 0.14,
+  "background_horizontal_offset": 0.0,
+  "background_vertical_offset": 0.0,
+  "sub_type": 0,
+  "recognize_type": 0,
+  "is_rich_text": true,          ← 新字段
+  "caption_template_info": {     ← 新字段
+    "category_id": "", "category_name": "", "effect_id": "",
+    "is_new": false, "path": "", "request_id": "",
+    "resource_id": "", "resource_name": "", "source_platform": 0
+  },
+  "combo_info": { "text_templates": [] },   ← 新字段
+  "words": { "end_time": [], "start_time": [], "text": [] },
+  "subtitle_keywords": null      ← 新字段
 }
 ```
 
-`content` 里的 `range: [0, N]` 中 N = 字幕文字长度（字符数）。
+**content 字段内嵌 JSON** — styles[0] 结构：
+```json
+{
+  "fill": {
+    "alpha": 1.0,               ← 额外的 alpha 字段（旧预测没有）
+    "content": {
+      "render_type": "solid",
+      "solid": { "alpha": 1.0, "color": [1.0, 1.0, 1.0] }
+    }
+  },
+  "range": [0, <text_len>],
+  "size": 12.0,                 ← 新字段
+  "bold": false,                ← 新字段
+  "italic": false,              ← 新字段
+  "underline": false,           ← 新字段
+  "strokes": [{                 ← 新字段
+    "content": { "solid": { "alpha": 0.0, "color": [0.0, 0.0, 0.0] } },
+    "width": 0.0
+  }]
+}
+```
+
+### 5.4 materials.speeds（已确认）
+
+每个视频/音频 segment 通过 `extra_material_refs` 引用一个 speed material：
+
+```json
+{
+  "curve_speed": null,
+  "id": "<hex32>",
+  "mode": 0,
+  "speed": null,
+  "type": "speed"
+}
+```
 
 ---
 
-## 6. 时间单位确认
+## 6. 时间单位（已确认）
 
-**时间单位：微秒 (µs)**
+**微秒 (µs)**，1秒 = 1,000,000
 
-| 时长   | µs 值      |
-|--------|------------|
-| 1 秒   | 1,000,000  |
-| 5 秒   | 5,000,000  |
-| 1 分钟 | 60,000,000 |
-
-Storybound 草稿中确认：原草稿约 11:52 → duration ≈ 712,000,000 µs
+| 草稿时长    | µs 值         | 实际秒数 |
+|-------------|---------------|----------|
+| 原始草稿    | 712,099,999   | ~11:52   |
+| 目标测试草稿| 5,000,000     | 5 秒     |
+| 一帧（30fps）| 33,333       | 1/30 秒  |
 
 ---
 
-## 7. path 字段规则
+## 7. path 字段规则（已确认）
 
-1. **绝对路径**（Windows: `C:\...`，Mac: `/Users/...`）
-2. **正反斜杠**：Windows 草稿里是反斜杠 `\`，但剪映也接受正斜杠 `/`
-3. **材料同时有 `path` 和 `file_Path`**：两个字段都要写，内容相同
-4. **不能用相对路径**：剪映不会相对于草稿目录解析路径
-5. **路径不存在时**：剪映打开后显示 "Media Not Found"（视频/音频区域显示红色）
-
----
-
-## 8. 哪些字段可以复用 Storybound 模板
-
-| 字段                  | 操作          | 原因                          |
-|-----------------------|---------------|-------------------------------|
-| `canvas_config`       | 复用          | 分辨率/比例通常不变           |
-| `fps`                 | 复用          | 帧率通常不变                  |
-| `version`             | 复用          | 格式版本号不要改              |
-| `platform`            | 复用          | 平台信息不影响播放            |
-| `new_version`         | 复用          | 同上                          |
-| `color_space`         | 复用          | 色彩空间通常为 0              |
-| `id`                  | **重新生成**  | 每个草稿需要唯一 ID           |
-| `duration`            | **设新值**    | 必须等于所有轨道总时长        |
-| `tracks`              | **清空重建**  | 核心：完全替换旧内容          |
-| `materials.*`         | **清空重建**  | 核心：完全替换旧素材          |
-| `keyframes.*`         | **全部清空**  | 残留关键帧会引用旧 material   |
-| `keyframe_graph_list` | **清空为 []** | 同上                          |
-| `update_time`         | **更新**      | 设为当前时间戳（毫秒）        |
+1. **绝对路径**（Windows 反斜杠格式）
+2. 例：`D:\Program Files (x86)\jianying\Apps\JianyingPro Drafts\<名称>\assets\image\1.png`
+3. 音频路径：`...\assets\audio\1.mp3`
+4. 视频路径：`...\assets\video\clip.mp4`
+5. **只有 `path` 字段**，没有 `file_Path` 字段（Storybound 格式）
+6. `remote_url: null`
+7. `local_material_id` 设为同 id
 
 ---
 
-## 9. 哪些字段必须重新生成
+## 8. 可复用 vs 必须重建的字段
 
-- 所有 `id` 字段（draft id、track id、segment id、material id）→ 使用 `uuid4()`
-- `duration` → 根据实际轨道计算
-- `tracks` 完整重建
-- `materials.videos` / `materials.audios` / `materials.texts` 完整重建
-- `keyframes` 所有子数组 → 清空为 `[]`
-
----
-
-## 10. 为什么只改 template.json 不够
-
-1. Storybound 生成的草稿没有传统 `template.json`（Timelines 目录下的文件全是 opaque）
-2. `timeline_layout.json` 只指向哪个 Timelines 子目录是 active，不含时间线数据
-3. 剪映 5.x 读取时间线的主要明文来源是根目录 `draft_info.json`
-4. `template.tmp` / `template-2.tmp` 可能是压缩/加密的缓存，剪映会优先读 JSON
-
----
-
-## 11. 为什么必须处理 root draft_info.json
-
-1. 它是 Storybound 草稿里唯一的大型明文 JSON（~1.77MB，含 30 视频 + 31 音频 + 333 字幕）
-2. 直接修改它才能真正清空时间线内容
-3. Codex 本地实验确认：改了 draft_info.json 的 tracks/materials 后草稿结构变化
+| 字段                         | 操作           | 原因                                  |
+|------------------------------|----------------|---------------------------------------|
+| `canvas_config`              | 复用           | 分辨率/比例不变                       |
+| `fps`                        | 复用           | 帧率不变                              |
+| `version`                    | 复用           | 格式版本号不变                        |
+| `new_version`                | 复用           | 同上                                  |
+| `config`                     | 复用           | 内部配置参数，不影响时间线            |
+| `last_modified_platform`     | 复用           | 平台信息不影响播放                    |
+| `id`                         | **保持原值**   | 必须与 Timelines/<id>/ 文件夹名一致  |
+| `duration`                   | **设新值**     | 必须等于时间线总时长                  |
+| `tracks`                     | **清空重建**   | 完全替换旧时间线内容                  |
+| `materials.videos/audios/texts` | **清空重建** | 完全替换旧素材                        |
+| `materials.speeds`           | **清空重建**   | 引用旧 segment ID 的 speed，必须重建  |
+| `materials.material_animations` | **清空为[]** | 旧图片动画效果不需要                  |
+| `keyframes.*`                | **清空为[]**   | 残留关键帧会引用旧 material           |
+| `keyframe_graph_list`        | **清空为[]**   | 同上                                  |
 
 ---
 
-## 12. 当前风险和限制
+## 9. 为什么只改 template.json/timeline_layout 不够
 
-| 风险                              | 影响                         | 缓解                              |
-|-----------------------------------|------------------------------|-----------------------------------|
-| draft_content.json opaque 缓存   | 可能覆盖 draft_info.json     | 暂时无法消除；先以 draft_info 为主 |
-| template*.tmp 缓存                | 同上                         | 同上                              |
-| 路径在不同机器上不同              | Media Not Found              | 用户在本地运行脚本生成绝对路径    |
-| 剪映版本差异                      | 字段可能不同                 | inspect_draft.py 检查真实结构    |
+1. `Timelines/<id>/template.tmp` 是 opaque（base64 编码）
+2. 根目录 `template.tmp` 是空模板（tracks=[], duration=0），不是实际时间线
+3. `timeline_layout.json` 只指向 active timeline ID，不含时间线数据
+4. **剪映真正读取时间线数据的来源是根目录 `draft_info.json`**
 
 ---
 
-## 13. 验证日志
+## 10. 当前风险
+
+| 风险                              | 影响                   | 缓解                                   |
+|-----------------------------------|------------------------|----------------------------------------|
+| opaque `draft_content.json` 缓存 | 可能覆盖 draft_info    | 先以 draft_info 为主；后续研究         |
+| 路径只在生成机器上有效            | 其他机器 Media Not Found| 用户本地运行，保证路径存在            |
+| `draft_meta_info.json` 是 opaque | 无法更新草稿列表名称   | 剪映可通过 draft_info.json 的内容显示 |
+| `extra_material_refs` 悬空 refs  | 轻微影响（可能忽略）   | 用 `[]`，不引用旧 speed 材料          |
+
+---
+
+## 11. 已验证的草稿可打开性
+
+- `CLEAN_DRAFT_INFO_3V_1A_3T_5S_20260607`（本地 Codex 生成）可在剪映里打开
+- 但打开后仍显示旧 Storybound 内容（tracks/materials 没有真正清空）
+- **本轮修复目标**：用正确结构真正清空并重建 tracks/materials
+
+---
+
+## 12. 验证日志
 
 ```
 （运行 inspect_draft.py 后粘贴输出）
-```
-
----
-
-## 14. GUI 验证
-
-```
-（用户本地打开剪映后填写）
 ```
