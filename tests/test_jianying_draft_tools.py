@@ -1,417 +1,851 @@
-import importlib.util
+"""
+tests/test_jianying_draft_tools.py
+
+单元测试 — 剪映草稿生成工具
+
+数据来源：
+  mock draft 结构基于真实 Storybound 草稿包分析
+  （storybound_draft_structure_pack.zip，2026-06-07）
+
+运行：
+  python -m unittest tests.test_jianying_draft_tools -v
+"""
+
 import json
-import shutil
-import subprocess
+import os
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
+from unittest.mock import patch
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT / "tools" / "jianying_draft"))
+
+from create_draft_info_test import (
+    rebuild_draft_info,
+    _make_subtitle_content,
+    collect_material_paths_from_data,
+    TOTAL_DURATION_US,
+    new_hex_id,
+    run,
+)
+from inspect_draft import (
+    load_main_json,
+    collect_material_paths,
+    extract_texts,
+    count_tracks,
+    count_segments,
+)
 
 
-ROOT = Path(__file__).resolve().parents[1]
+# ────────────────────────────────────────────────
+# Mock 草稿构造（基于真实 Storybound 字段结构）
+# ────────────────────────────────────────────────
+
+def _hex() -> str:
+    return uuid.uuid4().hex
 
 
-def load_module(name, relative_path):
-    spec = importlib.util.spec_from_file_location(name, ROOT / relative_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def write_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-
-
-def make_template(tmp_path):
-    draft = tmp_path / "template"
-    timeline_id = "TL-1"
-    timeline = draft / "Timelines" / timeline_id
-    timeline.mkdir(parents=True)
-    (draft / "Resources").mkdir()
-    (draft / "draft_content.json").write_text("encrypted-content", encoding="utf-8")
-    (draft / "draft_meta_info.json").write_text("encrypted-meta", encoding="utf-8")
-    project = {
-        "id": "PROJECT-1",
-        "main_timeline_id": timeline_id,
-        "timelines": [{"id": timeline_id, "name": "时间线01"}],
-        "create_time": 1,
-        "update_time": 1,
-        "version": 0,
-    }
-    write_json(draft / "Timelines" / "project.json", project)
-    write_json(draft / "Timelines" / "project.json.bak", project)
-    base = {
-        "id": "OLD-DRAFT",
-        "name": "old",
-        "duration": 0,
-        "fps": 30,
-        "canvas_config": {"height": 1280, "ratio": "9:16", "width": 720},
-        "materials": {
-            "videos": [],
-            "audios": [],
-            "texts": [],
-            "speeds": [],
-            "sound_channel_mappings": [],
-        },
-        "tracks": [],
-    }
-    write_json(timeline / "template.tmp", base)
-    write_json(timeline / "template.json", base)
-    return draft
-
-
-def old_rich_timeline():
+def _make_photo_material(i):
+    """Storybound 的 photo 类型素材"""
+    mid = _hex()
     return {
-        "id": "OLD-RICH",
-        "name": "old-rich",
-        "duration": 23_833_333,
-        "fps": 30,
-        "canvas_config": {"height": 1280, "ratio": "9:16", "width": 720},
-        "materials": {
-            "videos": [{"id": f"old-video-{index}", "path": f"old{index}.mp4"} for index in range(9)],
-            "audios": [{"id": f"old-audio-{index}", "path": f"old{index}.mp3"} for index in range(9)],
-            "texts": [{"id": f"old-text-{index}", "recognize_text": f"old {index}"} for index in range(11)],
+        "audio_fade": None, "category_id": "", "category_name": "local",
+        "check_flag": 63487,
+        "crop": {"upper_left_x": 0.0, "upper_left_y": 0.0,
+                 "upper_right_x": 1.0, "upper_right_y": 0.0,
+                 "lower_left_x": 0.0, "lower_left_y": 1.0,
+                 "lower_right_x": 1.0, "lower_right_y": 1.0},
+        "crop_ratio": "free", "crop_scale": 1.0,
+        "duration": 10800000000, "height": 1920,
+        "id": mid, "local_material_id": "", "material_id": mid,
+        "material_name": f"{i}.png", "media_path": "",
+        "path": f"D:\\storybound\\assets\\image\\{i}.png",
+        "remote_url": None, "type": "photo", "width": 1080
+    }
+
+
+def _make_audio_material(i):
+    mid = _hex()
+    return {
+        "app_id": 0, "category_id": "", "category_name": "local",
+        "check_flag": 1, "copyright_limit_type": "none",
+        "duration": 10200000, "effect_id": "", "formula_id": "",
+        "id": mid, "intensifies_path": "",
+        "is_ai_clone_tone": False, "is_text_edit_overdub": False, "is_ugc": False,
+        "local_material_id": mid, "music_id": mid,
+        "name": f"{i}.mp3",
+        "path": f"D:\\storybound\\assets\\audio\\{i}.mp3",
+        "remote_url": None, "query": "", "request_id": "", "resource_id": "",
+        "search_id": "", "source_from": "", "source_platform": 0,
+        "team_id": "", "text_id": "",
+        "tone_category_id": "", "tone_category_name": "",
+        "tone_effect_id": "", "tone_effect_name": "", "tone_platform": "",
+        "tone_second_category_id": "", "tone_second_category_name": "",
+        "tone_speaker": "", "tone_type": "",
+        "type": "extract_music", "video_id": "", "wave_points": []
+    }
+
+
+def _make_subtitle_material(i):
+    mid = _hex()
+    text = f"原始字幕 {i}"
+    return {
+        "id": mid,
+        "content": _make_subtitle_content(text),
+        "typesetting": 0, "alignment": 1,
+        "letter_spacing": 0.0, "line_spacing": 0.02,
+        "line_feed": 1, "line_max_width": 1.0,
+        "force_apply_line_max_width": False,
+        "check_flag": 31, "type": "subtitle",
+        "fixed_width": -1, "fixed_height": -1,
+        "font_category_id": "", "font_category_name": "",
+        "font_id": "", "font_name": "", "font_path": "",
+        "font_resource_id": "", "font_size": 15.0,
+        "font_source_platform": 0, "font_team_id": "",
+        "font_title": "none", "font_url": "", "fonts": [],
+        "background_style": 0, "background_color": "#000000",
+        "background_alpha": 0.5, "background_round_radius": 0.3,
+        "background_height": 0.14, "background_width": 0.14,
+        "background_horizontal_offset": 0.0, "background_vertical_offset": 0.0,
+        "sub_type": 0, "recognize_type": 0, "is_rich_text": True,
+        "caption_template_info": {
+            "category_id": "", "category_name": "", "effect_id": "",
+            "is_new": False, "path": "", "request_id": "",
+            "resource_id": "", "resource_name": "", "source_platform": 0
         },
+        "combo_info": {"text_templates": []},
+        "words": {"end_time": [], "start_time": [], "text": []},
+        "subtitle_keywords": None
+    }
+
+
+def _make_speed(i):
+    return {"curve_speed": None, "id": _hex(), "mode": 0, "speed": None, "type": "speed"}
+
+
+def _make_video_segment(mat_id, start=0, dur=10200000):
+    spd = _hex()
+    return {
+        "enable_adjust": True, "enable_color_correct_adjust": False,
+        "enable_color_curves": True, "enable_color_match_adjust": False,
+        "enable_color_wheels": True, "enable_lut": True,
+        "enable_smart_color_adjust": False, "last_nonzero_volume": 1.0,
+        "reverse": False, "track_attribute": 0, "track_render_index": 0, "visible": True,
+        "id": _hex(), "material_id": mat_id,
+        "target_timerange": {"start": start, "duration": dur},
+        "source_timerange": {"start": 0, "duration": dur},
+        "common_keyframes": [], "keyframe_refs": [],
+        "speed": None, "volume": 1.0,
+        "extra_material_refs": [spd],
+        "clip": {"alpha": 1.0, "flip": {"horizontal": False, "vertical": False},
+                 "rotation": 0.0, "scale": {"x": 1.0, "y": 1.0},
+                 "transform": {"x": 0.0, "y": 0.0}},
+        "uniform_scale": {"on": True, "value": 1.0},
+        "hdr_settings": {"intensity": 1.0, "mode": 1, "nits": 1000},
+        "render_index": 0,
+    }
+
+
+def make_mock_storybound_draft(n_photos=30, n_audios=31, n_texts=333,
+                                duration_us=712_099_999) -> dict:
+    """模拟真实 Storybound draft_info.json 结构"""
+    photos = [_make_photo_material(i) for i in range(n_photos)]
+    audios = [_make_audio_material(i) for i in range(n_audios)]
+    texts  = [_make_subtitle_material(i) for i in range(n_texts)]
+    speeds = [_make_speed(i) for i in range(n_photos + n_audios)]
+
+    vid_segs = [_make_video_segment(p["id"], i * 10_200_000, 10_200_000)
+                for i, p in enumerate(photos)]
+
+    return {
+        "canvas_config": {"width": 1080, "height": 1920, "ratio": "original"},
+        "color_space": 0,
+        "config": {"adjust_max_index": 1, "attachment_info": []},
+        "cover": "",
+        "create_time": 0,
+        "duration": duration_us,
+        "extra_info": None,
+        "fps": 30,
+        "free_render_index_mode_on": False,
+        "group_container": None,
+        "id": str(uuid.uuid4()).upper(),
+        "keyframe_graph_list": [],
+        "keyframes": {
+            "adjusts": [], "audios": [], "effects": [],
+            "filters": [], "handwrites": [], "stickers": [], "texts": [], "videos": []
+        },
+        "last_modified_platform": {
+            "app_id": 359289, "app_source": "cc", "app_version": "6.5.0",
+            "device_id": _hex(), "hard_disk_id": _hex(), "mac_address": _hex(),
+            "os": "mac", "os_version": "15.5"
+        },
+        "materials": {
+            "audios": audios, "beats": [], "canvases": [],
+            "effects": [], "flowers": [], "green_screens": [], "handwrites": [],
+            "hsl": [], "images": [], "log_color_wheels": [], "loudnesses": [],
+            "manual_deformations": [], "material_animations": [],
+            "material_colors": [], "multi_language_refs": [], "placeholders": [],
+            "plugin_effects": [], "primary_color_wheels": [],
+            "realtime_denoises": [], "shapes": [], "smart_crops": [],
+            "smart_relights": [], "sound_channel_mappings": [],
+            "speeds": speeds, "stickers": [], "tail_leaders": [],
+            "text_templates": [], "texts": texts, "time_marks": [],
+            "transitions": [], "video_effects": [], "video_trackings": [],
+            "videos": photos, "vocal_beautifys": [], "vocal_separations": [],
+            "masks": [], "ai_translates": [], "audio_balances": [],
+            "audio_effects": [], "audio_fades": [], "audio_track_indexes": [],
+            "beats": [], "chromas": [], "color_curves": [], "color_wheels": [],
+            "digital_humans": [], "drafts": [],
+        },
+        "mutable_config": None,
+        "name": "",
+        "new_version": "100.0.0",
+        "platform": {"app_id": 359289, "app_source": "cc", "app_version": "6.5.0",
+                     "os": "mac", "os_version": "15.5"},
+        "relationships": [],
+        "render_index_track_mode_on": True,
+        "retouch_cover": "",
+        "source": "default",
+        "static_cover_image_path": "",
+        "time_marks": None,
         "tracks": [
-            {
-                "id": "old-video-track",
-                "type": "video",
-                "segments": [{"id": f"old-vs-{index}", "material_id": f"old-video-{index}"} for index in range(9)],
-            },
-            {
-                "id": "old-audio-track",
-                "type": "audio",
-                "segments": [{"id": f"old-as-{index}", "material_id": f"old-audio-{index}"} for index in range(9)],
-            },
-            {
-                "id": "old-text-track",
-                "type": "text",
-                "segments": [{"id": f"old-ts-{index}", "material_id": f"old-text-{index}"} for index in range(11)],
-            },
+            {"attribute": 0, "flag": 0, "id": _hex(),
+             "is_default_name": False, "name": "image_main",
+             "type": "video", "segments": vid_segs}
         ],
+        "update_time": 0,
+        "version": 360000,
     }
 
 
-def make_comp_input(tmp_path, template, output, videos, audio, subtitles):
-    return {
-        "title": output.name,
-        "templateDraftDir": str(template),
-        "outputDraftDir": str(output),
-        "canvas": {"ratio": "9:16", "width": 1080, "height": 1920, "fps": 30},
-        "segments": videos,
-        "voice": {"path": str(audio), "timelineStartUs": 0, "durationUs": 7_000_000},
-        "subtitles": subtitles,
-    }
+def make_mock_video_info(n=3, dur_us=1_666_666) -> list[dict]:
+    return [{"path": f"/fake/assets/video/clip{i}.mp4",
+             "dur_us": dur_us, "w": 1080, "h": 1920}
+            for i in range(n)]
 
 
-class JianyingDraftToolsTest(unittest.TestCase):
+def make_mock_audio_info(n=1, dur_us=5_000_000) -> list[dict]:
+    return [{"path": f"/fake/assets/audio/audio{i}.mp3", "dur_us": dur_us}
+            for i in range(n)]
+
+
+# ────────────────────────────────────────────────
+# TestRebuildDraftInfo
+# ────────────────────────────────────────────────
+
+class TestRebuildDraftInfo(unittest.TestCase):
+
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.tmp_path = Path(self.tmp.name)
+        self.template  = make_mock_storybound_draft(n_photos=30, n_audios=31, n_texts=333)
+        self.vid_info  = make_mock_video_info(n=3)
+        self.aud_info  = make_mock_audio_info(n=1)
+        self.subtitles = ["CLEAN 字幕 1", "CLEAN 字幕 2", "CLEAN 字幕 3"]
 
-    def tearDown(self):
-        self.tmp.cleanup()
+    def _rebuild(self, **kwargs):
+        kw = dict(template_data=self.template, video_info=self.vid_info,
+                  audio_info=self.aud_info, subtitle_texts=self.subtitles,
+                  total_dur_us=TOTAL_DURATION_US)
+        kw.update(kwargs)
+        return rebuild_draft_info(**kw)
 
-    def test_inspect_draft_reads_timeline_template(self):
-        inspect_draft = load_module(
-            "inspect_draft", "tools/jianying_draft/inspect_draft.py"
+    # ── duration ─────────────────────────────────
+    def test_duration_is_5s(self):
+        out = self._rebuild()
+        self.assertEqual(out["duration"], TOTAL_DURATION_US)
+
+    # ── materials.videos ─────────────────────────
+    def test_video_materials_count(self):
+        out = self._rebuild()
+        self.assertEqual(len(out["materials"]["videos"]), 3)
+
+    def test_video_type_is_video_not_photo(self):
+        out = self._rebuild()
+        for v in out["materials"]["videos"]:
+            self.assertEqual(v.get("type"), "video",
+                             "video materials 应为 type='video'，不是 'photo'")
+
+    def test_no_storybound_paths_in_videos(self):
+        out = self._rebuild()
+        for v in out["materials"]["videos"]:
+            self.assertNotIn("storybound", (v.get("path") or "").lower())
+
+    # ── materials.audios ─────────────────────────
+    def test_audio_materials_count(self):
+        out = self._rebuild()
+        self.assertEqual(len(out["materials"]["audios"]), 1)
+
+    def test_audio_has_music_id(self):
+        out = self._rebuild()
+        for a in out["materials"]["audios"]:
+            self.assertIn("music_id", a, "audio material 应有 music_id 字段")
+            self.assertEqual(a["music_id"], a["id"], "music_id 应与 id 相同")
+
+    def test_audio_has_copyright_limit_type(self):
+        out = self._rebuild()
+        for a in out["materials"]["audios"]:
+            self.assertIn("copyright_limit_type", a)
+
+    # ── materials.texts ──────────────────────────
+    def test_text_materials_count(self):
+        out = self._rebuild()
+        self.assertEqual(len(out["materials"]["texts"]), 3)
+
+    def test_text_type_is_subtitle(self):
+        """type 必须是 'subtitle'，不是 'text'！"""
+        out = self._rebuild()
+        for t in out["materials"]["texts"]:
+            self.assertEqual(t.get("type"), "subtitle",
+                             f"text material type 应为 'subtitle'，得到 {t.get('type')!r}")
+
+    def test_text_content_correct(self):
+        out = self._rebuild()
+        texts_out = []
+        for item in out["materials"]["texts"]:
+            raw = item.get("content") or ""
+            try:
+                texts_out.append(json.loads(raw).get("text", ""))
+            except Exception:
+                texts_out.append(raw)
+        for expected in self.subtitles:
+            self.assertIn(expected, texts_out)
+
+    def test_no_original_subtitles_remain(self):
+        out = self._rebuild()
+        for item in out["materials"]["texts"]:
+            raw = item.get("content") or ""
+            try:
+                text = json.loads(raw).get("text", "")
+            except Exception:
+                text = raw
+            self.assertNotIn("原始字幕", text)
+
+    def test_subtitle_content_has_alpha_in_fill(self):
+        """Storybound 格式：styles[0].fill.alpha 字段必须存在"""
+        out = self._rebuild()
+        for item in out["materials"]["texts"]:
+            raw = item.get("content") or ""
+            try:
+                c = json.loads(raw)
+                fill = c["styles"][0]["fill"]
+                self.assertIn("alpha", fill,
+                              "styles[0].fill.alpha 缺失（Storybound 格式要求）")
+            except Exception:
+                pass
+
+    def test_subtitle_content_has_strokes(self):
+        out = self._rebuild()
+        for item in out["materials"]["texts"]:
+            raw = item.get("content") or ""
+            try:
+                c = json.loads(raw)
+                self.assertIn("strokes", c["styles"][0],
+                              "styles[0].strokes 缺失（Storybound 格式要求）")
+            except Exception:
+                pass
+
+    def test_subtitle_has_is_rich_text(self):
+        out = self._rebuild()
+        for item in out["materials"]["texts"]:
+            self.assertTrue(item.get("is_rich_text"),
+                            "is_rich_text 应为 True")
+
+    def test_subtitle_has_caption_template_info(self):
+        out = self._rebuild()
+        for item in out["materials"]["texts"]:
+            self.assertIn("caption_template_info", item,
+                          "caption_template_info 缺失")
+
+    # ── materials.speeds ─────────────────────────
+    def test_speeds_count_equals_vid_plus_aud(self):
+        out = self._rebuild()
+        expected = len(self.vid_info) + len(self.aud_info)
+        self.assertEqual(len(out["materials"]["speeds"]), expected)
+
+    def test_speeds_type(self):
+        out = self._rebuild()
+        for s in out["materials"]["speeds"]:
+            self.assertEqual(s.get("type"), "speed")
+
+    # ── tracks ───────────────────────────────────
+    def test_tracks_count(self):
+        out = self._rebuild()
+        self.assertEqual(len(out["tracks"]), 3)
+
+    def test_track_types(self):
+        out = self._rebuild()
+        types = [t["type"] for t in out["tracks"]]
+        self.assertIn("video", types)
+        self.assertIn("audio", types)
+        self.assertIn("text", types)
+
+    def test_video_segments_count(self):
+        out = self._rebuild()
+        self.assertEqual(count_segments(out["tracks"], "video"), 3)
+
+    def test_audio_segments_count(self):
+        out = self._rebuild()
+        self.assertEqual(count_segments(out["tracks"], "audio"), 1)
+
+    def test_text_segments_count(self):
+        out = self._rebuild()
+        self.assertEqual(count_segments(out["tracks"], "text"), 3)
+
+    # ── segment structure: clip.transform ────────
+    def test_video_segment_uses_clip_transform(self):
+        """clip 字段必须用 transform，不是 translation（Storybound 格式）"""
+        out = self._rebuild()
+        vid_track = next(t for t in out["tracks"] if t["type"] == "video")
+        for seg in vid_track["segments"]:
+            clip = seg.get("clip") or {}
+            self.assertIn("transform", clip,
+                          "video segment clip 应有 transform 字段（不是 translation）")
+            self.assertNotIn("translation", clip,
+                             "video segment clip 不应有 translation 字段（旧格式）")
+
+    def test_text_segment_uses_clip_transform(self):
+        out = self._rebuild()
+        txt_track = next(t for t in out["tracks"] if t["type"] == "text")
+        for seg in txt_track["segments"]:
+            clip = seg.get("clip") or {}
+            self.assertIn("transform", clip)
+
+    # ── segment structure: uniform_scale ─────────
+    def test_video_segment_uniform_scale(self):
+        out = self._rebuild()
+        vid_track = next(t for t in out["tracks"] if t["type"] == "video")
+        for seg in vid_track["segments"]:
+            us = seg.get("uniform_scale")
+            self.assertIsNotNone(us, "uniform_scale 不应为 null（应为 {on,value}）")
+            self.assertIsInstance(us, dict)
+            self.assertTrue(us.get("on"))
+
+    # ── segment structure: keyframe_refs ─────────
+    def test_segments_have_keyframe_refs(self):
+        out = self._rebuild()
+        for track in out["tracks"]:
+            for seg in (track.get("segments") or []):
+                self.assertIn("keyframe_refs", seg,
+                              f"segment {seg.get('id')} 缺少 keyframe_refs 字段")
+
+    # ── segment structure: speed ─────────────────
+    def test_video_segment_speed_is_null(self):
+        out = self._rebuild()
+        vid_track = next(t for t in out["tracks"] if t["type"] == "video")
+        for seg in vid_track["segments"]:
+            self.assertIsNone(seg.get("speed"),
+                              "video segment speed 应为 null（Storybound 格式）")
+
+    def test_text_segment_speed_is_1(self):
+        out = self._rebuild()
+        txt_track = next(t for t in out["tracks"] if t["type"] == "text")
+        for seg in txt_track["segments"]:
+            self.assertEqual(seg.get("speed"), 1.0)
+
+    # ── segment structure: source_timerange ──────
+    def test_text_segment_source_timerange_is_null(self):
+        out = self._rebuild()
+        txt_track = next(t for t in out["tracks"] if t["type"] == "text")
+        for seg in txt_track["segments"]:
+            self.assertIsNone(seg.get("source_timerange"),
+                              "text segment source_timerange 应为 null")
+
+    # ── segment structure: hdr_settings ──────────
+    def test_video_segment_has_hdr_settings(self):
+        out = self._rebuild()
+        vid_track = next(t for t in out["tracks"] if t["type"] == "video")
+        for seg in vid_track["segments"]:
+            hdr = seg.get("hdr_settings")
+            self.assertIsNotNone(hdr)
+            self.assertEqual(hdr.get("mode"), 1)
+
+    # ── segment structure: extra_material_refs ────
+    def test_video_segment_refs_speed(self):
+        """video segment 的 extra_material_refs 应包含一个 speed material id"""
+        out = self._rebuild()
+        speed_ids = {s["id"] for s in (out["materials"].get("speeds") or [])}
+        vid_track = next(t for t in out["tracks"] if t["type"] == "video")
+        for seg in vid_track["segments"]:
+            refs = seg.get("extra_material_refs") or []
+            self.assertEqual(len(refs), 1, "video segment 应引用 1 个 speed material")
+            self.assertIn(refs[0], speed_ids, "extra_material_refs[0] 应在 speeds 中")
+
+    # ── video segments coverage ───────────────────
+    def test_video_segments_cover_full_duration(self):
+        out = self._rebuild()
+        vid_track = next(t for t in out["tracks"] if t["type"] == "video")
+        total = sum(s["target_timerange"]["duration"] for s in vid_track["segments"])
+        self.assertEqual(total, TOTAL_DURATION_US)
+
+    def test_video_segments_no_gap(self):
+        out = self._rebuild()
+        vid_track = next(t for t in out["tracks"] if t["type"] == "video")
+        segs = sorted(vid_track["segments"], key=lambda s: s["target_timerange"]["start"])
+        cursor = 0
+        for seg in segs:
+            tgt = seg["target_timerange"]
+            self.assertEqual(tgt["start"], cursor)
+            cursor += tgt["duration"]
+
+    # ── text render_index ─────────────────────────
+    def test_text_segment_render_index(self):
+        out = self._rebuild()
+        txt_track = next(t for t in out["tracks"] if t["type"] == "text")
+        for seg in txt_track["segments"]:
+            self.assertGreaterEqual(seg.get("render_index", 0), 15000,
+                                    "text segment render_index 应 >= 15000")
+
+    # ── keyframes cleared ─────────────────────────
+    def test_keyframes_all_cleared(self):
+        out = self._rebuild()
+        kf = out.get("keyframes") or {}
+        for k, v in kf.items():
+            if isinstance(v, list):
+                self.assertEqual(v, [], f"keyframes.{k} 应被清空")
+
+    def test_keyframe_graph_list_cleared(self):
+        out = self._rebuild()
+        self.assertEqual(out.get("keyframe_graph_list"), [])
+
+    # ── non-relevant materials cleared ───────────
+    def test_stickers_cleared(self):
+        out = self._rebuild()
+        self.assertEqual(out["materials"].get("stickers") or [], [])
+
+    def test_effects_cleared(self):
+        out = self._rebuild()
+        self.assertEqual(out["materials"].get("effects") or [], [])
+
+    def test_material_animations_cleared(self):
+        out = self._rebuild()
+        self.assertEqual(out["materials"].get("material_animations") or [], [])
+
+    # ── canvas_config preserved ───────────────────
+    def test_canvas_config_preserved(self):
+        out = self._rebuild()
+        orig = self.template["canvas_config"]
+        new  = out["canvas_config"]
+        self.assertEqual(new["width"],  orig["width"])
+        self.assertEqual(new["height"], orig["height"])
+        self.assertEqual(new["ratio"],  orig["ratio"])
+
+    # ── fps preserved ─────────────────────────────
+    def test_fps_preserved(self):
+        out = self._rebuild()
+        self.assertEqual(out.get("fps"), self.template.get("fps"))
+
+    # ── version preserved ─────────────────────────
+    def test_version_preserved(self):
+        out = self._rebuild()
+        self.assertEqual(out.get("version"), self.template.get("version"))
+
+    # ── draft id preserved ────────────────────────
+    def test_draft_id_preserved(self):
+        """草稿 id 必须保持不变（与 Timelines/<id>/ 一致）"""
+        out = self._rebuild()
+        self.assertEqual(out.get("id"), self.template.get("id"),
+                         "draft id 应保持原值（与 Timelines 文件夹名一致）")
+
+    # ── material_id references consistent ────────
+    def test_segment_material_ids_valid(self):
+        out = self._rebuild()
+        all_ids = set()
+        for k in ["videos", "audios", "texts"]:
+            for m in (out["materials"].get(k) or []):
+                all_ids.add(m["id"])
+        for track in out["tracks"]:
+            for seg in (track.get("segments") or []):
+                mid = seg.get("material_id")
+                self.assertIn(mid, all_ids,
+                              f"segment material_id={mid} 在 materials 中找不到")
+
+    # ── empty video list edge case ────────────────
+    def test_empty_video_list(self):
+        out = self._rebuild(video_info=[], subtitle_texts=[])
+        vid_track = next((t for t in out["tracks"] if t["type"] == "video"), None)
+        segs = (vid_track or {}).get("segments") or []
+        self.assertEqual(len(segs), 0)
+
+
+# ────────────────────────────────────────────────
+# TestInspectHelpers
+# ────────────────────────────────────────────────
+
+class TestInspectHelpers(unittest.TestCase):
+
+    def setUp(self):
+        self.draft = make_mock_storybound_draft(n_photos=3, n_audios=1, n_texts=5)
+
+    def test_count_tracks_video(self):
+        self.assertEqual(count_tracks(self.draft["tracks"], "video"), 1)
+
+    def test_count_segments_video(self):
+        self.assertEqual(count_segments(self.draft["tracks"], "video"), 3)
+
+    def test_extract_texts(self):
+        texts = extract_texts(self.draft["materials"], limit=10)
+        self.assertEqual(len(texts), 5)
+        self.assertIn("原始字幕 0", texts)
+
+    def test_extract_texts_limit(self):
+        big = make_mock_storybound_draft(n_texts=100)
+        self.assertEqual(len(extract_texts(big["materials"], limit=10)), 10)
+
+    def test_collect_material_paths_storybound(self):
+        """Storybound 只有 path 字段，没有 file_Path"""
+        paths = collect_material_paths(self.draft["materials"])
+        self.assertEqual(len(paths), 3 + 1)   # 3 photos + 1 audio
+        for p in paths:
+            self.assertTrue(p.startswith("D:\\"), f"应为 Windows 绝对路径: {p}")
+
+    def test_load_main_json_prefer_draft_info(self):
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "draft_info.json").write_text(
+                json.dumps({"id": "A"}), encoding="utf-8")
+            (Path(td) / "draft_content.json").write_text(
+                json.dumps({"id": "B"}), encoding="utf-8")
+            data, fname = load_main_json(Path(td))
+            self.assertEqual(fname, "draft_info.json")
+            self.assertEqual(data["id"], "A")
+
+    def test_load_main_json_fallback_to_content(self):
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "draft_content.json").write_text(
+                json.dumps({"id": "B"}), encoding="utf-8")
+            data, fname = load_main_json(Path(td))
+            self.assertEqual(fname, "draft_content.json")
+
+    def test_load_main_json_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            data, fname = load_main_json(Path(td))
+            self.assertIsNone(data)
+            self.assertIsNone(fname)
+
+    def test_load_main_json_skips_opaque(self):
+        """draft_content.json 是 opaque (base64) 时应优先用 draft_info.json"""
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "draft_info.json").write_text(
+                json.dumps({"id": "REAL"}), encoding="utf-8")
+            (Path(td) / "draft_content.json").write_bytes(b"opaque_garbage_base64==")
+            data, fname = load_main_json(Path(td))
+            self.assertEqual(fname, "draft_info.json")
+            self.assertEqual(data["id"], "REAL")
+
+
+# ────────────────────────────────────────────────
+# TestMediaPathChecking
+# ────────────────────────────────────────────────
+
+class TestMediaPathChecking(unittest.TestCase):
+
+    def test_missing_paths_detected(self):
+        draft = make_mock_storybound_draft(n_photos=2, n_audios=1, n_texts=0)
+        paths = collect_material_paths(draft["materials"])
+        missing = [p for p in paths if not Path(p).exists()]
+        self.assertEqual(len(missing), len(paths),
+                         "假 Windows 路径都应被检测为缺失")
+
+    def test_present_paths_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "test.mp4"
+            f.write_bytes(b"fake mp4")
+            mats = {"videos": [{"id": "X", "path": str(f), "type": "video"}], "audios": []}
+            missing = [p for p in collect_material_paths(mats) if not Path(p).exists()]
+            self.assertEqual(missing, [])
+
+    def test_collect_material_paths_from_data(self):
+        template = make_mock_storybound_draft(n_photos=3, n_audios=1, n_texts=0)
+        vid_info = make_mock_video_info(n=3)
+        aud_info = make_mock_audio_info(n=1)
+        out = rebuild_draft_info(
+            template_data=template, video_info=vid_info,
+            audio_info=aud_info, subtitle_texts=["CLEAN 字幕 1", "CLEAN 字幕 2", "CLEAN 字幕 3"],
+            total_dur_us=TOTAL_DURATION_US,
         )
-        draft = make_template(self.tmp_path)
+        paths = collect_material_paths_from_data(out)
+        self.assertEqual(len(paths), 4)   # 3 videos + 1 audio
+        missing = [p for p in paths if not Path(p).exists()]
+        self.assertEqual(len(missing), len(paths),
+                         "fake 路径都应被检测为缺失")
 
-        summary = inspect_draft.inspect_draft(draft)
 
-        self.assertIs(summary["draft_content_found"], True)
-        self.assertIs(summary["draft_meta_info_found"], True)
-        self.assertIs(summary["draft_content_parseable"], False)
-        self.assertIs(summary["timeline_template_found"], True)
-        self.assertEqual(summary["draft_name"], "old")
-        self.assertEqual(summary["duration"], 0)
-        self.assertEqual(summary["tracks_count"], 0)
-        self.assertEqual(summary["materials_counts"]["videos"], 0)
+# ────────────────────────────────────────────────
+# TestSubtitleContent
+# ────────────────────────────────────────────────
 
-    def test_create_minimal_draft_writes_video_audio_and_subtitle(self):
-        create_minimal = load_module(
-            "create_minimal_draft", "tools/jianying_draft/create_minimal_draft.py"
+class TestSubtitleContent(unittest.TestCase):
+
+    def test_valid_json(self):
+        content = _make_subtitle_content("你好世界")
+        obj = json.loads(content)
+        self.assertEqual(obj["text"], "你好世界")
+
+    def test_range_matches_text_len(self):
+        text = "CLEAN 字幕 1"
+        obj = json.loads(_make_subtitle_content(text))
+        r = obj["styles"][0]["range"]
+        self.assertEqual(r, [0, len(text)])
+
+    def test_fill_has_alpha(self):
+        """Storybound 格式：fill 必须有 alpha 字段"""
+        obj = json.loads(_make_subtitle_content("test"))
+        fill = obj["styles"][0]["fill"]
+        self.assertIn("alpha", fill)
+        self.assertEqual(fill["alpha"], 1.0)
+
+    def test_has_strokes(self):
+        obj = json.loads(_make_subtitle_content("test"))
+        self.assertIn("strokes", obj["styles"][0])
+        self.assertIsInstance(obj["styles"][0]["strokes"], list)
+
+    def test_has_size(self):
+        obj = json.loads(_make_subtitle_content("test"))
+        self.assertIn("size", obj["styles"][0])
+
+    def test_color_white(self):
+        obj = json.loads(_make_subtitle_content("test"))
+        color = obj["styles"][0]["fill"]["content"]["solid"]["color"]
+        self.assertEqual(color, [1.0, 1.0, 1.0])
+
+
+# ────────────────────────────────────────────────
+# TestIDFormat
+# ────────────────────────────────────────────────
+
+class TestIDFormat(unittest.TestCase):
+
+    def test_new_hex_id_is_32_lowercase(self):
+        for _ in range(10):
+            hid = new_hex_id()
+            self.assertEqual(len(hid), 32, f"hex id 应为 32 字符: {hid}")
+            self.assertEqual(hid, hid.lower(), f"hex id 应全小写: {hid}")
+            self.assertNotIn("-", hid, f"hex id 不应含连字符: {hid}")
+
+    def test_material_ids_are_hex32(self):
+        template = make_mock_storybound_draft(n_photos=1, n_audios=1, n_texts=0)
+        out = rebuild_draft_info(
+            template_data=template,
+            video_info=make_mock_video_info(n=1),
+            audio_info=make_mock_audio_info(n=1),
+            subtitle_texts=["CLEAN 字幕 1"],
+            total_dur_us=TOTAL_DURATION_US,
         )
-        template = make_template(self.tmp_path)
-        video = self.tmp_path / "source.mp4"
-        audio = self.tmp_path / "voice.mp3"
-        video.write_bytes(b"video")
-        audio.write_bytes(b"audio")
-        output = self.tmp_path / "out-draft"
+        for k in ["videos", "audios", "texts", "speeds"]:
+            for m in (out["materials"].get(k) or []):
+                mid = m["id"]
+                self.assertEqual(len(mid), 32, f"{k} material id 应为 32 字符: {mid}")
+                self.assertEqual(mid, mid.lower(), f"{k} material id 应全小写: {mid}")
 
-        result = create_minimal.create_minimal_draft(
-            template_dir=template,
-            output_dir=output,
-            video_path=video,
-            audio_path=audio,
-            title="测试导出草稿",
-            subtitle="这是从 shipin-cut 导出的测试字幕",
-            duration_us=3_000_000,
-            overwrite=False,
-        )
 
-        timeline_json = json.loads(result.timeline_template.read_text(encoding="utf-8"))
-        timeline_id = result.timeline_id
-        self.assertTrue(
-            (output / "Timelines" / timeline_id / "materials" / "video" / "source.mp4").exists()
-        )
-        self.assertTrue(
-            (output / "Timelines" / timeline_id / "materials" / "audio" / "voice.mp3").exists()
-        )
-        self.assertEqual(timeline_json["name"], "测试导出草稿")
-        self.assertEqual(timeline_json["duration"], 3_000_000)
-        self.assertEqual(timeline_json["materials"]["videos"][0]["path"], "materials/video/source.mp4")
-        self.assertEqual(timeline_json["materials"]["audios"][0]["path"], "materials/audio/voice.mp3")
-        self.assertEqual(
-            timeline_json["materials"]["texts"][0]["recognize_text"],
-            "这是从 shipin-cut 导出的测试字幕",
-        )
-        self.assertEqual([track["type"] for track in timeline_json["tracks"]], ["video", "audio", "text"])
+# ────────────────────────────────────────────────
+# TestCLIInputValidation
+# ────────────────────────────────────────────────
 
-    def test_create_minimal_draft_cli_reports_output(self):
-        template = make_template(self.tmp_path)
-        video = self.tmp_path / "source.mp4"
-        audio = self.tmp_path / "voice.mp3"
-        video.write_bytes(b"video")
-        audio.write_bytes(b"audio")
-        output = self.tmp_path / "out-draft"
+class TestCLIInputValidation(unittest.TestCase):
+    """测试 run() 的参数验证：输入文件不存在时应 sys.exit(1)"""
 
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "tools" / "jianying_draft" / "create_minimal_draft.py"),
-                "--template",
-                str(template),
-                "--output",
-                str(output),
-                "--video",
-                str(video),
-                "--audio",
-                str(audio),
-                "--title",
-                "测试导出草稿",
-                "--duration-seconds",
-                "2",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
+    def _make_args(self, template_dir, video_paths, audio_paths):
+        class Args:
+            template = str(template_dir)
+            output   = str(template_dir.parent / "output_test")
+            video    = video_paths
+            audio    = audio_paths
+        return Args()
 
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("已生成剪映草稿", completed.stdout)
-        self.assertIn(str(output), completed.stdout)
+    def _make_template_dir(self, tmp: Path) -> Path:
+        """在 tmp 下创建合法模板目录（含 draft_info.json）"""
+        tpl = tmp / "template"
+        tpl.mkdir()
+        draft = {
+            "id": "DEADBEEF-0000-0000-0000-000000000000",
+            "duration": 5_000_000,
+            "fps": 30.0,
+            "canvas_config": {"width": 1920, "height": 1080, "ratio": "original"},
+            "version": 360000,
+            "new_version": "107.0.0",
+            "tracks": [],
+            "materials": {
+                "videos": [], "audios": [], "texts": [],
+                "speeds": [], "stickers": [], "effects": [], "transitions": [],
+            },
+            "keyframes": {
+                "adjusts": [], "audios": [], "effects": [], "filters": [],
+                "handwrites": [], "stickers": [], "texts": [], "videos": [],
+            },
+            "keyframe_graph_list": [],
+        }
+        (tpl / "draft_info.json").write_text(json.dumps(draft), encoding="utf-8")
+        return tpl
 
-    def test_create_comp_draft_writes_single_video_audio_and_two_subtitles(self):
-        create_comp = load_module(
-            "create_comp_draft", "tools/jianying_draft/create_comp_draft.py"
-        )
-        template = make_template(self.tmp_path)
-        video = self.tmp_path / "source.mp4"
-        audio = self.tmp_path / "voice.mp3"
-        video.write_bytes(b"video")
-        audio.write_bytes(b"audio")
-        output = self.tmp_path / "成品001"
-        comp = make_comp_input(
-            self.tmp_path,
-            template,
-            output,
-            [
-                {
-                    "sourceVideo": str(video),
-                    "sourceStartUs": 500_000,
-                    "sourceDurationUs": 3_000_000,
-                    "timelineStartUs": 0,
-                    "timelineDurationUs": 3_000_000,
-                    "speed": 1.0,
-                }
-            ],
-            audio,
-            [
-                {"text": "第一句字幕", "startUs": 0, "durationUs": 1_200_000},
-                {"text": "第二句字幕\n保留换行", "startUs": 1_400_000, "durationUs": 1_600_000},
-            ],
-        )
+    def test_run_exits_when_template_dir_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            fake_tpl = Path(td) / "no_such_dir"
+            fake_vid = Path(td) / "v.mp4"
+            fake_vid.touch()
+            fake_aud = Path(td) / "a.mp3"
+            fake_aud.touch()
+            args = self._make_args(fake_tpl, [str(fake_vid)], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
 
-        result = create_comp.create_comp_draft_from_data(comp, overwrite=False)
+    def test_run_exits_when_draft_info_missing_in_template(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = Path(td) / "empty_template"
+            tpl.mkdir()
+            fake_vid = Path(td) / "v.mp4"
+            fake_vid.touch()
+            fake_aud = Path(td) / "a.mp3"
+            fake_aud.touch()
+            args = self._make_args(tpl, [str(fake_vid)], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
 
-        timeline = json.loads(result.timeline_template.read_text(encoding="utf-8"))
-        tracks = {track["type"]: track for track in timeline["tracks"]}
-        self.assertEqual(timeline["name"], "成品001")
-        self.assertEqual(timeline["canvas_config"], {"ratio": "9:16", "width": 1080, "height": 1920})
-        self.assertEqual(timeline["duration"], 7_000_000)
-        self.assertEqual(len(timeline["materials"]["videos"]), 1)
-        self.assertEqual(len(timeline["materials"]["audios"]), 1)
-        self.assertEqual(len(timeline["materials"]["texts"]), 2)
-        self.assertEqual([track["type"] for track in timeline["tracks"]], ["video", "audio", "text"])
-        self.assertEqual(len(tracks["video"]["segments"]), 1)
-        self.assertEqual(len(tracks["audio"]["segments"]), 1)
-        self.assertEqual(len(tracks["text"]["segments"]), 2)
-        self.assertEqual(tracks["video"]["segments"][0]["source_timerange"]["start"], 500_000)
-        self.assertEqual(tracks["video"]["segments"][0]["target_timerange"]["duration"], 3_000_000)
-        self.assertEqual(tracks["text"]["segments"][1]["target_timerange"]["start"], 1_400_000)
-        self.assertEqual(
-            timeline["materials"]["texts"][1]["recognize_text"],
-            "第二句字幕\n保留换行",
-        )
+    def test_run_exits_when_video_file_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = self._make_template_dir(Path(td))
+            fake_vid = Path(td) / "nonexistent_video.mp4"   # 不建
+            fake_aud = Path(td) / "a.mp3"
+            fake_aud.touch()
+            args = self._make_args(tpl, [str(fake_vid)], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
 
-    def test_create_comp_draft_writes_multiple_video_segments_and_duration(self):
-        create_comp = load_module(
-            "create_comp_draft", "tools/jianying_draft/create_comp_draft.py"
-        )
-        template = make_template(self.tmp_path)
-        audio = self.tmp_path / "voice.mp3"
-        audio.write_bytes(b"audio")
-        output = self.tmp_path / "成品多段"
-        videos = []
-        start = 0
-        for index, duration in enumerate([1_000_000, 2_000_000, 1_500_000], start=1):
-            source = self.tmp_path / f"source{index}.mp4"
-            source.write_bytes(f"video-{index}".encode("utf-8"))
-            videos.append(
-                {
-                    "sourceVideo": str(source),
-                    "sourceStartUs": index * 100_000,
-                    "sourceDurationUs": duration,
-                    "timelineStartUs": start,
-                    "timelineDurationUs": duration,
-                    "speed": 1.0,
-                }
-            )
-            start += duration
-        comp = make_comp_input(
-            self.tmp_path,
-            template,
-            output,
-            videos,
-            audio,
-            [
-                {"text": "字幕一", "startUs": 0, "durationUs": 800_000},
-                {"text": "字幕二", "startUs": 1_000_000, "durationUs": 1_500_000},
-                {"text": "字幕三", "startUs": 4_300_000, "durationUs": 2_000_000},
-            ],
-        )
-        comp["voice"]["durationUs"] = 4_500_000
+    def test_run_exits_when_audio_file_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = self._make_template_dir(Path(td))
+            fake_vid = Path(td) / "v.mp4"
+            fake_vid.touch()
+            fake_aud = Path(td) / "nonexistent_audio.mp3"   # 不建
+            args = self._make_args(tpl, [str(fake_vid)], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
 
-        result = create_comp.create_comp_draft_from_data(comp, overwrite=False)
+    def test_run_exits_when_no_video_provided(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = self._make_template_dir(Path(td))
+            fake_aud = Path(td) / "a.mp3"
+            fake_aud.touch()
+            args = self._make_args(tpl, [], [str(fake_aud)])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
 
-        timeline = json.loads(result.timeline_template.read_text(encoding="utf-8"))
-        video_track = next(track for track in timeline["tracks"] if track["type"] == "video")
-        text_track = next(track for track in timeline["tracks"] if track["type"] == "text")
-        self.assertEqual(len(video_track["segments"]), 3)
-        self.assertEqual(
-            [segment["target_timerange"]["start"] for segment in video_track["segments"]],
-            [0, 1_000_000, 3_000_000],
-        )
-        self.assertEqual(
-            [segment["source_timerange"]["start"] for segment in video_track["segments"]],
-            [100_000, 200_000, 300_000],
-        )
-        self.assertEqual(timeline["duration"], 6_300_000)
-        self.assertEqual(len(timeline["materials"]["videos"]), 3)
-        self.assertEqual(len(text_track["segments"]), 3)
-        self.assertTrue(
-            (output / "Timelines" / result.timeline_id / "materials" / "video" / "source3.mp4").exists()
-        )
-        self.assertTrue(
-            (output / "Timelines" / result.timeline_id / "materials" / "audio" / "voice.mp3").exists()
-        )
-
-    def test_create_comp_draft_accepts_utf8_bom_input_json(self):
-        create_comp = load_module(
-            "create_comp_draft", "tools/jianying_draft/create_comp_draft.py"
-        )
-        input_path = self.tmp_path / "current_comp_for_jianying.json"
-        input_path.write_text("\ufeff{}", encoding="utf-8")
-
-        data = create_comp.load_comp_input(input_path)
-
-        self.assertEqual(data, {})
-
-    def test_create_comp_draft_overwrites_timeline_content_candidates(self):
-        create_comp = load_module(
-            "create_comp_draft", "tools/jianying_draft/create_comp_draft.py"
-        )
-        template = make_template(self.tmp_path)
-        timeline_dir = template / "Timelines" / "TL-1"
-        old = old_rich_timeline()
-        for name in ("draft_content.json", "draft_content.json.bak", "template-2.tmp"):
-            write_json(timeline_dir / name, old)
-        for name in ("draft_content.json", "draft_content.json.bak", "template-2.tmp"):
-            write_json(template / name, old)
-        video = self.tmp_path / "source.mp4"
-        audio = self.tmp_path / "voice.mp3"
-        video.write_bytes(b"video")
-        audio.write_bytes(b"audio")
-        output = self.tmp_path / "clean-output"
-        comp = make_comp_input(
-            self.tmp_path,
-            template,
-            output,
-            [
-                {
-                    "sourceVideo": str(video),
-                    "sourceStartUs": 0,
-                    "sourceDurationUs": 2_000_000,
-                    "timelineStartUs": 0,
-                    "timelineDurationUs": 2_000_000,
-                    "speed": 1.0,
-                }
-            ],
-            audio,
-            [{"text": "干净字幕", "startUs": 0, "durationUs": 1_000_000}],
-        )
-        comp["voice"]["durationUs"] = 2_000_000
-
-        result = create_comp.create_comp_draft_from_data(comp, overwrite=False)
-
-        output_timeline_dir = output / "Timelines" / result.timeline_id
-        for path in [
-            output_timeline_dir / "template.json",
-            output_timeline_dir / "draft_content.json",
-            output_timeline_dir / "draft_content.json.bak",
-            output_timeline_dir / "template-2.tmp",
-            output / "draft_content.json",
-            output / "draft_content.json.bak",
-            output / "template-2.tmp",
-        ]:
-            timeline = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(timeline["duration"], 2_000_000)
-            self.assertEqual(len(timeline["materials"]["videos"]), 1, path)
-            self.assertEqual(len(timeline["materials"]["audios"]), 1, path)
-            self.assertEqual(len(timeline["materials"]["texts"]), 1, path)
-            self.assertEqual(
-                [(track["type"], len(track["segments"])) for track in timeline["tracks"]],
-                [("video", 1), ("audio", 1), ("text", 1)],
-                path,
-            )
-        project = json.loads((output / "Timelines" / "project.json").read_text(encoding="utf-8"))
-        project_bak = json.loads((output / "Timelines" / "project.json.bak").read_text(encoding="utf-8"))
-        self.assertEqual(project_bak["main_timeline_id"], project["main_timeline_id"])
-        self.assertEqual(project_bak["timelines"][0]["name"], "clean-output")
-
-    def test_inspect_all_timelines_lists_active_and_old_content_candidate(self):
-        inspect_draft = load_module(
-            "inspect_draft", "tools/jianying_draft/inspect_draft.py"
-        )
-        draft = make_template(self.tmp_path)
-        second = draft / "Timelines" / "TL-2"
-        second.mkdir()
-        write_json(second / "template.json", old_rich_timeline())
-
-        summaries = inspect_draft.inspect_all_timelines(draft)
-
-        by_id = {summary["timeline_id"]: summary for summary in summaries}
-        self.assertEqual(set(by_id), {"TL-1", "TL-2"})
-        self.assertTrue(by_id["TL-1"]["is_active"])
-        self.assertFalse(by_id["TL-2"]["is_active"])
-        self.assertEqual(by_id["TL-2"]["video_materials_count"], 9)
-        self.assertEqual(by_id["TL-2"]["audio_materials_count"], 9)
-        self.assertEqual(by_id["TL-2"]["text_materials_count"], 11)
+    def test_run_exits_when_no_audio_provided(self):
+        with tempfile.TemporaryDirectory() as td:
+            tpl = self._make_template_dir(Path(td))
+            fake_vid = Path(td) / "v.mp4"
+            fake_vid.touch()
+            args = self._make_args(tpl, [str(fake_vid)], [])
+            with self.assertRaises(SystemExit) as cm:
+                run(args)
+            self.assertEqual(cm.exception.code, 1)
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

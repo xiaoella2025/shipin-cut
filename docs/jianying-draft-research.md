@@ -1,254 +1,276 @@
-# Jianying Draft Research
+# 剪映草稿格式研究文档
 
-## Sample
+## 状态
 
-- Source: `C:\Users\Admin\AppData\Local\JianyingPro\User Data\Projects\com.lveditor.draft\5月12日`
-- Local copy: `F:\shipin-cut\sample_drafts\jianying\5月12日`
-- Jianying app version seen in timeline data: `10.5.0`
+- [ ] 获取真实草稿样本（需要用户操作）
+- [ ] inspect_draft.py 分析完成
+- [ ] 确认时间单位
+- [ ] 确认资源路径规则
+- [ ] 最小草稿生成验证
+- [ ] 剪映可打开最小草稿
 
-## Directory Shape
+---
 
-The copied sample keeps the expected Jianying draft folders:
+## 需要用户准备的草稿样本
 
-- `Resources/`: cover and algorithm resource folders.
-- `Timelines/project.json`: readable timeline registry.
-- `Timelines/<timeline-id>/`: the main timeline folder.
-- `Timelines/<timeline-id>/template.json`: readable timeline content.
-- `Timelines/<timeline-id>/template.tmp`: readable empty/minimal timeline template.
-- `Timelines/<timeline-id>/draft_content.json`: encrypted or encoded, not directly JSON.
-- `subdraft/`, `common_attachment/`, `adjust_mask/`, `matting/`, `smart_crop/`: copied template folders.
+1. 打开剪映专业版（JianyingPro）
+2. 新建空白项目，随意命名（例如 `test-for-research`）
+3. 导入一个短视频（< 30s 即可）
+4. 导入一个 mp3 音频
+5. 添加一条普通文字字幕（任意文字）
+6. 保存草稿（Ctrl+S 或直接关闭）
+7. 找到草稿目录：
 
-## Root JSON Files
+   **Windows 默认路径：**
+   ```
+   C:\Users\<用户名>\AppData\Local\JianyingPro\User Data\Projects\com.lveditor.draft\<草稿名>\
+   ```
+   或
+   ```
+   C:\Users\<用户名>\Documents\JianyingPro\User Data\Projects\com.lveditor.draft\<草稿名>\
+   ```
 
-`draft_content.json` and `draft_meta_info.json` exist at the draft root, but in this sample they are not directly parseable JSON. Their first bytes are base64-like/encrypted text, and `json.loads()` fails.
+   **Mac 默认路径：**
+   ```
+   ~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft/<草稿名>/
+   ```
 
-Conclusion for step0: do not attempt to construct these files from scratch. Copy them from the real template unchanged and edit the readable timeline template files first.
+8. 把该草稿文件夹复制一份到项目目录：
+   ```
+   shipin-cut/tools/jianying_draft/sample_draft/
+   ```
+   或者告诉我完整路径，用 inspect_draft.py 直接分析
 
-## Readable Timeline Files
+9. 然后运行：
+   ```bash
+   python tools/jianying_draft/inspect_draft.py tools/jianying_draft/sample_draft/
+   ```
 
-`Timelines/project.json` is readable and contains:
+---
 
-- `id`
-- `main_timeline_id`
-- `timelines[]`
-- `create_time`
-- `update_time`
-- `version`
+## 已知信息（待验证）
 
-`timeline_layout.json` is readable and points to the active timeline id.
+以下内容来自公开文档和社区分析，**必须用真实草稿验证才能使用**。
 
-`Timelines/<timeline-id>/template.json` is the main readable timeline structure. Top-level fields include:
+### 草稿目录结构（推测）
 
-- `id`
-- `name`
-- `duration`
-- `fps`
-- `canvas_config`
-- `tracks`
-- `materials`
-- `cover`
-- `create_time`
-- `update_time`
-- `platform`
-- `last_modified_platform`
-- `config`
-- `relationships`
-
-`template.tmp` has the same broad shape but is empty: `duration: 0`, empty `tracks`, and empty material arrays. This is the safest base for a minimal generated timeline.
-
-## Materials
-
-`materials` is an object whose keys are material categories. In the sample:
-
-- `videos`: 9
-- `audios`: 9
-- `texts`: 11
-- `stickers`: 6
-- `effects`: 5
-- `speeds`: 18
-- `sound_channel_mappings`: 18
-- `canvases`: 9
-- many other categories are present but empty
-
-Video material references:
-
-- `materials.videos[].id` is referenced by a video segment `material_id`.
-- `path` is relative to the timeline folder, for example `materials/video/shot_01.mp4`.
-- `material_name`, `duration`, `width`, `height`, `type`, `local_material_id` are relevant.
-
-Audio material references:
-
-- `materials.audios[].id` is referenced by an audio segment `material_id`.
-- `path` is relative to the timeline folder, for example `materials/audio/vo_002_part1.mp3`.
-- `name`, `duration`, `resource_id`, `music_id`, `local_material_id` are relevant.
-
-Text/subtitle material references:
-
-- `materials.texts[].id` is referenced by a text segment `material_id`.
-- `content` is a JSON string containing the visible text and style ranges.
-- `recognize_text` stores the plain subtitle text.
-- `words.start_time`, `words.end_time`, and `words.text` store per-word or per-character timing in milliseconds.
-
-## Tracks
-
-`tracks` is an array. The sample has:
-
-- `video`: 9 segments
-- `sticker`: 6 segments
-- `text`: 11 segments
-- `effect`: 1 segment
-- `effect`: 1 segment
-- `audio`: 9 segments
-
-Each segment uses:
-
-- `id`: unique segment id.
-- `material_id`: points to a material item id.
-- `target_timerange.start`: placement start on the timeline.
-- `target_timerange.duration`: placement duration.
-- `source_timerange.start`: source media trim start.
-- `source_timerange.duration`: source media trim duration.
-- `render_timerange`: usually `{ "start": 0, "duration": 0 }`.
-- `extra_material_refs`: optional references to speed/canvas/channel/effect helper materials.
-
-## Time Units
-
-Timeline and segment durations are microseconds. The sample duration is `23833333`, which is about 23.83 seconds.
-
-Subtitle word timings inside `materials.texts[].words` are milliseconds.
-
-## Draft Name and Cover
-
-The readable timeline has a `name` field, but this sample's value is empty. `Timelines/project.json.timelines[].name` stores `时间线01`. The draft list title may also depend on encrypted root metadata or the folder name, so step0 should use the output folder name as the user-visible title and update the readable timeline/project names.
-
-Cover files appear in:
-
-- root `draft_cover.jpg`
-- root `draft_local_cover.jpg`
-- `Resources/cover/*.jpg`
-- `Timelines/<timeline-id>/draft_cover.jpg`
-- `template.json.cover` and `static_cover_image_path`
-
-Step0 does not generate a new cover. It copies the template cover files.
-
-## IDs
-
-Regenerate these when creating a draft:
-
-- timeline/template `id`
-- `Timelines/project.json.id`
-- track ids
-- segment ids
-- material ids
-- `local_material_id`, `resource_id`, `music_id` where present
-
-Can copy from template:
-
-- most empty material category arrays
-- canvas config
-- fps
-- platform/version/config fields
-- basic style fields from one existing subtitle material
-- basic segment shape for video/audio/text
-- folder structure and attachment JSON files
-
-## Step0 Generation Strategy
-
-The safest minimal path is:
-
-1. Copy the full real sample draft folder.
-2. Keep encrypted root `draft_content.json` and `draft_meta_info.json` unchanged.
-3. Copy video to `Timelines/<timeline-id>/materials/video/<file>`.
-4. Copy audio to `Timelines/<timeline-id>/materials/audio/<file>`.
-5. Build a minimal readable timeline from `template.tmp`.
-6. Fill `materials.videos`, `materials.audios`, `materials.texts`.
-7. Fill three tracks: `video`, `audio`, `text`.
-8. Write the generated timeline to `template.tmp` and `template.json`.
-9. Update readable `Timelines/project.json` names and timestamps.
-
-Risk: because root `draft_content.json` and `draft_meta_info.json` are encrypted or encoded in this Jianying version, Jianying may still rely on them when opening a local draft. If the generated draft does not open, the next fix should focus on how Jianying regenerates or accepts those encrypted root files, not on adding stickers, filters, packaging, or frontend integration.
-
-## Step1 Composition Export
-
-The GUI validation for step0 confirmed the low-risk approach works: copy a real template draft, keep encrypted root JSON files unchanged, and write the readable timeline template under `Timelines/<timeline-id>/template.json`.
-
-Step1 uses `tools/jianying_draft/create_comp_draft.py` with an intermediate JSON file. The intended command is:
-
-```powershell
-python tools/jianying_draft/create_comp_draft.py --input export_workspace/drafts/current_comp_for_jianying.json --overwrite
+```
+<草稿名>/
+  draft_content.json       # 主轨道数据（必须）
+  draft_meta_info.json     # 草稿元信息（必须）
+  <video_id>.mp4           # 或软链接 / 绝对路径引用
+  <audio_id>.mp3
 ```
 
-Input shape:
+### 时间单位（待验证）
+
+- 推测：微秒（microseconds），即 1 秒 = 1,000,000
+- 根据：剪映 API 相关讨论中普遍提及 `target_timerange` 使用微秒
+
+### draft_content.json 顶层字段（待验证）
 
 ```json
 {
-  "title": "成品001",
-  "templateDraftDir": "F:/shipin-cut/sample_drafts/jianying/5月12日",
-  "outputDraftDir": "C:/Users/Admin/AppData/Local/JianyingPro/User Data/Projects/com.lveditor.draft/成品001",
-  "canvas": {
-    "ratio": "9:16",
-    "width": 1080,
-    "height": 1920,
-    "fps": 30
+  "canvas_config": { "width": 1080, "height": 1920, "ratio": "9:16" },
+  "color_space": 0,
+  "cover": "",
+  "duration": 10000000,
+  "id": "<uuid>",
+  "keyframe_graph_list": [],
+  "keyframes": { "adjusts": [] },
+  "last_modified_platform": { "app_id": 359289478, "app_version": "...", ... },
+  "materials": {
+    "videos": [ ... ],
+    "audios": [ ... ],
+    "texts": [ ... ],
+    "stickers": []
   },
-  "segments": [
-    {
-      "sourceVideo": "F:/shipin-cut/export_workspace/videos/source1.mp4",
-      "sourceStartUs": 0,
-      "sourceDurationUs": 3000000,
-      "timelineStartUs": 0,
-      "timelineDurationUs": 3000000,
-      "speed": 1.0
-    }
-  ],
-  "voice": {
-    "path": "F:/shipin-cut/export_workspace/audio/voice.mp3",
-    "timelineStartUs": 0,
-    "durationUs": 24000000
-  },
-  "subtitles": [
-    {
-      "text": "第一句字幕",
-      "startUs": 0,
-      "durationUs": 1800000
-    }
-  ]
+  "mutable_config": null,
+  "platform": { "app_id": 359289478, "app_version": "...", "os": "windows", ... },
+  "relationships": [],
+  "render_index_track_mode_on": false,
+  "retouch_cover": "",
+  "source": "default",
+  "static_cover_image_path": "",
+  "time_marks": null,
+  "tracks": [ ... ],
+  "version": 360000
 }
 ```
 
-Mapping rules:
+### tracks 结构（待验证）
 
-- All timeline times are microseconds.
-- `segments[]` becomes one video track with one segment per source video.
-- Each video material is copied to `Timelines/<timeline-id>/materials/video/`.
-- Each video segment writes `target_timerange` from `timelineStartUs/timelineDurationUs`.
-- Each video segment writes `source_timerange` from `sourceStartUs/sourceDurationUs`.
-- `voice` becomes one audio material and one audio track segment.
-- `subtitles[]` becomes editable subtitle materials and one text track with multiple segments.
-- Manual line breaks are preserved in `recognize_text` and `content`.
-- Timeline `duration` is the max of video end, audio end, and subtitle end.
-- The draft display name uses the output draft folder name.
+```json
+{
+  "attribute": 0,
+  "flag": 0,
+  "id": "<uuid>",
+  "is_default_name": true,
+  "name": "",
+  "segments": [
+    {
+      "cartoon": false,
+      "clip": { "alpha": 1.0, "flip": { "horizontal": false, "vertical": false },
+                "rotation": 0.0, "scale": { "x": 1.0, "y": 1.0 },
+                "translation": { "x": 0.0, "y": 0.0 } },
+      "common_keyframes": [],
+      "enable_adjust": true,
+      "extra_material_refs": [],
+      "group_id": "",
+      "hdr_settings": null,
+      "id": "<uuid>",
+      "intensifies_audio": false,
+      "is_placeholder": false,
+      "is_tone_modify": false,
+      "material_id": "<material_uuid>",
+      "render_index": 0,
+      "reverse": false,
+      "source_timerange": { "duration": 10000000, "start": 0 },
+      "speed": 1.0,
+      "target_timerange": { "duration": 10000000, "start": 0 },
+      "template_id": "",
+      "template_scene": "default",
+      "track_attribute": 0,
+      "track_render_index": 0,
+      "uniform_scale": null,
+      "visible": true,
+      "volume": 1.0
+    }
+  ],
+  "type": "video"
+}
+```
 
-Speed note: `speed` is currently written to `segment.speed`, but the script does not yet generate the richer `materials.speeds` helper entries used by Jianying for complex variable speed behavior. For the first formal export pass, 1x video/audio/subtitle timing is the supported path.
+### materials.videos 单条字段（待验证）
 
-## Step1 Content File Fix
+```json
+{
+  "aigc_type": "none",
+  "audio_fade": null,
+  "cartoon_path": "",
+  "category_id": "",
+  "category_name": "local",
+  "check_flag": 63487,
+  "crop": { "lower_left_x": 0.0, "lower_left_y": 1.0, "lower_right_x": 1.0, "lower_right_y": 1.0,
+            "upper_left_x": 0.0, "upper_left_y": 0.0, "upper_right_x": 1.0, "upper_right_y": 0.0 },
+  "crop_ratio": "free",
+  "crop_scale": 1.0,
+  "duration": 10000000,
+  "extra_type_option": 0,
+  "file_Path": "C:/absolute/path/to/video.mp4",
+  "formula_id": "",
+  "freeze": null,
+  "has_audio": true,
+  "height": 1080,
+  "id": "<uuid>",
+  "import_time": 1234567890,
+  "import_time_ms": 1234567890123,
+  "is_ai_matting_valid_cache": false,
+  "is_unified_beauty_valid_cache": false,
+  "local_material_id": "<uuid>",
+  "material_id": "<uuid>",
+  "material_name": "video_filename.mp4",
+  "material_url": "",
+  "matting": { ... },
+  "media_path": "",
+  "object_file_key": "",
+  "path": "C:/absolute/path/to/video.mp4",
+  "picture_from": "none",
+  "picture_set_category_id": "",
+  "picture_set_category_name": "",
+  "request_id": "",
+  "reverse_path": "",
+  "smart_motion": null,
+  "source": "none",
+  "source_platform": 0,
+  "stable": null,
+  "team_id": "",
+  "type": "video",
+  "video_algorithm": { ... },
+  "width": 1920
+}
+```
 
-GUI validation showed that writing only `Timelines/<timeline-id>/template.json` is not enough. Jianying can still open the draft from other content candidates copied from the template, especially:
+### materials.texts 单条字段（待验证）
 
-- root `draft_content.json`
-- root `draft_content.json.bak`
-- root `template-2.tmp`
-- `Timelines/<timeline-id>/draft_content.json`
-- `Timelines/<timeline-id>/draft_content.json.bak`
-- `Timelines/<timeline-id>/template-2.tmp`
-- `Timelines/<timeline-id>/template.tmp`
+```json
+{
+  "alignment": 1,
+  "background_alpha": 0.0,
+  "background_color": "",
+  "background_height": 0.14,
+  "background_horizontal_offset": 0.0,
+  "background_round_radius": 0.0,
+  "background_style": 0,
+  "background_vertical_offset": 0.0,
+  "background_width": 0.14,
+  "base_content": "",
+  "bold_width": 0.0,
+  "border_alpha": 0.0,
+  "border_color": "",
+  "border_width": 0.08,
+  "content": "{\"styles\": [{\"fill\": {\"content\": {\"render_type\": \"solid\", \"solid\": {\"alpha\": 1.0, \"color\": [1.0, 1.0, 1.0]}}}, \"range\": [0, <text_len>], \"useStyle\": \"\"}], \"text\": \"<字幕文字>\"}",
+  "font_category_id": "",
+  "font_category_name": "",
+  "font_id": "",
+  "font_name": "",
+  "font_path": "",
+  "font_size": 8.0,
+  "fonts": [],
+  "id": "<uuid>",
+  "italic": false,
+  "letter_spacing": 0.0,
+  "line_feed": 1,
+  "line_max_width": 0.82,
+  "line_spacing": 0.02,
+  "name": "",
+  "original_size": [],
+  "preset_id": "",
+  "recognize_task_id": "",
+  "recognize_type": 0,
+  "relevance_segment": [],
+  "shadow_alpha": 0.0,
+  "shadow_angle": -45.0,
+  "shadow_color": "",
+  "shadow_distance": 5.0,
+  "shadow_point": { "x": 0.6364, "y": -0.6364 },
+  "shadow_smoothing": 1.0,
+  "shape_clip_x": false,
+  "shape_clip_y": false,
+  "source_from": "",
+  "style_name": "",
+  "sub_type": 0,
+  "text_alpha": 1.0,
+  "text_color": "#FFFFFF",
+  "text_curve": null,
+  "text_preset_resource_id": "",
+  "text_size": 30,
+  "text_to_audio_ids": [],
+  "tts_auto_update": false,
+  "type": "text",
+  "typesetting": 0,
+  "underline": false,
+  "underline_offset": 0.22,
+  "underline_width": 0.05,
+  "use_effect_default_color": true,
+  "words": { "end_time": [], "start_time": [], "text": [] }
+}
+```
 
-If those files still contain the original template timeline, Jianying may show the old 9-video / 9-audio / 11-subtitle content even while `template.json` looks correct.
+---
 
-The step1 generator now writes the generated timeline JSON to all of those content candidates. It also updates:
+## 验证日志
 
-- `Timelines/project.json`
-- `Timelines/project.json.bak`
-- `timeline_layout.json`
+（inspect_draft.py 输出结果粘贴于此）
 
-`inspect_draft.py --all-timelines <draft_dir>` now lists every timeline folder, marks the active one using `project.json` and `timeline_layout.json`, and reports each candidate content file. A generated step1 draft is considered structurally clean only when no active timeline candidate reports the old `videos=9, audios=9, texts=11` shape.
+---
+
+## 最小草稿生成测试日志
+
+（create_minimal_draft.py 输出结果粘贴于此）
+
+---
+
+## 结论
+
+待填写。

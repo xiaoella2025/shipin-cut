@@ -1,314 +1,255 @@
-#!/usr/bin/env python
-"""Inspect a Jianying draft folder without modifying it."""
+#!/usr/bin/env python3
+"""
+inspect_draft.py — 分析剪映草稿目录结构
 
-from __future__ import annotations
+支持：
+  - root/draft_info.json    (JianyingPro 5.x Storybound 草稿，优先)
+  - root/draft_content.json (JianyingPro 传统草稿，回退)
 
-import argparse
-import json
+用法：
+  python inspect_draft.py <草稿目录> [--check-media-paths]
+
+选项：
+  --check-media-paths   检查所有素材路径是否真实存在于文件系统
+"""
+
 import sys
+import json
+import argparse
 from pathlib import Path
 
 
-def read_text(path: Path) -> str | None:
+SEP = "=" * 64
+
+
+def sep(title=""):
+    print("\n" + SEP)
+    if title:
+        print(f"  {title}")
+        print(SEP)
+
+
+def us_to_readable(us):
     try:
-        return path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return path.read_text(encoding="utf-8-sig", errors="replace")
-    except OSError:
-        return None
+        s = int(us) / 1_000_000
+        m = int(s) // 60
+        sec = s - m * 60
+        if m:
+            return f"{m}m{sec:.2f}s  ({int(us)} µs)"
+        return f"{s:.3f}s  ({int(us)} µs)"
+    except Exception:
+        return str(us)
 
 
-def load_json(path: Path) -> tuple[object | None, str | None]:
-    text = read_text(path)
-    if text is None:
-        return None, "文件不存在或无法读取"
+def guess_time_unit(val):
     try:
-        return json.loads(text), None
-    except json.JSONDecodeError as exc:
-        return None, f"不是可直接解析的 JSON：{exc.msg}"
+        v = int(val)
+        if v > 10_000_000:
+            return "µs (微秒)"
+        elif v > 10_000:
+            return "ms (毫秒) ?"
+        else:
+            return "s (秒) ?"
+    except Exception:
+        return "unknown"
 
 
-def find_timeline_dir(draft_dir: Path) -> Path | None:
-    timelines_dir = draft_dir / "Timelines"
-    project_json, _ = load_json(timelines_dir / "project.json")
-    if isinstance(project_json, dict):
-        timeline_id = project_json.get("main_timeline_id")
-        if isinstance(timeline_id, str) and (timelines_dir / timeline_id).is_dir():
-            return timelines_dir / timeline_id
-
-    if timelines_dir.is_dir():
-        for child in timelines_dir.iterdir():
-            if child.is_dir() and (
-                (child / "template.json").exists() or (child / "template.tmp").exists()
-            ):
-                return child
-    return None
+def load_main_json(draft_dir: Path):
+    """优先读 draft_info.json，回退到 draft_content.json"""
+    for fname in ["draft_info.json", "draft_content.json"]:
+        p = draft_dir / fname
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                return data, fname
+            except json.JSONDecodeError as e:
+                print(f"[警告] {fname} JSON 解析失败: {e}")
+    return None, None
 
 
-def active_timeline_ids(draft_dir: Path) -> set[str]:
-    ids: set[str] = set()
-    timelines_dir = draft_dir / "Timelines"
-    project_json, _ = load_json(timelines_dir / "project.json")
-    if isinstance(project_json, dict):
-        timeline_id = project_json.get("main_timeline_id")
-        if isinstance(timeline_id, str):
-            ids.add(timeline_id)
-
-    layout_json, _ = load_json(draft_dir / "timeline_layout.json")
-    if isinstance(layout_json, dict):
-        active = layout_json.get("activeTimeline")
-        if isinstance(active, str):
-            ids.add(active)
-    return ids
-
-
-def timeline_dirs(draft_dir: Path) -> list[Path]:
-    timelines_dir = draft_dir / "Timelines"
-    if not timelines_dir.is_dir():
-        return []
-    return sorted([child for child in timelines_dir.iterdir() if child.is_dir()], key=lambda p: p.name)
+def collect_material_paths(materials: dict) -> list[str]:
+    """
+    从 materials 提取所有素材路径。
+    Storybound 格式只有 path 字段；旧格式还有 file_Path。
+    media_path 通常为空字符串，跳过。
+    """
+    paths = []
+    for mkey in ["videos", "audios", "images"]:
+        for item in (materials.get(mkey) or []):
+            for pk in ["path", "file_Path"]:
+                v = item.get(pk)
+                if v and isinstance(v, str) and v.strip() and v not in paths:
+                    paths.append(v)
+    return paths
 
 
-def load_timeline_template(timeline_dir: Path | None) -> tuple[dict | None, Path | None, str | None]:
-    if timeline_dir is None:
-        return None, None, "没有找到 Timelines 下的主时间线目录"
-    for name in ("template.json", "template.tmp"):
-        path = timeline_dir / name
-        if not path.exists():
-            continue
-        data, error = load_json(path)
-        if isinstance(data, dict):
-            return data, path, None
-        if error:
-            return None, path, error
-    return None, None, "主时间线目录里没有 template.json 或 template.tmp"
+def count_tracks(tracks: list, track_type: str):
+    return sum(1 for t in tracks if t.get("type") == track_type)
 
 
-def parse_timeline_file(path: Path) -> tuple[dict | None, str | None]:
-    if not path.exists():
-        return None, "missing"
-    data, error = load_json(path)
-    return data if isinstance(data, dict) else None, error
+def count_segments(tracks: list, track_type: str):
+    return sum(
+        len(t.get("segments") or [])
+        for t in tracks
+        if t.get("type") == track_type
+    )
 
 
-def count_materials(materials: object) -> dict[str, int]:
-    if not isinstance(materials, dict):
-        return {}
-    counts: dict[str, int] = {}
-    for key, value in materials.items():
-        counts[key] = len(value) if isinstance(value, list) else 0
-    return counts
+def extract_texts(materials: dict, limit=10) -> list[str]:
+    texts_out = []
+    for item in (materials.get("texts") or []):
+        raw = item.get("content") or item.get("base_content") or ""
+        text = ""
+        if raw:
+            try:
+                obj = json.loads(raw)
+                text = obj.get("text", "")
+            except Exception:
+                text = raw[:80]
+        if not text:
+            text = item.get("name", "")
+        if text:
+            texts_out.append(text)
+        if len(texts_out) >= limit:
+            break
+    return texts_out
 
 
-def resource_path_samples(timeline: dict | None, limit: int = 8) -> list[str]:
-    if not isinstance(timeline, dict):
-        return []
-    samples: list[str] = []
-    materials = timeline.get("materials")
-    if isinstance(materials, dict):
-        for items in materials.values():
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                path = item.get("path") or item.get("media_path") or item.get("intensifies_path")
-                if isinstance(path, str) and path and path not in samples:
-                    samples.append(path)
-                    if len(samples) >= limit:
-                        return samples
-    return samples
+def inspect(draft_dir: Path, check_media: bool):
+    sep("剪映草稿检查")
+    print(f"草稿目录: {draft_dir.resolve()}")
+
+    # ── 目录文件列表 ──────────────────────────────────────────────
+    print("\n[ 目录文件列表 ]")
+    for f in sorted(draft_dir.iterdir()):
+        size = f.stat().st_size if f.is_file() else 0
+        tag  = "DIR " if f.is_dir() else "FILE"
+        kb   = f"{size/1024:.1f}KB" if f.is_file() else ""
+        print(f"  {tag}  {f.name:<50}  {kb:>10}")
+
+    # ── 主 JSON ──────────────────────────────────────────────────
+    data, fname = load_main_json(draft_dir)
+    if data is None:
+        print("\n[错误] 未找到可解析的 draft_info.json 或 draft_content.json")
+        sys.exit(2)
+
+    sep(f"主文件: {fname}")
+    print(f"[1]  存在且可解析: ✓")
+
+    # duration
+    dur = data.get("duration")
+    print(f"[2]  duration      : {dur}  →  {us_to_readable(dur)}")
+    if dur is not None:
+        print(f"     时间单位推断  : {guess_time_unit(dur)}")
+
+    # canvas_config
+    cc = data.get("canvas_config") or {}
+    print(f"[3]  canvas_config : {cc.get('width')}×{cc.get('height')}  ratio={cc.get('ratio')}")
+
+    # fps
+    fps = data.get("fps")
+    print(f"[4]  fps           : {fps}")
+
+    # version
+    print(f"[5]  version       : {data.get('version')}")
+    print(f"     new_version   : {data.get('new_version')}")
+    print(f"     id            : {data.get('id')}")
+
+    # platform
+    plat = data.get("platform") or data.get("last_modified_platform") or {}
+    print(f"[6]  platform      : app_version={plat.get('app_version')}  os={plat.get('os')}")
+
+    # ── tracks ───────────────────────────────────────────────────
+    sep("Tracks 统计")
+    tracks = data.get("tracks") or []
+    print(f"[7]  tracks 总数   : {len(tracks)}")
+    for ttype in ["video", "audio", "text", "sticker", "effect"]:
+        tc = count_tracks(tracks, ttype)
+        sc = count_segments(tracks, ttype)
+        if tc or ttype in ("video", "audio", "text"):
+            print(f"     {ttype:<10} tracks={tc}   segments={sc}")
+
+    # track 明细
+    print("\n  Track 明细:")
+    for i, t in enumerate(tracks):
+        segs = t.get("segments") or []
+        print(f"    [{i}] type={t.get('type')!r:<8}  segments={len(segs)}  id={t.get('id','?')[:8]}...")
+
+    # ── materials ────────────────────────────────────────────────
+    sep("Materials 统计")
+    materials = data.get("materials") or {}
+    for mkey in ["videos", "audios", "texts", "stickers", "effects", "transitions"]:
+        items = materials.get(mkey) or []
+        print(f"[8]  materials.{mkey:<12}: {len(items)}")
+
+    # ── 字幕内容预览 ─────────────────────────────────────────────
+    sep("字幕预览（前 10 条）")
+    texts = extract_texts(materials, limit=10)
+    if texts:
+        for i, t in enumerate(texts):
+            print(f"  [{i+1:2}] {t!r}")
+    else:
+        print("  (无字幕)")
+
+    # ── 路径检查 ─────────────────────────────────────────────────
+    all_paths = collect_material_paths(materials)
+    sep("素材路径统计")
+    print(f"[9]  素材路径总数 : {len(all_paths)}")
+
+    if check_media:
+        missing = [p for p in all_paths if not Path(p).exists()]
+        present = len(all_paths) - len(missing)
+        print(f"[10] 路径存在    : {present}")
+        print(f"[11] 路径缺失    : {len(missing)}")
+        if missing:
+            print(f"\n  ⚠ 缺失路径前 20 条 (剪映 GUI 可能会显示 Media Not Found):")
+            for p in missing[:20]:
+                print(f"    ✗ {p}")
+            if len(missing) > 20:
+                print(f"    ... (共 {len(missing)} 条缺失)")
+        else:
+            print("  ✓ 所有素材路径均存在")
+    else:
+        print("  (使用 --check-media-paths 检查路径存在性)")
+        print("\n  路径样本（前 5 条）:")
+        for p in all_paths[:5]:
+            print(f"    {p}")
+
+    # ── keyframes ────────────────────────────────────────────────
+    sep("Keyframes")
+    kf = data.get("keyframes") or {}
+    total_kf = sum(len(v) for v in kf.values() if isinstance(v, list))
+    kfgl = data.get("keyframe_graph_list") or []
+    print(f"  keyframes 子数组总 item 数: {total_kf}")
+    print(f"  keyframe_graph_list 数量 : {len(kfgl)}")
+    for k, v in kf.items():
+        if isinstance(v, list) and v:
+            print(f"    keyframes.{k}: {len(v)} items")
+
+    sep("检查完成")
 
 
-def summarize_timeline(draft_dir: Path, timeline_dir: Path) -> dict:
-    active_ids = active_timeline_ids(draft_dir)
-    timeline, template_path, error = load_timeline_template(timeline_dir)
-    tracks = timeline.get("tracks", []) if isinstance(timeline, dict) else []
-    materials = timeline.get("materials", {}) if isinstance(timeline, dict) else {}
-    material_counts = count_materials(materials)
-
-    content_candidates = []
-    for name in ("template.json", "template.tmp", "draft_content.json", "draft_content.json.bak", "template-2.tmp"):
-        path = timeline_dir / name
-        if not path.exists():
-            continue
-        candidate, candidate_error = parse_timeline_file(path)
-        candidate_tracks = candidate.get("tracks", []) if isinstance(candidate, dict) else []
-        candidate_counts = count_materials(candidate.get("materials", {})) if isinstance(candidate, dict) else {}
-        content_candidates.append(
-            {
-                "file": name,
-                "path": str(path),
-                "parseable": isinstance(candidate, dict),
-                "error": candidate_error,
-                "duration": candidate.get("duration") if isinstance(candidate, dict) else None,
-                "tracks_count": len(candidate_tracks) if isinstance(candidate_tracks, list) else 0,
-                "video_materials_count": candidate_counts.get("videos", 0),
-                "audio_materials_count": candidate_counts.get("audios", 0),
-                "text_materials_count": candidate_counts.get("texts", 0),
-                "looks_like_old_template": (
-                    candidate_counts.get("videos", 0) == 9
-                    and candidate_counts.get("audios", 0) == 9
-                    and candidate_counts.get("texts", 0) == 11
-                ),
-            }
-        )
-
-    return {
-        "timeline_id": timeline_dir.name,
-        "timeline_dir": str(timeline_dir),
-        "template_path": str(template_path) if template_path else "",
-        "template_error": error,
-        "name": timeline.get("name", "") if isinstance(timeline, dict) else "",
-        "duration": timeline.get("duration") if isinstance(timeline, dict) else None,
-        "tracks_count": len(tracks) if isinstance(tracks, list) else 0,
-        "track_types": [track.get("type", "") for track in tracks if isinstance(track, dict)],
-        "video_materials_count": material_counts.get("videos", 0),
-        "audio_materials_count": material_counts.get("audios", 0),
-        "text_materials_count": material_counts.get("texts", 0),
-        "is_active": timeline_dir.name in active_ids,
-        "active_reason": "project.json/timeline_layout.json" if timeline_dir.name in active_ids else "",
-        "content_candidates": content_candidates,
-    }
-
-
-def inspect_all_timelines(draft_dir: str | Path) -> list[dict]:
-    draft_path = Path(draft_dir)
-    return [summarize_timeline(draft_path, timeline_dir) for timeline_dir in timeline_dirs(draft_path)]
-
-
-def inspect_draft(draft_dir: str | Path) -> dict:
-    draft_path = Path(draft_dir)
-    content_path = draft_path / "draft_content.json"
-    meta_path = draft_path / "draft_meta_info.json"
-    content_data, content_error = load_json(content_path)
-    meta_data, meta_error = load_json(meta_path)
-    timeline_dir = find_timeline_dir(draft_path)
-    timeline, timeline_template_path, timeline_error = load_timeline_template(timeline_dir)
-
-    tracks = timeline.get("tracks", []) if isinstance(timeline, dict) else []
-    materials = timeline.get("materials", {}) if isinstance(timeline, dict) else {}
-    material_counts = count_materials(materials)
-
-    summary = {
-        "draft_dir": str(draft_path),
-        "draft_content_found": content_path.exists(),
-        "draft_content_parseable": isinstance(content_data, dict),
-        "draft_content_error": content_error,
-        "draft_meta_info_found": meta_path.exists(),
-        "draft_meta_info_parseable": isinstance(meta_data, dict),
-        "draft_meta_info_error": meta_error,
-        "timeline_dir": str(timeline_dir) if timeline_dir else "",
-        "timeline_template_found": timeline_template_path is not None,
-        "timeline_template_path": str(timeline_template_path) if timeline_template_path else "",
-        "timeline_template_error": timeline_error,
-        "draft_name": timeline.get("name", "") if isinstance(timeline, dict) else "",
-        "duration": timeline.get("duration") if isinstance(timeline, dict) else None,
-        "fps": timeline.get("fps") if isinstance(timeline, dict) else None,
-        "tracks_count": len(tracks) if isinstance(tracks, list) else 0,
-        "track_types": [track.get("type", "") for track in tracks if isinstance(track, dict)],
-        "materials_counts": material_counts,
-        "video_materials_count": material_counts.get("videos", 0),
-        "audio_materials_count": material_counts.get("audios", 0),
-        "text_materials_count": material_counts.get("texts", 0),
-        "resource_path_samples": resource_path_samples(timeline),
-        "time_unit_guess": "微秒 us（样本 23,833,333 约等于 23.8 秒）",
-        "content_top_keys": list(content_data.keys()) if isinstance(content_data, dict) else [],
-        "meta_top_keys": list(meta_data.keys()) if isinstance(meta_data, dict) else [],
-        "timeline_top_keys": list(timeline.keys()) if isinstance(timeline, dict) else [],
-    }
-    return summary
-
-
-def print_summary(summary: dict) -> None:
-    print("剪映草稿检查结果")
-    print("=" * 40)
-    print(f"草稿目录: {summary['draft_dir']}")
-    print(f"draft_content.json: {'找到' if summary['draft_content_found'] else '未找到'}")
-    print(f"  可解析: {'是' if summary['draft_content_parseable'] else '否'}")
-    if summary.get("draft_content_error"):
-        print(f"  说明: {summary['draft_content_error']}")
-    print(f"draft_meta_info.json: {'找到' if summary['draft_meta_info_found'] else '未找到'}")
-    print(f"  可解析: {'是' if summary['draft_meta_info_parseable'] else '否'}")
-    if summary.get("draft_meta_info_error"):
-        print(f"  说明: {summary['draft_meta_info_error']}")
-    print(f"主时间线目录: {summary['timeline_dir'] or '未找到'}")
-    print(f"明文时间线模板: {summary['timeline_template_path'] or '未找到'}")
-    if summary.get("timeline_template_error"):
-        print(f"  说明: {summary['timeline_template_error']}")
-    print(f"草稿名称: {summary['draft_name'] or '未知'}")
-    print(f"duration: {summary['duration']}")
-    print(f"fps: {summary['fps']}")
-    print(f"tracks 数量: {summary['tracks_count']}")
-    print(f"tracks 类型: {', '.join(summary['track_types']) or '无'}")
-    print("materials 类型统计:")
-    for key in sorted(summary["materials_counts"]):
-        print(f"  - {key}: {summary['materials_counts'][key]}")
-    print(f"视频素材数量: {summary['video_materials_count']}")
-    print(f"音频素材数量: {summary['audio_materials_count']}")
-    print(f"文本/字幕数量: {summary['text_materials_count']}")
-    print("资源路径示例:")
-    for sample in summary["resource_path_samples"] or ["无"]:
-        print(f"  - {sample}")
-    print(f"时间单位判断: {summary['time_unit_guess']}")
-    print("关键字段摘要:")
-    print(f"  draft_content 顶层字段: {', '.join(summary['content_top_keys']) or '不可解析'}")
-    print(f"  draft_meta_info 顶层字段: {', '.join(summary['meta_top_keys']) or '不可解析'}")
-    print(f"  timeline 模板顶层字段: {', '.join(summary['timeline_top_keys']) or '不可解析'}")
-
-
-def print_all_timelines(summaries: list[dict]) -> None:
-    print("所有 Timelines 摘要")
-    print("=" * 40)
-    if not summaries:
-        print("没有找到 Timelines/<id> 目录")
-        return
-    for summary in summaries:
-        marker = "ACTIVE" if summary["is_active"] else "inactive"
-        print(f"[{marker}] {summary['timeline_id']}")
-        print(f"  template: {summary['template_path'] or '未找到'}")
-        print(f"  name: {summary['name'] or '未知'}")
-        print(f"  duration: {summary['duration']}")
-        print(f"  tracks: {summary['tracks_count']} ({', '.join(summary['track_types']) or '无'})")
-        print(
-            "  materials: "
-            f"videos={summary['video_materials_count']}, "
-            f"audios={summary['audio_materials_count']}, "
-            f"texts={summary['text_materials_count']}"
-        )
-        print(f"  active 判断: {summary['active_reason'] or '未命中 active 指针'}")
-        print("  内容候选文件:")
-        for candidate in summary["content_candidates"]:
-            old_mark = " old-9/9/11" if candidate["looks_like_old_template"] else ""
-            print(
-                f"    - {candidate['file']}: "
-                f"parseable={candidate['parseable']}, "
-                f"duration={candidate['duration']}, "
-                f"tracks={candidate['tracks_count']}, "
-                f"videos={candidate['video_materials_count']}, "
-                f"audios={candidate['audio_materials_count']}, "
-                f"texts={candidate['text_materials_count']}{old_mark}"
-            )
-
-
-def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="只读检查剪映草稿目录")
-    parser.add_argument("draft_dir", help="剪映草稿目录")
-    parser.add_argument("--all-timelines", action="store_true", help="列出所有 Timelines/<id> 摘要")
+def main():
+    parser = argparse.ArgumentParser(
+        description="分析剪映草稿目录结构（支持 draft_info.json 和 draft_content.json）"
+    )
+    parser.add_argument("draft_dir", help="草稿目录路径")
+    parser.add_argument(
+        "--check-media-paths", action="store_true",
+        help="检查所有素材路径是否存在于文件系统"
+    )
     args = parser.parse_args()
-    draft_dir = Path(args.draft_dir)
-    if not draft_dir.exists():
-        print(f"找不到草稿目录：{draft_dir}")
-        return 2
-    if args.all_timelines:
-        print_all_timelines(inspect_all_timelines(draft_dir))
-        return 0
-    summary = inspect_draft(draft_dir)
-    print_summary(summary)
-    return 0
+
+    dp = Path(args.draft_dir)
+    if not dp.exists():
+        print(f"[错误] 路径不存在: {dp}")
+        sys.exit(1)
+    if not dp.is_dir():
+        print(f"[错误] 路径不是目录: {dp}")
+        sys.exit(1)
+
+    inspect(dp, args.check_media_paths)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

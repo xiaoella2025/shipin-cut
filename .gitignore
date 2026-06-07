@@ -1,8 +1,6 @@
 node_modules/
 dist/
 .DS_Store
-__pycache__/
-*.pyc
 
 # 用户输入视频（不提交）
 input-videos/*
@@ -24,9 +22,10 @@ tools/*
 !tools/export_video.py
 !tools/local_export_server.py
 !tools/jianying_draft/
-!tools/jianying_draft/**
-
-# 剪映真实草稿样本可能包含大媒体资源，不提交
+tools/jianying_draft/__pycache__/
+tests/__pycache__/
+__pycache__/
+*.pyc
 sample_drafts/
 
 # export_workspace 中的实际媒体文件不提交，只保留目录结构
@@ -36,8 +35,8 @@ export_workspace/audio/*
 !export_workspace/audio/.gitkeep
 export_workspace/output/*
 !export_workspace/output/.gitkeep
-export_workspace/drafts/*
 export_workspace/temp/*
 !export_workspace/temp/.gitkeep
 export_workspace/drafts/*.json
+export_workspace/drafts/
 .claude/
