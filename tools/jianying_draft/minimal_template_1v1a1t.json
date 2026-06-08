@@ -1,0 +1,156 @@
+{
+  "canvas_config": {
+    "width": 1080,
+    "height": 1920,
+    "ratio": "original"
+  },
+  "duration": "<<TIMELINE_DURATION_US>>",
+  "fps": 30,
+  "id": "<<DRAFT_ID_KEEP_TEMPLATE_VALUE>>",
+  "materials": {
+    "videos": [
+      {
+        "id": "<<VIDEO_MATERIAL_ID_HEX32>>",
+        "local_material_id": "<<VIDEO_MATERIAL_ID_HEX32>>",
+        "material_id": "<<VIDEO_MATERIAL_ID_HEX32>>",
+        "material_name": "<<VIDEO_FILE_NAME>>",
+        "path": "<<OUTPUT_ASSETS_VIDEO_ABSOLUTE_PATH>>",
+        "duration": "<<VIDEO_DURATION_US>>",
+        "type": "video",
+        "width": 1080,
+        "height": 1920,
+        "media_path": ""
+      }
+    ],
+    "audios": [
+      {
+        "id": "<<AUDIO_MATERIAL_ID_HEX32>>",
+        "local_material_id": "<<AUDIO_MATERIAL_ID_HEX32>>",
+        "music_id": "<<AUDIO_MATERIAL_ID_HEX32>>",
+        "name": "<<AUDIO_FILE_STEM>>",
+        "path": "<<OUTPUT_ASSETS_AUDIO_ABSOLUTE_PATH>>",
+        "duration": "<<AUDIO_DURATION_US>>",
+        "type": "extract_music",
+        "wave_points": []
+      }
+    ],
+    "texts": [
+      {
+        "id": "<<TEXT_MATERIAL_ID_HEX32>>",
+        "type": "subtitle",
+        "content": "<<JSON_STRING_WITH_TEXT_FIELD>>",
+        "is_rich_text": true
+      }
+    ]
+  },
+  "tracks": [
+    {
+      "id": "<<VIDEO_TRACK_ID_HEX32>>",
+      "type": "video",
+      "segments": [
+        {
+          "id": "<<VIDEO_SEGMENT_ID_HEX32>>",
+          "material_id": "<<VIDEO_MATERIAL_ID_HEX32>>",
+          "target_timerange": {
+            "start": 0,
+            "duration": "<<TIMELINE_DURATION_US>>"
+          },
+          "source_timerange": {
+            "start": 0,
+            "duration": "<<VIDEO_SOURCE_DURATION_US>>"
+          },
+          "speed": null,
+          "keyframe_refs": [],
+          "extra_material_refs": [],
+          "clip": {
+            "alpha": 1.0,
+            "flip": {
+              "horizontal": false,
+              "vertical": false
+            },
+            "rotation": 0.0,
+            "scale": {
+              "x": 1.0,
+              "y": 1.0
+            },
+            "transform": {
+              "x": 0.0,
+              "y": 0.0
+            }
+          },
+          "uniform_scale": {
+            "on": true,
+            "value": 1.0
+          },
+          "render_index": 0
+        }
+      ]
+    },
+    {
+      "id": "<<AUDIO_TRACK_ID_HEX32>>",
+      "type": "audio",
+      "segments": [
+        {
+          "id": "<<AUDIO_SEGMENT_ID_HEX32>>",
+          "material_id": "<<AUDIO_MATERIAL_ID_HEX32>>",
+          "target_timerange": {
+            "start": 0,
+            "duration": "<<TIMELINE_DURATION_US>>"
+          },
+          "source_timerange": {
+            "start": 0,
+            "duration": "<<AUDIO_SOURCE_DURATION_US>>"
+          },
+          "speed": 1.0,
+          "keyframe_refs": [],
+          "extra_material_refs": [],
+          "clip": null,
+          "uniform_scale": {
+            "on": true,
+            "value": 1.0
+          },
+          "render_index": 0
+        }
+      ]
+    },
+    {
+      "id": "<<TEXT_TRACK_ID_HEX32>>",
+      "type": "text",
+      "segments": [
+        {
+          "id": "<<TEXT_SEGMENT_ID_HEX32>>",
+          "material_id": "<<TEXT_MATERIAL_ID_HEX32>>",
+          "target_timerange": {
+            "start": 0,
+            "duration": "<<TIMELINE_DURATION_US>>"
+          },
+          "source_timerange": null,
+          "speed": 1.0,
+          "keyframe_refs": [],
+          "extra_material_refs": [],
+          "clip": {
+            "alpha": 1.0,
+            "flip": {
+              "horizontal": false,
+              "vertical": false
+            },
+            "rotation": 0.0,
+            "scale": {
+              "x": 1.0,
+              "y": 1.0
+            },
+            "transform": {
+              "x": 0.0,
+              "y": 0.0
+            }
+          },
+          "uniform_scale": {
+            "on": true,
+            "value": 1.0
+          },
+          "render_index": 15000
+        }
+      ]
+    }
+  ]
+}
