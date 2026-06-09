@@ -21,8 +21,12 @@ tools/*
 !tools/.gitkeep
 !tools/export_video.py
 !tools/local_export_server.py
+!tools/export_with_jianying.py
 !tools/jianying_draft/
 tools/jianying_draft/__pycache__/
+# 剪映模板内部运行时状态（备份与锁文件不入库）
+tools/jianying_draft/templates/**/.backup/
+tools/jianying_draft/templates/**/.locked
 tests/__pycache__/
 __pycache__/
 *.pyc
@@ -40,3 +44,14 @@ export_workspace/temp/*
 export_workspace/drafts/*.json
 export_workspace/drafts/
 .claude/
+
+# v0.9.10 同步：临时目录、剪映样本、压缩包、虚拟环境
+tmp/
+.venv/
+*.mp4
+*.wav
+*.zip
+# 真实剪映草稿样本（参考用，不入版本控制）
+*_e3e97909*/
+*_e3e97909*.zip
+MIXCUT_TEMPLATE_*/

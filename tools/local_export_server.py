@@ -8,6 +8,7 @@ shipin-cut v0.9.3 — 本地导出服务
      - 网页点击"导出成品视频"时 POST 草稿 JSON 到 /export
 """
 
+import os
 import sys
 import json
 import re
@@ -274,6 +275,102 @@ def align_subs_to_speech(user_subs, segs):
     return out
 
 
+# ── v0.9.10: 剪映草稿路径推断 + 打开剪映 / 打开目录 ─────────────────────────
+
+# 默认剪映草稿根目录（JianyingPro 通用位置）
+JIANYING_DRAFT_ROOT = Path.home() / "AppData" / "Local" / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft"
+
+
+def _resolve_jianying_draft_dir(stdout_text, hint_name=None):
+    """
+    从 export_with_jianying.py 的 stdout 推断草稿目录。
+    优先解析 `[草稿名称] <name>` 这一行；再用 hint_name 或解析到的 name
+    在 JIANYING_DRAFT_ROOT 下拼出目录路径。
+    返回 (name, dir_path_str)；dir_path_str 不存在也照样返回（前端可容错）。
+    """
+    parsed_name = (hint_name or "").strip() or None
+    if not parsed_name:
+        for line in (stdout_text or "").splitlines():
+            m = re.match(r"^\[草稿名称\]\s*(.+?)\s*$", line.strip())
+            if m:
+                parsed_name = m.group(1).strip()
+                break
+    dir_str = ""
+    if parsed_name:
+        candidate = JIANYING_DRAFT_ROOT / parsed_name
+        # 兼容 "JianyingPro" 也可能装到 Program Files；先看根目录在不在
+        if not JIANYING_DRAFT_ROOT.exists():
+            # 根目录不存在时，仍按规则返回推断路径（前端可显示但打开会失败，给清晰错误）
+            dir_str = str(candidate)
+        else:
+            dir_str = str(candidate)
+    return parsed_name, dir_str
+
+
+def _find_jianying_exe():
+    """
+    探测本机 JianyingPro.exe 路径。返回 Path 或 None。
+    仅做"启动剪映软件"用途，不去研究任何剪映协议。
+    """
+    candidates = []
+    # 1) 优先探测当前用户 AppData
+    candidates.append(Path.home() / "AppData" / "Local" / "JianyingPro" / "JianyingPro.exe")
+    # 2) Program Files / (x86) 的常见安装位
+    for pf in (r"C:/Program Files", r"C:/Program Files (x86)"):
+        base = Path(pf)
+        if not base.exists():
+            continue
+        # 直接 JianyingPro 子目录
+        candidates.append(base / "JianyingPro" / "JianyingPro.exe")
+        # 也扫一下 JianyingPro* 开头、JianyingPro 4.x、JianyingPro 5.x 等
+        try:
+            for entry in base.iterdir():
+                if entry.is_dir() and entry.name.lower().startswith("jianyingpro"):
+                    candidates.append(entry / "JianyingPro.exe")
+        except Exception:
+            pass
+    # 3) 兜底：roaming 之类
+    for c in candidates:
+        try:
+            if c.exists() and c.is_file():
+                return c
+        except Exception:
+            continue
+    return None
+
+
+def _is_safe_open_path(p: Path):
+    """
+    /open-path 的安全闸门：只允许打开以下三类目录，避开系统/用户根目录。
+    1) 剪映草稿根目录及其子目录
+    2) 项目 export_workspace 及其子目录
+    3) 用户桌面（避免误开时仍能到合理位置）
+    """
+    try:
+        ap = p.resolve()
+    except Exception:
+        return False
+    if not ap.exists() or not ap.is_dir():
+        return False
+    # Windows 不区分大小写
+    def starts_with_case_insensitive(parent: Path, child: Path):
+        try:
+            return str(child).lower().startswith(str(parent).lower())
+        except Exception:
+            return False
+    safe_parents = []
+    if JIANYING_DRAFT_ROOT.exists():
+        safe_parents.append(JIANYING_DRAFT_ROOT)
+    safe_parents.append((REPO_ROOT / "export_workspace").resolve())
+    desktop = Path.home() / "Desktop"
+    if desktop.exists():
+        safe_parents.append(desktop)
+    for sp in safe_parents:
+        if starts_with_case_insensitive(sp, ap):
+            return True
+    return False
+
+
 class ExportHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"[服务] {fmt % args}", flush=True)
@@ -476,6 +573,66 @@ class ExportHandler(BaseHTTPRequestHandler):
         if self.path == "/align-subtitles":
             self._handle_align()
             return
+        if self.path == "/export-jianying":
+            # 接收 {mp4, srt?, name?} 生成剪映草稿
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+            except Exception as e:
+                self._json({"ok": False, "error": f"JSON 解析失败: {e}"})
+                return
+            mp4_path = data.get("mp4", "")
+            srt_path = data.get("srt") or None
+            draft_name = data.get("name") or None
+            if not mp4_path:
+                self._json({"ok": False, "error": "缺少 mp4 参数"})
+                return
+            if not Path(mp4_path).exists():
+                self._json({"ok": False, "error": f"MP4 文件不存在: {mp4_path}"})
+                return
+            jianying_script = SCRIPT_DIR / "export_with_jianying.py"
+            if not jianying_script.exists():
+                self._json({"ok": False, "error": "export_with_jianying.py 不存在"})
+                return
+            # 使用 pyjianying_probe venv
+            venv_python = REPO_ROOT / "tmp" / "pyjianying_probe" / ".venv" / "Scripts" / "python"
+            cmd = [str(venv_python), str(jianying_script), "--mp4", mp4_path]
+            if srt_path:
+                cmd += ["--srt", srt_path]
+            if draft_name:
+                cmd += ["--name", draft_name]
+            print(f"[服务] 生成剪映草稿：{cmd}", flush=True)
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=120,
+                )
+            except Exception as e:
+                self._json({"ok": False, "error": f"调用失败: {e}"})
+                return
+            if result.returncode == 0:
+                # v0.9.10: 解析草稿名 + 推断草稿路径，给前端用
+                parsed_name, draft_dir = _resolve_jianying_draft_dir(
+                    result.stdout or "", draft_name,
+                )
+                self._json({
+                    "ok": True,
+                    "message": "剪映草稿生成成功，请在剪映中刷新查看",
+                    "draftName": parsed_name or "",
+                    "draftPath": draft_dir or "",
+                })
+            else:
+                self._json({"ok": False, "error": result.stderr or "生成失败"})
+            return
+        if self.path == "/open-jianying":
+            # 打开剪映软件（不直接打开指定草稿）
+            self._handle_open_jianying()
+            return
+        if self.path == "/open-path":
+            # 在资源管理器中打开一个目录（仅限允许的目录）
+            self._handle_open_path()
+            return
         if self.path != "/export":
             self._json({"ok": False, "error": "not found"}, 404)
             return
@@ -542,25 +699,150 @@ class ExportHandler(BaseHTTPRequestHandler):
                 if len(parts) > 1:
                     output_file = parts[1].strip().split("  ")[0].strip()
 
-        if result.returncode == 0 and output_file:
-            print(f"[服务] 生成成功：{output_file}", flush=True)
+        # 兜底：stdout 未解析到路径时，扫描 export_workspace/output/ 找最新且非空的 mp4
+        if not output_file:
+            out_dir = WORKSPACE / "output"
+            if out_dir.exists():
+                mp4s = sorted(
+                    (p for p in out_dir.glob("*.mp4") if p.stat().st_size > 0),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if mp4s:
+                    output_file = str(mp4s[0])
+
+        # 把相对路径转成绝对路径，并校验存在 + size > 0
+        final_output = None
+        if output_file:
+            p = Path(output_file)
+            if not p.is_absolute():
+                p = REPO_ROOT / output_file
+            if p.exists() and p.stat().st_size > 0:
+                final_output = str(p)
+
+        # 成功判定：returncode == 0 且 最终成品 mp4 存在且 size > 0
+        if result.returncode == 0 and final_output:
+            print(f"[服务] 生成成功：{final_output}", flush=True)
+            # 尝试找对应的 SRT 文件
+            srt_path = None
+            srt_dir = REPO_ROOT / "local-output" / "subtitles"
+            if srt_dir.exists():
+                mp4_stem = Path(final_output).stem
+                # 从 subtitle-manifest.json 匹配
+                manifest_path = srt_dir / "subtitle-manifest.json"
+                if manifest_path.exists():
+                    try:
+                        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                        for item in manifest.get("items", []):
+                            vname = item.get("videoFilename", "")
+                            if Path(vname).stem in mp4_stem or mp4_stem in Path(vname).stem:
+                                srt_rel = item.get("srt", "")
+                                srt_candidate = REPO_ROOT / srt_rel
+                                if srt_candidate.exists():
+                                    srt_path = str(srt_candidate)
+                                    break
+                    except Exception:
+                        pass
+                # fallback：直接查找同名 srt
+                if not srt_path:
+                    for ext in (".srt", ".SRT"):
+                        candidate = srt_dir / (mp4_stem + ext)
+                        if candidate.exists():
+                            srt_path = str(candidate)
+                            break
             self._json({
                 "ok": True,
-                "output": output_file,
-                "message": f"生成成功！成品视频已保存到 {output_file}",
+                "output": final_output,
+                "srt": srt_path,
+                "message": f"生成成功！成品视频已保存到 {final_output}",
             })
         else:
-            # 提取用户可读的错误信息
+            # 失败：提取可读错误信息，但要排除 ffmpeg 正常编码日志
+            NOISE_PATTERNS = (
+                "libx264", "Weighted P-Frames", "ref P L0", "ref B L0",
+                "kb/s", "Lsize", "frame=", "muxing overhead",
+            )
+            def _is_noise(line):
+                s = line.strip()
+                if not s:
+                    return True
+                return any(p in s for p in NOISE_PATTERNS)
+
             error_lines = [l for l in (stdout + "\n" + stderr).splitlines()
                            if "[ERROR]" in l]
             if error_lines:
                 error_msg = "\n".join(l.replace("[ERROR]", "").strip() for l in error_lines)
-            elif stderr.strip():
-                error_msg = stderr.strip()[-400:]
             else:
-                error_msg = "生成失败，请查看服务窗口中的日志。"
+                meaningful = [l for l in stderr.splitlines() if not _is_noise(l)]
+                if meaningful:
+                    error_msg = "\n".join(meaningful).strip()[-400:]
+                else:
+                    if result.returncode != 0:
+                        error_msg = (
+                            f"FFmpeg/脚本退出码非 0（{result.returncode}），"
+                            "请查看服务窗口中的日志。"
+                        )
+                    else:
+                        error_msg = (
+                            "生成失败：未在输出目录找到成品视频，请查看服务窗口中的日志。"
+                        )
             print(f"[服务] 生成失败：{error_msg}", flush=True)
             self._json({"ok": False, "error": error_msg})
+
+    # ── v0.9.10: 打开剪映软件（不研究剪映协议，只负责启动 exe） ────────────────
+    def _handle_open_jianying(self):
+        exepath = _find_jianying_exe()
+        if not exepath:
+            self._json({
+                "ok": False,
+                "error": "未找到剪映安装路径，请手动打开剪映。",
+                "hint": "在常见安装位置未探测到 JianyingPro.exe（已检查 %LocalAppData% 与 Program Files）。",
+            })
+            return
+        try:
+            # 非阻塞启动，进程独立；服务不被拖住
+            subprocess.Popen(
+                [str(exepath)],
+                cwd=str(exepath.parent),
+                shell=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+        except Exception as e:
+            self._json({"ok": False, "error": f"启动剪映失败：{e}"})
+            return
+        print(f"[服务] 已尝试启动剪映：{exepath}", flush=True)
+        self._json({"ok": True, "message": f"已尝试打开剪映（{exepath.name}）", "exe": str(exepath)})
+
+    # ── v0.9.10: 在资源管理器中打开一个目录（白名单闸门） ──────────────────────
+    def _handle_open_path(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        try:
+            data = json.loads(body)
+        except Exception as e:
+            self._json({"ok": False, "error": f"JSON 解析失败: {e}"})
+            return
+        target = (data.get("path") or "").strip()
+        if not target:
+            self._json({"ok": False, "error": "缺少 path 参数"})
+            return
+        p = Path(target)
+        if not _is_safe_open_path(p):
+            self._json({
+                "ok": False,
+                "error": "目标目录不存在或不在允许范围（仅允许剪映草稿 / 项目 export_workspace / 桌面）。",
+            })
+            return
+        try:
+            # Windows: os.startfile 会用资源管理器打开目录
+            os.startfile(str(p))  # noqa: only on Windows; 服务仅在 Windows 跑
+        except Exception as e:
+            self._json({"ok": False, "error": f"打开目录失败：{e}"})
+            return
+        print(f"[服务] 已打开目录：{p}", flush=True)
+        self._json({"ok": True, "message": f"已打开：{p}", "path": str(p)})
 
 
 def main():
