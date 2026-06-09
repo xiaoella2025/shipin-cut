@@ -986,7 +986,7 @@ function VideoOverviewCard({ video, analysis, vidIdx, isActive, onSelect }) {
 }
 
 // v0.9.8: Export pre-check modal ─────────────────────────────────────────────
-function ExportCheckModal({ rc, comp, sourceVideos, onClose, onConfirm, exporting }) {
+function ExportCheckModal({ rc, comp, sourceVideos, onClose, onConfirm, exporting, mode = 'video' }) {
   const voice = rc.voice || rc.voiceMeta
   const stickers = rc.stickers || []
   const dedupeEffects = rc.dedupeEffects || []
@@ -1004,22 +1004,35 @@ function ExportCheckModal({ rc, comp, sourceVideos, onClose, onConfirm, exportin
     detail: hasSegs ? `${comp?.segments?.length || 0} 个片段已就绪` : '无视频片段，无法导出',
   })
 
+  // 配音：不再因为未导入 / 未同步 阻止导出
   const voiceOk = !!(voice?.storedFileName)
   const voiceWarn = !!(voice && !voice.storedFileName)
-  checks.push({
-    type: voiceOk ? 'ok' : voiceWarn ? 'error' : 'error',
-    label: '本条配音',
-    detail: voiceOk ? `已同步 · ${voice.originalName || voice.fileName || ''}` :
-            voiceWarn ? '配音未同步到本地服务，请重新导入配音' :
-            '未导入本条配音，无法导出',
-  })
+  if (voiceOk) {
+    checks.push({
+      type: 'ok',
+      label: '本条配音',
+      detail: `已同步 · ${voice.originalName || voice.fileName || ''}`,
+    })
+  } else if (voiceWarn) {
+    checks.push({
+      type: 'warn',
+      label: '本条配音',
+      detail: '配音未同步到本地服务，仍可继续导出（建议导出后重新同步）',
+    })
+  } else {
+    checks.push({
+      type: 'warn',
+      label: '本条配音',
+      detail: '尚未导入本条配音，仍可继续导出（成品将不包含配音轨）',
+    })
+  }
 
   // ── 软提示项（不拦截） ────────────────────────────────────────────────────
   const hasFinalSubs = !!(rc.finalSubtitles?.length > 0)
   const subsSaved = !!rc.finalSubtitlesSavedAt
   const subsAligned = rc.subtitleAlign?.status === 'aligned'
   if (!hasFinalSubs) {
-    checks.push({ type: 'warn', label: '成品字幕', detail: '尚未生成成品字幕，将按字幕稿粗切导出' })
+    checks.push({ type: 'warn', label: '成品字幕', detail: '未找到字幕，将只导出视频轨' })
   } else if (!subsSaved) {
     checks.push({ type: 'warn', label: '成品字幕', detail: `${rc.finalSubtitles.length} 句（未保存），建议先保存` })
   } else if (!subsAligned) {
@@ -1078,14 +1091,21 @@ function ExportCheckModal({ rc, comp, sourceVideos, onClose, onConfirm, exportin
   const hasBlocker = checks.some(c => c.type === 'error')
   const ICON = { ok: '✅', warn: '⚠️', error: '❌' }
 
+  const isJianying = mode === 'jianying'
+
   return (
     <div className="ecm-overlay" onClick={onClose}>
       <div className="ecm-panel" onClick={e => e.stopPropagation()}>
         <div className="ecm-header">
-          <span className="ecm-title">导出前检查</span>
+          <span className="ecm-title">{isJianying ? '导出到剪映草稿' : '导出前检查'}</span>
           <span className="ecm-comp-name">{comp?.name || ''}</span>
           <button className="ecm-close" onClick={onClose}>×</button>
         </div>
+        {isJianying && (
+          <div className="ecm-banner">
+            将自动生成剪映草稿。如果当前没有可用成品视频，系统会先生成一个中间 mp4，再生成剪映草稿。
+          </div>
+        )}
         <div className="ecm-list">
           {checks.map((c, i) => (
             <div key={i} className={`ecm-row ${c.type}`}>
@@ -1097,13 +1117,15 @@ function ExportCheckModal({ rc, comp, sourceVideos, onClose, onConfirm, exportin
         </div>
         {hasBlocker && (
           <div className="ecm-blocker-hint">
-            ❌ 有关键项未就绪，请返回精修页处理后再导出。
+            ❌ 缺少关键视频素材，无法继续导出。
           </div>
         )}
         <div className="ecm-actions">
-          <button className="ecm-btn-cancel" onClick={onClose}>返回精修继续修改</button>
+          <button className="ecm-btn-cancel" onClick={onClose}>返回修改</button>
           <button className="ecm-btn-confirm" disabled={hasBlocker || exporting} onClick={onConfirm}>
-            {exporting ? '导出中…' : '继续导出当前成品'}
+            {exporting
+              ? (isJianying ? '生成中…' : '导出中…')
+              : (isJianying ? '继续导出剪映草稿' : '继续导出成品视频')}
           </button>
         </div>
       </div>
@@ -1265,10 +1287,25 @@ export default function App() {
   // ── v0.9.7: refine-page quick export + subtitle auto-align ──
   const [refineExportStatus, setRefineExportStatus] = useState('idle') // 'idle'|'loading'|'success'|'error'
   const [refineExportMsg, setRefineExportMsg]       = useState('')
+  const [lastExportedMp4, setLastExportedMp4]       = useState('')
+  const [lastExportedSrt, setLastExportedSrt]       = useState('')
+  const [jianyingExportStatus, setJianyingExportStatus] = useState('idle') // 'idle'|'loading'|'success'|'error'
+  const [jianyingExportMsg, setJianyingExportMsg]       = useState('')
+  // v0.9.10: 最近一次成功生成的剪映草稿路径（用于"打开草稿文件夹"按钮）
+  const [lastJianyingDraftPath, setLastJianyingDraftPath] = useState('')
+  const [lastJianyingDraftName, setLastJianyingDraftName] = useState('')
+  // 剪映草稿导出选项：字幕轨 / 配音音频轨 / 视频原声
+  // 配音音频轨当前版本不支持独立音频（配音已合成进 mp4）
+  const [jianyingOpts, setJianyingOpts]               = useState({
+    subtitle: true,
+    voice: true,
+    keepOriginalAudio: true,
+  })
+  const jianyingAudioTrackSupported = false  // TODO: export_with_pyjianying.py 支持独立音频轨时改为 true
   const [alignBusyId, setAlignBusyId]               = useState(null)   // compId currently aligning
   // ── v0.9.8: export pre-check modal + per-comp panels ──
   const [showExportCheck, setShowExportCheck]       = useState(false)
-  const [exportCheckComp, setExportCheckComp]       = useState(null)   // {comp, rc} snapshot
+  const [exportCheckComp, setExportCheckComp]       = useState(null)   // {comp, rc, mode: 'video'|'jianying'} snapshot
   const [showBgWrapPanel, setShowBgWrapPanel]       = useState(false)
 
   // ── step-2 refine (v0.7) ──
@@ -2820,9 +2857,9 @@ export default function App() {
     showToast('方案 JSON 已导出')
   }
 
-  // v0.9.1: POST 当前草稿到本地导出服务
-  async function exportToLocalService(compId, comp, setStatus = setEpExportStatus, setMsg = setEpExportMsg, dedupOverride = null) {
-    if (!compId || !comp) return
+  // v0.9.1: POST 当前草稿到本地导出服务（仅构建 payload + 调 /export，返回 {ok,output,srt,message,error}）
+  async function doExportToLocalService(compId, comp, dedupOverride = null) {
+    if (!compId || !comp) return { ok: false, error: '参数缺失' }
     const rc = defaultRcFor(refinedComps[compId])
     const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
     const { segments: derivedSegs, totalDuration } = hasEditSegs
@@ -2908,9 +2945,8 @@ export default function App() {
       voiceDuration: voiceSrc ? voiceDuration : null,
       durationDiff,
     }
-    setStatus('loading')
-    setMsg('正在生成成品视频，请稍候...')
     let result
+    let networkError = null
     try {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 10 * 60 * 1000) // 10 min
@@ -2924,34 +2960,195 @@ export default function App() {
       result = await resp.json()
     } catch (e) {
       const isConnRefused = e instanceof TypeError || (e.name === 'AbortError' && false)
-      setStatus('error')
       if (isConnRefused && !(e.name === 'AbortError')) {
-        setMsg('本地导出服务未启动。请先双击「启动本地导出服务.bat」，然后再点击「导出成品视频」。')
+        networkError = '本地导出服务未启动。请先双击「启动本地导出服务.bat」，然后再点击「导出成品视频」。'
       } else if (e.name === 'AbortError') {
-        setMsg('请求超时（超过10分钟），请检查服务窗口日志。')
+        networkError = '请求超时（超过10分钟），请检查服务窗口日志。'
       } else {
-        setMsg(`网络错误：${e.message}`)
+        networkError = `网络错误：${e.message}`
       }
-      return
+      return { ok: false, error: networkError, networkError }
     }
-    if (result.ok) {
+    if (result && result.ok) {
+      return { ok: true, output: result.output || '', srt: result.srt || '', message: result.message || '' }
+    }
+    return { ok: false, error: (result && result.error) || '生成失败，请查看服务窗口日志。' }
+  }
+
+  // v0.9.1: 包装层：调用 doExportToLocalService 并写 UI 状态（保留原 exportToLocalService 行为）
+  async function exportToLocalService(compId, comp, setStatus = setEpExportStatus, setMsg = setEpExportMsg, dedupOverride = null) {
+    setStatus('loading')
+    setMsg('正在生成成品视频，请稍候...')
+    const r = await doExportToLocalService(compId, comp, dedupOverride)
+    if (r.ok) {
       setStatus('success')
-      setMsg(result.message || '生成成功！成品视频已保存到 export_workspace/output/')
+      setMsg(r.message || '生成成功！成品视频已保存到 export_workspace/output/')
+      setLastExportedMp4(r.output || '')
+      setLastExportedSrt(r.srt || '')
     } else {
       setStatus('error')
-      setMsg(result.error || '生成失败，请查看服务窗口日志。')
+      setMsg(r.error || '生成失败，请查看服务窗口日志。')
+    }
+  }
+
+  // ── 导出到剪映草稿（一体化：mp4 不存在时自动先 /export 再 /export-jianying） ──
+  async function exportToJianying(compId, comp) {
+    const targetCompId = compId || refineCompId
+    const targetComp   = comp   || (targetCompId ? compositions.find(c => c.id === targetCompId) : null)
+    setJianyingExportStatus('loading')
+    let mp4ToUse = lastExportedMp4 || ''
+    let srtToUse = lastExportedSrt || ''
+    if (!mp4ToUse) {
+      setJianyingExportMsg('正在准备成品视频…')
+      const r = await doExportToLocalService(targetCompId, targetComp)
+      if (!r || !r.ok) {
+        setJianyingExportStatus('error')
+        setJianyingExportMsg(r?.error || '准备成品视频失败，请稍后再试。')
+        return
+      }
+      mp4ToUse = r.output || ''
+      srtToUse = r.srt || ''
+      setLastExportedMp4(mp4ToUse)
+      setLastExportedSrt(srtToUse)
+    }
+    setJianyingExportMsg('正在生成剪映草稿…')
+    const srtToSend = jianyingOpts.subtitle ? (srtToUse || undefined) : undefined
+    try {
+      const resp = await fetch('http://127.0.0.1:8765/export-jianying', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mp4: mp4ToUse,
+          srt: srtToSend,
+          // 透传选项（当前后端仅用 srt，但保留字段以便后续扩展）
+          options: {
+            subtitle: !!jianyingOpts.subtitle,
+            voice: !!jianyingOpts.voice,
+            keepOriginalAudio: !!jianyingOpts.keepOriginalAudio,
+            audioTrackSupported: jianyingAudioTrackSupported,
+          },
+        }),
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        setJianyingExportStatus('success')
+        setJianyingExportMsg(data.message || '剪映草稿已生成，请关闭并重新打开剪映查看。')
+        // v0.9.10: 保存草稿路径，供"打开草稿文件夹"使用
+        setLastJianyingDraftName(data.draftName || '')
+        setLastJianyingDraftPath(data.draftPath || '')
+      } else {
+        // 后端明确报"MP4 文件不存在"时，回退到 /export 再重试一次
+        const missingMp4 = /MP4 文件不存在/.test(data.error || '')
+        if (missingMp4) {
+          setJianyingExportMsg('正在重新准备成品视频…')
+          const r = await doExportToLocalService(targetCompId, targetComp)
+          if (!r || !r.ok) {
+            setJianyingExportStatus('error')
+            setJianyingExportMsg(r?.error || '重新生成成品视频失败，请稍后再试。')
+            return
+          }
+          mp4ToUse = r.output || ''
+          srtToUse = r.srt || ''
+          setLastExportedMp4(mp4ToUse)
+          setLastExportedSrt(srtToUse)
+          setJianyingExportMsg('正在生成剪映草稿…')
+          const retry = await fetch('http://127.0.0.1:8765/export-jianying', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mp4: mp4ToUse,
+              srt: jianyingOpts.subtitle ? (srtToUse || undefined) : undefined,
+              options: {
+                subtitle: !!jianyingOpts.subtitle,
+                voice: !!jianyingOpts.voice,
+                keepOriginalAudio: !!jianyingOpts.keepOriginalAudio,
+                audioTrackSupported: jianyingAudioTrackSupported,
+              },
+            }),
+          })
+          const retryData = await retry.json()
+          if (retryData.ok) {
+            setJianyingExportStatus('success')
+            setJianyingExportMsg(retryData.message || '剪映草稿已生成，请关闭并重新打开剪映查看。')
+            setLastJianyingDraftName(retryData.draftName || '')
+            setLastJianyingDraftPath(retryData.draftPath || '')
+          } else {
+            setJianyingExportStatus('error')
+            const raw = retryData.error || '生成失败，请重试'
+            setJianyingExportMsg(raw.length > 200 ? '剪映草稿生成失败，请查看本地服务窗口日志。' : raw)
+          }
+          return
+        }
+        setJianyingExportStatus('error')
+        const raw = data.error || '生成失败，请重试'
+        setJianyingExportMsg(raw.length > 200 ? '剪映草稿生成失败，请查看本地服务窗口日志。' : raw)
+      }
+    } catch (e) {
+      setJianyingExportStatus('error')
+      setJianyingExportMsg('网络错误：本地导出服务未启动，请先双击「启动本地导出服务.bat」。')
+    }
+  }
+
+  // v0.9.10: 打开剪映软件（前端 → 后端 /open-jianying）
+  async function openJianyingApp() {
+    try {
+      const resp = await fetch('http://127.0.0.1:8765/open-jianying', { method: 'POST' })
+      const data = await resp.json().catch(() => ({}))
+      if (data.ok) {
+        showToast(data.message || '已尝试打开剪映')
+      } else {
+        showToast(data.error || '未找到剪映，请手动打开')
+      }
+    } catch (e) {
+      showToast('本地导出服务未启动，请先双击「启动本地导出服务.bat」。')
+    }
+  }
+
+  // v0.9.10: 打开剪映草稿目录（前端 → 后端 /open-path）
+  async function openJianyingDraftFolder() {
+    const p = lastJianyingDraftPath
+    if (!p) {
+      showToast('暂无草稿路径，请先生成剪映草稿。')
+      return
+    }
+    try {
+      const resp = await fetch('http://127.0.0.1:8765/open-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: p }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (data.ok) {
+        showToast(data.message || '已打开草稿文件夹')
+      } else {
+        showToast(data.error || '草稿文件夹不存在，请手动查看剪映本地草稿')
+      }
+    } catch (e) {
+      showToast('本地导出服务未启动，请先双击「启动本地导出服务.bat」。')
     }
   }
 
   // v0.9.8: 精修页"导出当前成品视频" → 先弹导出前检查弹窗
   function exportCurrentFromRefine(compId, comp) {
     if (!compId || !comp) return
-    setExportCheckComp({ compId, comp })
+    setExportCheckComp({ compId, comp, mode: 'video' })
+    setShowExportCheck(true)
+  }
+
+  // 精修页"导出到剪映草稿" → 弹一个轻量检查弹窗（与视频同样的检查规则，但文案不同）
+  function exportCurrentToJianyingFromRefine(compId, comp) {
+    if (!compId || !comp) return
+    setExportCheckComp({ compId, comp, mode: 'jianying' })
     setShowExportCheck(true)
   }
 
   // 用户在检查弹窗点击"继续导出"后实际执行的导出
-  function doConfirmedExport(compId, comp) {
+  function doConfirmedExport(compId, comp, mode) {
+    if (mode === 'jianying') {
+      // 剪映草稿：一体化（mp4 不存在时自动先 /export），状态连续显示在 jianying 状态条
+      exportToJianying(compId, comp)
+      return
+    }
     // v0.9.8h1: 时间线效果层（dedupeEffects/backgroundEffects/stickers）由 payload 统一携带
     exportToLocalService(compId, comp, setRefineExportStatus, setRefineExportMsg, null)
   }
@@ -3448,8 +3645,22 @@ export default function App() {
             const isActive=step===n, isDone=step>n, isLocked=n===3&&!isGenerated&&step<3
             return [
               i>0&&<div key={`sep-${n}`} className={`step-nav-sep ${isDone?'done':''}`}/>,
+              // v0.9.10: 顶部"3 精修导出"点击直接进入精修页（不再跳旧 export-prep）
               <div key={n} className={`step-nav-item ${isActive?'active':''} ${isDone?'done':''} ${isLocked?'locked':''}`}
-                onClick={()=>(step!==n&&!(isLocked))&&setStep(n)} title={isLocked?'请先完成混剪方案生成':undefined}>
+                onClick={()=>{
+                  if (step===n || isLocked) return
+                  if (n===3) {
+                    // 旧主流程被弱化：直接进精修页（主操作已在精修页内提供）
+                    setStep(2)
+                    setSubStep('refine')
+                    if (compositions.length>0 && !refineCompId) {
+                      setRefineCompId(compositions[0].id)
+                    }
+                    return
+                  }
+                  setStep(n)
+                }}
+                title={isLocked?'请先完成混剪方案生成':(n===3?'进入精修页（在此导出成品视频 / 导出到剪映草稿）':undefined)}>
                 <div className="step-nav-num">{isDone?<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>:n}</div>
                 <span className="step-nav-label">{label}</span>
               </div>,
@@ -4081,6 +4292,7 @@ export default function App() {
             const planImportStatus=rc.planImportedAt?`已导入 ${rc.planImportedAt.slice(11,16)}`:''
             const voice=rc.voice||null
             const voiceMeta=rc.voiceMeta||null
+            const hasVoiceForJianying = !!(voice || voiceMeta)
             const importReport=rc.importReport||null
             const muteOriginal=rc.audioPolicy?.muteOriginalVideo??false
             const voiceDur=voice?.duration??0
@@ -4144,17 +4356,23 @@ export default function App() {
                 {/* Hidden plan JSON import input */}
                 <input type="file" accept=".json" style={{display:'none'}} ref={refinePlanImportRef}
                   onChange={e=>{ const f=e.target.files?.[0]; if(f) importRefinePlanFile(comp.id,f); e.target.value='' }} />
-                {/* v0.9.8: Export pre-check modal */}
+                {/* v0.9.8: Export pre-check modal (video / jianying 共用) */}
                 {showExportCheck && exportCheckComp?.compId === comp.id && (
                   <ExportCheckModal
                     comp={exportCheckComp.comp}
                     rc={defaultRcFor(refinedComps[exportCheckComp.compId])}
                     sourceVideos={uploadedVideos}
-                    exporting={refineExportStatus === 'loading'}
+                    mode={exportCheckComp.mode || 'video'}
+                    exporting={
+                      exportCheckComp.mode === 'jianying'
+                        ? (jianyingExportStatus === 'loading')
+                        : (refineExportStatus === 'loading')
+                    }
                     onClose={()=>setShowExportCheck(false)}
                     onConfirm={()=>{
+                      const mode = exportCheckComp.mode || 'video'
                       setShowExportCheck(false)
-                      doConfirmedExport(exportCheckComp.compId, exportCheckComp.comp)
+                      doConfirmedExport(exportCheckComp.compId, exportCheckComp.comp, mode)
                     }}
                   />
                 )}
@@ -4165,6 +4383,11 @@ export default function App() {
                     返回组合方案
                   </button>
                   <span className="refine-banner-title">成品精修方案工作台</span>
+                  {/* v0.9.10: 旧版导出页备用入口（弱化显示，不影响主流程） */}
+                  <button className="refine-banner-legacy-link" onClick={()=>{stopRefinePlay();setSubStep('export-prep')}}
+                    title="旧版多区导出页（备用，一般无需进入）">
+                    高级 / 旧版导出
+                  </button>
                   {hasEditSegs&&<span className="refine-del-badge refine-cut-badge">✂ 精剪模式</span>}
                   {(hasEditSegs?editDeletedCount:deletedCount)>0&&<span className="refine-del-badge">{hasEditSegs?editDeletedCount:deletedCount} 段已删</span>}
                   <span className="refine-banner-dur">总时长 {fmt(derivedDur)}{derivedDur!==comp.totalDur?` （原 ${fmt(comp.totalDur)}）`:''}</span>
@@ -4185,18 +4408,17 @@ export default function App() {
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="17"/></svg>
                       导入 JSON
                     </button>
-                    {planExportStatus&&<span className="refine-plan-io-status">{planExportStatus}</span>}
-                    {planImportStatus&&<span className="refine-plan-io-status imported">{planImportStatus}</span>}
-                    <button className="refine-export-now-btn" disabled={refineExportStatus==='loading'}
+                    <button className="refine-export-now-btn" disabled={refineExportStatus==='loading'||jianyingExportStatus==='loading'}
                       onClick={()=>{stopRefinePlay();exportCurrentFromRefine(comp.id,comp)}}
                       title="弹出导出前检查，确认后直接导出这一条成品视频">
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                       {refineExportStatus==='loading'?'导出中…':'导出当前成品视频'}
                     </button>
-                    <button className="refine-export-prep-btn refine-export-prep-alt"
-                      onClick={()=>{stopRefinePlay();setSubStep('export-prep')}}
-                      title="高级导出检查（批量导出备用入口）">
-                      高级 ›
+                    <button className="refine-export-now-btn jianying-now-btn" disabled={refineExportStatus==='loading'||jianyingExportStatus==='loading'}
+                      onClick={()=>{stopRefinePlay();exportCurrentToJianyingFromRefine(comp.id,comp)}}
+                      title="一键生成剪映草稿；如当前没有现成 mp4，会自动先调 /export 准备一个中间 mp4">
+                      <span style={{marginRight:1}}>🎬</span>
+                      {jianyingExportStatus==='loading'?'生成中…':'导出到剪映草稿'}
                     </button>
                   </div>
                   {refineExportStatus!=='idle'&&refineExportMsg&&(
@@ -4208,6 +4430,55 @@ export default function App() {
                       )}
                     </div>
                   )}
+                  {/* 剪映选项 + 状态：与视频导出按钮并列，状态在操作时连续展示 */}
+                  <div className="jianying-export-block">
+                    <div className="jianying-export-opts">
+                      <label className="jianying-opt">
+                        <input type="checkbox" checked={jianyingOpts.subtitle} onChange={e=>setJianyingOpts(o=>({...o,subtitle:e.target.checked}))}/>
+                        <span>带字幕轨</span>
+                      </label>
+                      <label className={`jianying-opt${!hasVoiceForJianying?' disabled':''}`} title={!hasVoiceForJianying?'当前无独立配音文件':jianyingAudioTrackSupported?'':'当前版本配音已合成在视频中，独立音频轨下个版本支持'}>
+                        <input type="checkbox" checked={jianyingOpts.voice} disabled={!hasVoiceForJianying||!jianyingAudioTrackSupported} onChange={e=>setJianyingOpts(o=>({...o,voice:e.target.checked}))}/>
+                        <span>带配音音频轨</span>
+                      </label>
+                      <label className="jianying-opt" title="视频原声按当前成品导出逻辑（配音已合成进 mp4）">
+                        <input type="checkbox" checked={jianyingOpts.keepOriginalAudio} onChange={e=>setJianyingOpts(o=>({...o,keepOriginalAudio:e.target.checked}))}/>
+                        <span>保留视频原声</span>
+                      </label>
+                    </div>
+                    {hasVoiceForJianying&&!jianyingAudioTrackSupported&&(
+                      <div className="jianying-opt-hint">当前版本配音已合成在视频中，独立音频轨下个版本支持</div>
+                    )}
+                    {jianyingExportStatus!=='idle'&&jianyingExportMsg&&(
+                      <div className={`refine-export-now-msg jianying ${jianyingExportStatus}`}>
+                        {jianyingExportStatus==='loading'&&<span className="refine-export-now-spin"/>}
+                        {jianyingExportStatus==='success'&&jianyingExportMsg}
+                        {jianyingExportStatus==='error'&&(
+                          <span>❌ {jianyingExportMsg}
+                            <button className="refine-export-now-close" title="关闭" onClick={()=>{setJianyingExportStatus('idle');setJianyingExportMsg('')}}>×</button>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {jianyingExportStatus==='success'&&(
+                      <div className="jianying-success-actions">
+                        <button className="jianying-success-btn" onClick={openJianyingApp}
+                          title="通过本地服务尝试启动剪映软件">
+                          🚀 打开剪映
+                        </button>
+                        <button className="jianying-success-btn" onClick={openJianyingDraftFolder}
+                          title={lastJianyingDraftPath ? `本地路径：${lastJianyingDraftPath}` : '通过本地服务打开草稿文件夹'}
+                          disabled={!lastJianyingDraftPath}>
+                          📁 打开草稿文件夹
+                        </button>
+                        {lastJianyingDraftName&&(
+                          <span className="jianying-success-draftname" title={lastJianyingDraftPath}>
+                            草稿名：{lastJianyingDraftName}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* v0.7.6-hotfix: Plan import integrity panel */}
