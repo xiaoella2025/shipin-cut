@@ -1655,9 +1655,9 @@ export default function App() {
     return ()=>clearTimeout(t)
   }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── sequential analysis — calls real local whisper service ──
+  // ── sequential analysis: base segments first, whisper runs in background ──
 
-  async function startNextAnalysis() {
+  function startNextAnalysis() {
     if (currentlyAnalyzingRef.current) return
     const videos   = uploadedVideosRef.current
     const analysis = videoAnalysisRef.current
@@ -1665,13 +1665,45 @@ export default function App() {
     if (!waiting) return
     currentlyAnalyzingRef.current = waiting.id
 
-    const setPhase = (phase, progress=0) =>
-      setVideoAnalysis(prev=>({ ...prev, [waiting.id]:{...prev[waiting.id], phase, progress} }))
+    const vid    = uploadedVideosRef.current.find(v=>v.id===waiting.id)
+    const vidIdx = uploadedVideosRef.current.findIndex(v=>v.id===waiting.id)
 
-    setVideoAnalysis(prev=>({
-      ...prev,
-      [waiting.id]:{ status:'analyzing', progress:0, segments:[], subtitleCount:0, phase:'连接本地服务…' }
-    }))
+    // ① 立刻生成时间等分基础分段，保证第 2 页无论如何都有内容可看
+    const baseSegs = generateSegments(vid, vidIdx)
+    setVideoAnalysis(prev=>{
+      const next={
+        ...prev,
+        [waiting.id]:{
+          status:'done', progress:100,
+          segments:baseSegs, subtitleCount:0,
+          subtitles:[], subtitleSource:'none',
+          subtitleStatus:'pending',   // 字幕识别即将在后台启动
+          subtitleError:null, subtitlePhase:null,
+          phase:null,
+        }
+      }
+      videoAnalysisRef.current=next
+      return next
+    })
+
+    // ② 释放锁，继续处理队列中下一个视频
+    currentlyAnalyzingRef.current=null
+    setTimeout(startNextAnalysis, 100)
+
+    // ③ 后台异步字幕识别，不阻塞分段显示
+    tryTranscribeBackground(waiting.id, vid, vidIdx)
+  }
+
+  // 后台字幕识别：成功则替换字幕+分段，失败只标记错误，绝不清空 segments
+  async function tryTranscribeBackground(videoId, vid, vidIdx) {
+    const setSubState = (patch) =>
+      setVideoAnalysis(prev=>{
+        const next={...prev,[videoId]:{...prev[videoId],...patch}}
+        videoAnalysisRef.current=next
+        return next
+      })
+
+    setSubState({ subtitleStatus:'running', subtitlePhase:'连接本地服务…' })
 
     try {
       // 1. 检查本地服务 + whisper
@@ -1682,27 +1714,28 @@ export default function App() {
         })
         healthData = await hr.json()
       } catch {
-        throw { code:'NO_SERVICE', message:'本地识别服务未启动。\n请先运行：python tools/local_export_server.py' }
+        throw { code:'NO_SERVICE', message:'本地识别服务未启动，请运行：python tools/local_export_server.py' }
       }
       if (!healthData?.whisper?.available) {
         const reason = healthData?.whisper?.reason || '未知原因'
-        throw { code:'NO_WHISPER', message:`Whisper 未就绪：${reason}\n请参考 LOCAL_VIDEO_TOOLS.md 配置 whisper.cpp` }
+        throw { code:'NO_WHISPER', message:`Whisper 未就绪：${reason}` }
       }
 
-      // 2. 上传视频到服务（若尚未同步）
-      setPhase('上传视频…', 10)
-      let storedFileName = waiting.storedFileName
+      // 2. 上传视频（若未同步）
+      setSubState({ subtitlePhase:'上传视频…' })
+      const currentVid = uploadedVideosRef.current.find(v=>v.id===videoId)
+      let storedFileName = currentVid?.storedFileName
       if (!storedFileName) {
-        const blob = await (await fetch(waiting.url)).blob()
-        const r    = await uploadToLocalService('/upload-video', blob, waiting.name)
+        const blob = await (await fetch(currentVid.url)).blob()
+        const r    = await uploadToLocalService('/upload-video', blob, currentVid.name)
         storedFileName = r.fileName
         setUploadedVideos(prev=>prev.map(v=>
-          v.id===waiting.id ? {...v, synced:true, storedFileName:r.fileName} : v
+          v.id===videoId ? {...v,synced:true,storedFileName:r.fileName} : v
         ))
       }
 
-      // 3. 调用字幕识别（可能耗时较长）
-      setPhase('识别字幕中…（需要几分钟）', 25)
+      // 3. 字幕识别
+      setSubState({ subtitlePhase:'识别字幕中…（需要几分钟）' })
       const controller = new AbortController()
       const timer = setTimeout(()=>controller.abort(), 15*60*1000)
       let td
@@ -1719,57 +1752,28 @@ export default function App() {
       }
       if (!td.ok) throw { code:'TRANSCRIBE_FAIL', message: td.error || '字幕识别失败' }
 
-      // 4. 构建真实字幕 + 按字幕边界切分
-      setPhase('生成分段…', 90)
+      // 4. 识别成功 → 用真实字幕更新分段（替换基础分段）
       const rawSegs = td.segments || []
-      const vid     = uploadedVideosRef.current.find(v=>v.id===waiting.id)
-      const vidIdx  = uploadedVideosRef.current.findIndex(v=>v.id===waiting.id)
-      const subs    = rawSegs.map((s,i)=>({
-        id:`sub-${waiting.id}-${i}`,
-        startSec: s.start,
-        endSec:   s.end,
-        text:     s.text,
-        start:    s.start,  // generateSegmentsFromSubtitles 读 .start/.end
-        end:      s.end,
+      const freshVid    = uploadedVideosRef.current.find(v=>v.id===videoId)
+      const freshVidIdx = uploadedVideosRef.current.findIndex(v=>v.id===videoId)
+      const subs = rawSegs.map((s,i)=>({
+        id:`sub-${videoId}-${i}`,
+        startSec:s.start, endSec:s.end,
+        text:s.text, start:s.start, end:s.end,
       }))
-      const segs = generateSegmentsFromSubtitles(vid, vidIdx, subs)
-
-      setVideoAnalysis(prev=>{
-        const next={
-          ...prev,
-          [waiting.id]:{
-            status:'done', progress:100,
-            segments:segs, subtitleCount:subs.length,
-            subtitles:subs, subtitleSource:'real',
-            phase:null,
-          }
-        }
-        videoAnalysisRef.current=next
-        return next
+      const realSegs = generateSegmentsFromSubtitles(freshVid, freshVidIdx, subs)
+      setSubState({
+        segments:realSegs, subtitleCount:subs.length,
+        subtitles:subs, subtitleSource:'real',
+        subtitleStatus:'real', subtitleError:null, subtitlePhase:null,
       })
     } catch(err) {
       const isAbort = err?.name==='AbortError'
       const msg = isAbort
         ? '识别超时（超过15分钟），请检查 whisper.cpp 是否正常运行'
         : (err?.message || '字幕识别失败')
-      setVideoAnalysis(prev=>{
-        const next={
-          ...prev,
-          [waiting.id]:{
-            status:'error', progress:0,
-            segments:[], subtitleCount:0,
-            subtitles:[], subtitleSource:'none',
-            errorCode: err?.code||'ERROR',
-            errorMessage: msg,
-            phase:null,
-          }
-        }
-        videoAnalysisRef.current=next
-        return next
-      })
-    } finally {
-      currentlyAnalyzingRef.current=null
-      setTimeout(startNextAnalysis, 700)
+      // 失败只标记字幕错误，绝不清空 segments 或改 status
+      setSubState({ subtitleStatus:'failed', subtitleError:msg, subtitlePhase:null })
     }
   }
 
@@ -1828,7 +1832,7 @@ export default function App() {
   function handleExportCorrectedSubtitles() {
     if (!currentVideoId) return
     const ana = videoAnalysis[currentVideoId]
-    if (ana?.subtitleSource !== 'real' || !ana?.subtitles?.length) {
+    if (ana?.subtitleStatus !== 'real' || !ana?.subtitles?.length) {
       showToast('当前视频没有可导出的真实字幕')
       return
     }
@@ -1971,7 +1975,7 @@ export default function App() {
             segments:      newSegs,
             subtitles:     convertedSubs,
             subtitleCount: convertedSubs.length,
-            subtitleSource:'real',
+            subtitleSource:'real', subtitleStatus:'real', subtitleError:null,
           }
         }))
         showToast(`✓ 已导入真实字幕：共 ${convertedSubs.length} 条，已生成 ${newSegs.length} 个分段`)
@@ -2049,7 +2053,7 @@ export default function App() {
           segments: newSegs,
           subtitles: convertedSubs,
           subtitleCount: convertedSubs.length,
-          subtitleSource: 'real',
+          subtitleSource: 'real', subtitleStatus:'real', subtitleError:null,
         }
         resolve({ file, matched: true, vidName: vid.name, count: convertedSubs.length })
       }
@@ -3796,24 +3800,29 @@ export default function App() {
                       <div className="s1-card-meta">{v.res!=='—'&&<span>{v.res}</span>}<span>{v.durStr}</span><span>{v.sizeStr}</span></div>
                       {(()=>{
                         const ana=videoAnalysis[v.id]
-                        const subSrc=ana?.subtitleSource
+                        const subSt=ana?.subtitleStatus   // pending/running/real/failed/none
                         const segCnt=ana?.segments?.length||0
                         const subCnt=ana?.subtitleCount||0
                         const status=ana?.status
                         if (!ana||status==='waiting') return <div className="s1-card-status s1-status-wait">等待识别…</div>
-                        if (status==='analyzing') return <div className="s1-card-status s1-status-run">{ana.phase||'识别中…'}</div>
-                        if (status==='error') return (
-                          <div className="s1-card-status s1-status-err" title={ana.errorMessage}>
-                            <span>识别失败</span>
+                        // subtitle running phase (non-blocking — segments already exist)
+                        if (status==='done'&&(subSt==='pending'||subSt==='running'))
+                          return <div className="s1-card-status s1-status-run">{ana.subtitlePhase||'字幕识别中…'} <span className="s1-seg-cnt">分段 {segCnt} 个</span></div>
+                        if (status==='done'&&subSt==='failed') return (
+                          <div className="s1-card-status s1-status-err" title={ana.subtitleError}>
+                            <span className="s1-seg-cnt">分段 {segCnt} 个</span>
+                            <span>· 字幕失败</span>
                             <button className="s1-retry-btn" onClick={()=>{
-                              setVideoAnalysis(prev=>({...prev,[v.id]:{...prev[v.id],status:'waiting',errorMessage:null,errorCode:null}}))
-                              setTimeout(startNextAnalysis,150)
+                              setVideoAnalysis(prev=>({...prev,[v.id]:{...prev[v.id],subtitleStatus:'pending',subtitleError:null}}))
+                              const cv=uploadedVideosRef.current.find(x=>x.id===v.id)
+                              const ci=uploadedVideosRef.current.findIndex(x=>x.id===v.id)
+                              setTimeout(()=>tryTranscribeBackground(v.id,cv,ci),150)
                             }}>重试</button>
                           </div>
                         )
                         return (
                           <div className="s1-card-status s1-status-done">
-                            <span className={subSrc==='real'?'s1-sub-ok':'s1-sub-none'}>{subSrc==='real'?`字幕 ${subCnt} 条`:'无真实字幕'}</span>
+                            <span className={subSt==='real'?'s1-sub-ok':'s1-sub-none'}>{subSt==='real'?`字幕 ${subCnt} 条`:'暂无字幕'}</span>
                             <span className="s1-seg-cnt">分段 {segCnt} 个</span>
                           </div>
                         )
@@ -6609,16 +6618,16 @@ export default function App() {
                           </div>
                         )}
                         <div className="s2-vid-item-sub-src">
-                          {ana?.subtitleSource==='real'
+                          {ana?.subtitleStatus==='real'
                             ? <span className="s2-vid-subsrc real">
                                 真实字幕 {ana.subtitleCount}条
                                 {(ana.subtitles?.filter(s=>s.corrected)?.length||0)>0&&
                                   <span className="s2-vid-corrected-pill"> · 已校对</span>}
                               </span>
-                            : ana?.status==='error'
-                              ? <span className="s2-vid-subsrc none" title={ana.errorMessage}>识别失败 — 点重试</span>
-                              : ana?.status==='analyzing'
-                              ? <span className="s2-vid-subsrc sim">{ana.phase||'识别中…'}</span>
+                            : (ana?.subtitleStatus==='running'||ana?.subtitleStatus==='pending')
+                              ? <span className="s2-vid-subsrc sim">{ana.subtitlePhase||'字幕识别中…'}</span>
+                              : ana?.subtitleStatus==='failed'
+                              ? <span className="s2-vid-subsrc none" title={ana.subtitleError}>字幕识别失败</span>
                               : <span className="s2-vid-subsrc none">暂无字幕</span>
                           }
                         </div>
@@ -6675,19 +6684,7 @@ export default function App() {
                         </div>
                       )}
                       {editorVid&&editorAnalysis?.status==='waiting'&&(
-                        <div className="s2-vid-overlay"><span>等待识别…</span></div>
-                      )}
-                      {editorVid&&editorAnalysis?.status==='analyzing'&&(
-                        <div className="s2-vid-overlay">
-                          <span className="s2-vid-analyzing-pct">{editorAnalysis.phase||`${Math.round(editorAnalysis.progress)}%`}</span>
-                          <div className="s2-vid-ana-bar"><div className="s2-vid-ana-bar-fill" style={{width:`${editorAnalysis.progress}%`}}/></div>
-                        </div>
-                      )}
-                      {editorVid&&editorAnalysis?.status==='error'&&(
-                        <div className="s2-vid-overlay s2-vid-overlay-err">
-                          <span className="s2-vid-err-icon">✕</span>
-                          <span className="s2-vid-err-msg">{editorAnalysis.errorMessage?.split('\n')[0]||'识别失败'}</span>
-                        </div>
+                        <div className="s2-vid-overlay"><span>生成分段中…</span></div>
                       )}
                       {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
                         <div className="s2-vid-hud">
@@ -6756,7 +6753,7 @@ export default function App() {
                       {editorSubtitles.length>0&&<span className="s2-right-count">{editorSubtitles.length} 条</span>}
                       {correctedSubCount>0&&<span className="s2-sub-corrected-badge">✎ 已修改 {correctedSubCount} 条</span>}
                       {editorVidIdx>=0&&<span className="s2-right-vidnum" style={{marginLeft:'auto'}}>V{editorVidIdx+1}</span>}
-                      {editorAnalysis?.subtitleSource==='real'&&<span className="s2-sub-src-head-badge">真实</span>}
+                      {editorAnalysis?.subtitleStatus==='real'&&<span className="s2-sub-src-head-badge">真实</span>}
                       <div className="s2-col-switcher">
                         {[1,2,3].map(n=>(
                           <button key={n} className={`s2-col-btn${subColCount===n?' active':''}`} onClick={()=>setSubColCount(n)} title={`${n}列显示`}>{n}</button>
@@ -6764,10 +6761,14 @@ export default function App() {
                       </div>
                     </div>
                     <div className="s2-sub-toolbar">
-                      <span className={`s2-sub-source-badge${editorAnalysis?.subtitleSource==='real'?' real':' sim'}`}>
-                        {editorAnalysis?.subtitleSource==='real'
+                      <span className={`s2-sub-source-badge${editorAnalysis?.subtitleStatus==='real'?' real':' sim'}`}>
+                        {editorAnalysis?.subtitleStatus==='real'
                           ? `真实字幕 ${editorSubtitles.length}条`
-                          : editorSubtitles.length>0 ? `模拟 ${editorSubtitles.length}条` : '未导入'
+                          : editorAnalysis?.subtitleStatus==='failed'
+                          ? '字幕识别失败'
+                          : (editorAnalysis?.subtitleStatus==='running'||editorAnalysis?.subtitleStatus==='pending')
+                          ? (editorAnalysis.subtitlePhase||'识别中…')
+                          : '暂无字幕'
                         }
                       </span>
                       <button className="s2-sub-tool-btn" onClick={()=>subtitleFileRef.current?.click()} disabled={!editorVid} title="选择本地生成的 subtitles.json（不上传服务器）">
@@ -6778,11 +6779,11 @@ export default function App() {
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
                         批量导入
                       </button>
-                      <button className={`s2-sub-tool-btn s2-sub-tool-export${editorAnalysis?.subtitleSource==='real'?'':' disabled'}`} onClick={handleExportCorrectedSubtitles} title={editorAnalysis?.subtitleSource==='real'?'导出修正后的字幕 JSON':'当前视频没有真实字幕可导出'}>
+                      <button className={`s2-sub-tool-btn s2-sub-tool-export${editorAnalysis?.subtitleStatus==='real'?'':' disabled'}`} onClick={handleExportCorrectedSubtitles} title={editorAnalysis?.subtitleStatus==='real'?'导出修正后的字幕 JSON':'当前视频没有真实字幕可导出'}>
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                         导出修正
                       </button>
-                      {editorVid&&editorAnalysis?.subtitleSource!=='real'&&(
+                      {editorVid&&editorAnalysis?.subtitleStatus!=='real'&&(
                         <button className={`s2-sub-tool-btn s2-sub-guide-toggle${showImportGuide?' active':''}`} onClick={()=>setShowImportGuide(p=>!p)} title="查看字幕导入说明">
                           ? 说明
                         </button>
@@ -6884,7 +6885,7 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  {editorVid&&editorAnalysis?.subtitleSource!=='real'&&showImportGuide&&(
+                  {editorVid&&editorAnalysis?.subtitleStatus!=='real'&&showImportGuide&&(
                     <div className="s2-sub-import-guide">
                       <div className="s2-sub-guide-title">真实字幕导入流程</div>
                       <div className="s2-sub-guide-step">① 本地生成字幕：</div>
@@ -6974,13 +6975,14 @@ export default function App() {
                         <div className="s2-seg-card-time">{seg.startStr} – {seg.endStr}</div>
                         {(()=>{
                           const isExp=!!expandedSegs[seg.id]
-                          const hasRealSubs = editorAnalysis?.subtitleSource==='real'
-                          const isErr = editorAnalysis?.status==='error'
-                          const fallbackText = hasRealSubs
+                          const subSt = editorAnalysis?.subtitleStatus
+                          const fallbackText = subSt==='real'
                             ? (seg.subtitle||'（该段无字幕）')
-                            : isErr
-                            ? `识别失败：${editorAnalysis.errorMessage?.split('\n')[0]||'请检查本地服务'}`
-                            : '暂无真实字幕 — 等待字幕识别完成'
+                            : subSt==='failed'
+                            ? `字幕识别失败：${editorAnalysis.subtitleError?.split('\n')[0]||'请检查本地服务'}`
+                            : (subSt==='running'||subSt==='pending')
+                            ? '字幕识别中…'
+                            : '暂无真实字幕'
                           const displaySubs=segSubs.length>0?segSubs:[{id:'nosub',text:fallbackText}]
                           const needsExpand=displaySubs.length>2||displaySubs.some(s=>s.text.length>20)
                           const shown=(!needsExpand||isExp)?displaySubs:displaySubs.slice(0,2)
