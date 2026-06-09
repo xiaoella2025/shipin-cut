@@ -225,7 +225,7 @@ function generateSegments(video, vidIndex) {
     endStr:   fmt((dur / count) * (i + 1)),
     type:     s.type,
     subtitle: '',   // 不注入假字幕；真实字幕由字幕 JSON 导入后覆盖
-    selected: s.type !== '开场' && s.type !== '结尾',
+    selected: true,  // 基础分段默认全选，用户手动取消才排除
   }))
 }
 
@@ -292,7 +292,7 @@ function generateSegmentsFromSubtitles(video, vidIndex, subs) {
       type,
       subtitle,
       subtitleIds,
-      selected:    type !== '开场' && type !== '结尾',
+      selected:    true,  // 真实字幕分段默认全选
     }
   })
 }
@@ -1425,6 +1425,8 @@ export default function App() {
   const videoRef              = useRef(null)
   const editorVideoRef        = useRef(null)
   const currentlyAnalyzingRef = useRef(null)
+  const transcribeQueueRef    = useRef([])   // videoIds waiting to transcribe (sequential)
+  const transcribingRef       = useRef(false) // true while one video is being transcribed
   const uploadedVideosRef     = useRef([])
   const videoAnalysisRef      = useRef({})
   const compositionsRef       = useRef([])
@@ -1723,8 +1725,30 @@ export default function App() {
     currentlyAnalyzingRef.current=null
     setTimeout(startNextAnalysis, 100)
 
-    // ③ 后台异步字幕识别，不阻塞分段显示
-    tryTranscribeBackground(waiting.id, vid, vidIdx)
+    // ③ 加入顺序识别队列（不并发，避免 Python 服务被阻塞）
+    enqueueTranscribe(waiting.id)
+  }
+
+  // ── 顺序字幕识别队列（一次只处理一个视频） ──
+  function enqueueTranscribe(videoId) {
+    if (transcribeQueueRef.current.includes(videoId)) return  // 防重复
+    transcribeQueueRef.current.push(videoId)
+    if (!transcribingRef.current) drainTranscribeQueue()
+  }
+
+  async function drainTranscribeQueue() {
+    if (transcribingRef.current) return
+    const videoId = transcribeQueueRef.current.shift()
+    if (!videoId) return
+    transcribingRef.current = true
+    try {
+      const vid    = uploadedVideosRef.current.find(v=>v.id===videoId)
+      const vidIdx = uploadedVideosRef.current.findIndex(v=>v.id===videoId)
+      if (vid) await tryTranscribeBackground(videoId, vid, vidIdx)
+    } finally {
+      transcribingRef.current = false
+      drainTranscribeQueue()  // 处理队列中下一个
+    }
   }
 
   // 后台字幕识别：成功则替换字幕+分段，失败只标记错误，绝不清空 segments
@@ -1746,8 +1770,14 @@ export default function App() {
           signal: AbortSignal.timeout ? AbortSignal.timeout(3000) : undefined
         })
         healthData = await hr.json()
-      } catch {
-        throw { code:'NO_SERVICE', message:'本地识别服务未启动，请运行：python tools/local_export_server.py' }
+      } catch(fetchErr) {
+        const isTimeout = fetchErr?.name==='AbortError' || fetchErr?.name==='TimeoutError'
+        throw {
+          code:'NO_SERVICE',
+          message: isTimeout
+            ? '本地服务无响应（连接超时），请检查服务是否正常运行'
+            : '本地识别服务未启动，请运行：python tools/local_export_server.py',
+        }
       }
       if (!healthData?.whisper?.available) {
         const reason = healthData?.whisper?.reason || '未知原因'
@@ -3847,9 +3877,7 @@ export default function App() {
                             <span>· 字幕失败</span>
                             <button className="s1-retry-btn" onClick={()=>{
                               setVideoAnalysis(prev=>({...prev,[v.id]:{...prev[v.id],subtitleStatus:'pending',subtitleError:null}}))
-                              const cv=uploadedVideosRef.current.find(x=>x.id===v.id)
-                              const ci=uploadedVideosRef.current.findIndex(x=>x.id===v.id)
-                              setTimeout(()=>tryTranscribeBackground(v.id,cv,ci),150)
+                              enqueueTranscribe(v.id)
                             }}>重试</button>
                           </div>
                         )
@@ -6860,10 +6888,8 @@ export default function App() {
                       <div className="s2-sub-empty" style={{width:'100%',flexDirection:'column',gap:8}}>
                         <span>字幕识别失败：{editorAnalysis.subtitleError?.split('\n')[0]||'请检查本地服务'}</span>
                         <button className="s1-retry-btn" style={{alignSelf:'center'}} onClick={()=>{
-                          const cv=uploadedVideosRef.current.find(v=>v.id===currentVideoId)
-                          const ci=uploadedVideosRef.current.findIndex(v=>v.id===currentVideoId)
                           setVideoAnalysis(prev=>({...prev,[currentVideoId]:{...prev[currentVideoId],subtitleStatus:'pending',subtitleError:null}}))
-                          setTimeout(()=>tryTranscribeBackground(currentVideoId,cv,ci),150)
+                          enqueueTranscribe(currentVideoId)
                         }}>重试识别</button>
                       </div>
                     )}
