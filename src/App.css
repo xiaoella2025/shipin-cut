@@ -9121,9 +9121,9 @@ input[type=range] {
   background: rgba(255,255,255,.04);
   border: 1px solid var(--bdr);
   border-radius: 6px;
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.55;
+  color: var(--txt);
+  font-size: 15px;
+  line-height: 1.6;
   padding: 8px 10px;
   resize: none;
   font-family: inherit;
@@ -11797,8 +11797,8 @@ input[type=range] {
 .rs-split-menu { position:absolute; right:0; top:100%; z-index:50; background:var(--bg-1); border:1px solid var(--border); border-radius:5px; box-shadow:0 4px 12px rgba(0,0,0,.3); display:flex; flex-direction:column; min-width:90px; }
 .rs-split-opt { background:none; border:none; color:var(--text); font-size:11px; padding:6px 10px; text-align:left; cursor:pointer; white-space:nowrap; }
 .rs-split-opt:hover { background:var(--bg-2); }
-.refine-subs-input { flex:1; background:var(--bg-2); border:1px solid var(--border); color:var(--text); font-size:14px; padding:3px 6px; border-radius:3px; outline:none; min-width:0; resize:none; font-family:inherit; line-height:1.4; min-height:22px; display:block; }
-.refine-subs-input:focus { border-color:var(--accent); background:var(--bg-1); }
+.refine-subs-input { flex:1; background:rgba(255,255,255,.04); border:1px solid var(--bdr-md); color:var(--txt); font-size:15px; padding:4px 6px; border-radius:3px; outline:none; min-width:0; resize:none; font-family:inherit; line-height:1.5; min-height:24px; display:block; }
+.refine-subs-input:focus { border-color:var(--accent); background:rgba(91,106,240,.06); }
 
 /* v0.9.5 refine reframe panel */
 .refine-reframe { flex-shrink:0; min-width:190px; max-width:230px; border-left:1px solid var(--border); padding:0 12px; overflow-y:auto; }
@@ -12071,3 +12071,16 @@ input[type=range] {
 .s2-seg-card-sub-edit-btn { margin-top: 3px; background: none; border: 1px solid var(--bdr-md); border-radius: var(--r); color: var(--txt-2); font-size: 11px; padding: 2px 8px; cursor: pointer; transition: all 0.1s; }
 .s2-seg-card-sub-edit-btn:hover { color: var(--accent); border-color: var(--accent); }
 .s2-seg-sub-edit-acts { display: flex; gap: 5px; }
+
+/* 组合方案页片段字幕编辑 */
+.r3-cur-sub-wrap { display: flex; flex-direction: column; gap: 5px; }
+.r3-sub-edit-btn { background: none; border: 1px solid var(--bdr-hi); border-radius: var(--r); color: #94a3b8; font-size: 12px; padding: 3px 10px; cursor: pointer; transition: all 0.15s; align-self: flex-start; }
+.r3-sub-edit-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-lo); }
+.r3-sub-edit-wrap { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.r3-sub-edit-ta { width: 100%; background: var(--bg-surf); border: 1px solid var(--accent); border-radius: var(--r); color: var(--txt); font-size: 14px; padding: 6px 8px; resize: none; font-family: inherit; outline: none; line-height: 1.5; }
+.r3-sub-edit-ta:focus { border-color: var(--accent-hi); }
+.r3-sub-edit-acts { display: flex; gap: 6px; }
+.r3-sub-edit-save { background: var(--accent); border: none; border-radius: var(--r); color: #fff; font-size: 12px; padding: 4px 12px; cursor: pointer; transition: background 0.1s; }
+.r3-sub-edit-save:hover { background: var(--accent-hi); }
+.r3-sub-edit-cancel { background: none; border: 1px solid var(--bdr-md); border-radius: var(--r); color: var(--txt-2); font-size: 12px; padding: 4px 10px; cursor: pointer; transition: all 0.1s; }
+.r3-sub-edit-cancel:hover { border-color: var(--bdr-hi); color: var(--txt); }

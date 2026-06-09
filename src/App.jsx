@@ -1285,6 +1285,8 @@ export default function App() {
   const [editingSubText, setEditingSubText]           = useState('')
   const [editingSegSub, setEditingSegSub] = useState(null)  // {segIdx: number}
   const [editingSegSubText, setEditingSegSubText] = useState('')
+  const [editingCompSub, setEditingCompSub] = useState(null)  // {compId, segIdx}
+  const [editingCompSubText, setEditingCompSubText] = useState('')
   const [subStep, setSubStep]                 = useState('cut')
   const [subColCount, setSubColCount]         = useState(2)
 
@@ -1906,6 +1908,26 @@ export default function App() {
     })
     setEditingSegSub(null)
     setEditingSegSubText('')
+  }
+
+  function handleSaveCompSubEdit(compId, segIdx, text) {
+    const comp = compositions.find(c => c.id === compId)
+    if (!comp) return
+    const seg = comp.segments[segIdx]
+    if (!seg) return
+    const vidId = uploadedVideos[seg.videoIndex]?.id
+    const segInVid = seg.segInVid
+    if (!vidId || segInVid == null) return
+    setVideoAnalysis(prev => {
+      const segs = (prev[vidId]?.segments || []).map((s, i) =>
+        i === segInVid ? { ...s, subtitle: text } : s
+      )
+      const next = { ...prev, [vidId]: { ...prev[vidId], segments: segs } }
+      videoAnalysisRef.current = next
+      return next
+    })
+    setEditingCompSub(null)
+    setEditingCompSubText('')
   }
 
   function handleExportCorrectedSubtitles() {
@@ -3114,6 +3136,19 @@ export default function App() {
       voiceDuration: voiceSrc ? voiceDuration : null,
       durationDiff,
     }
+    // Pre-flight health check — avoids showing stale "service not running" state
+    try {
+      const hResp = await fetch('http://127.0.0.1:8765/health', {
+        signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
+      })
+      const hData = await hResp.json().catch(() => ({}))
+      if (!hResp.ok || (!hData?.status && !hData?.ffmpeg && !hData?.whisper)) {
+        return { ok: false, error: '本地导出服务未就绪，请确认「启动本地导出服务.bat」窗口已开启且无错误。', networkError: true }
+      }
+    } catch {
+      return { ok: false, error: '无法连接本地导出服务。请先双击「启动本地导出服务.bat」，等服务窗口出现后再重试。', networkError: true }
+    }
+
     let result
     let networkError = null
     try {
@@ -4225,7 +4260,26 @@ export default function App() {
                               <span className="r3-cur-src">V{col3Seg.videoIndex+1}</span>
                             </div>
                             <div className="r3-cur-time">{col3Seg.startStr} – {col3Seg.endStr} · {fmt(col3Seg.endSec-col3Seg.startSec)}</div>
-                            {col3SubText&&<div className="r3-cur-sub">{col3SubText}</div>}
+                            {editingCompSub?.compId===editingSeg?.compId&&editingCompSub?.segIdx===editingSeg?.segIdx ? (
+                              <div className="r3-sub-edit-wrap" onClick={e=>e.stopPropagation()}>
+                                <textarea
+                                  className="r3-sub-edit-ta"
+                                  value={editingCompSubText}
+                                  onChange={e=>setEditingCompSubText(e.target.value)}
+                                  autoFocus
+                                  rows={3}
+                                />
+                                <div className="r3-sub-edit-acts">
+                                  <button className="r3-sub-edit-save" onClick={()=>handleSaveCompSubEdit(editingSeg.compId,editingSeg.segIdx,editingCompSubText)}>保存字幕</button>
+                                  <button className="r3-sub-edit-cancel" onClick={()=>{setEditingCompSub(null);setEditingCompSubText('')}}>取消</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="r3-cur-sub-wrap">
+                                {col3SubText&&<div className="r3-cur-sub">{col3SubText}</div>}
+                                <button className="r3-sub-edit-btn" onClick={e=>{e.stopPropagation();setEditingCompSub({compId:editingSeg.compId,segIdx:editingSeg.segIdx});setEditingCompSubText(col3SubText||'')}}>✎ 编辑字幕</button>
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="r3-ops-row">
@@ -7164,8 +7218,11 @@ export default function App() {
               </button>
             )}
             {subStep==='compose'&&(
-              <button className="step-next-btn" onClick={()=>setStep(3)}>
-                确认方案，进入预览导出
+              <button className="step-next-btn" onClick={()=>{
+                setSubStep('refine')
+                if (compositions.length>0 && !refineCompId) setRefineCompId(compositions[0].id)
+              }}>
+                确认方案，进入精修
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
               </button>
             )}
