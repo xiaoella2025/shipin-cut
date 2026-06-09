@@ -12057,3 +12057,17 @@ input[type=range] {
 .s2-vid-overlay-err { background: rgba(0,0,0,.75); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
 .s2-vid-err-icon { font-size: 28px; color: var(--danger, #f87171); }
 .s2-vid-err-msg  { font-size: 11px; color: #fff; text-align: center; padding: 0 8px; opacity: .9; }
+
+/* 精修页更多操作下拉 */
+.refine-more-actions { position: relative; }
+.refine-more-actions-toggle { list-style: none; font-size: 12px; color: var(--txt-2); background: transparent; border: 1px solid var(--bdr-md); border-radius: var(--r); padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+.refine-more-actions-toggle::-webkit-details-marker { display: none; }
+.refine-more-actions[open] .refine-more-actions-toggle { color: var(--txt); border-color: var(--bdr-hi); }
+.refine-more-actions-menu { position: absolute; top: 100%; left: 0; z-index: 50; background: var(--bg-panel); border: 1px solid var(--bdr-md); border-radius: var(--r-md); padding: 4px; display: flex; flex-direction: column; gap: 3px; min-width: 130px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); margin-top: 4px; }
+
+/* 分段卡片字幕编辑 */
+.s2-seg-sub-edit-wrap { display: flex; flex-direction: column; gap: 4px; }
+.s2-seg-sub-edit-ta { width: 100%; background: var(--bg-surf); border: 1px solid var(--accent); border-radius: var(--r); color: var(--txt); font-size: 13px; padding: 5px 7px; resize: none; font-family: inherit; outline: none; }
+.s2-seg-card-sub-edit-btn { margin-top: 3px; background: none; border: 1px solid var(--bdr-md); border-radius: var(--r); color: var(--txt-2); font-size: 11px; padding: 2px 8px; cursor: pointer; transition: all 0.1s; }
+.s2-seg-card-sub-edit-btn:hover { color: var(--accent); border-color: var(--accent); }
+.s2-seg-sub-edit-acts { display: flex; gap: 5px; }

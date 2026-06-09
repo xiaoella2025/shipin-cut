@@ -3947,7 +3947,7 @@ export default function App() {
                         <span className="s1-guide-label">精修方案</span>
                         <span className="s1-guide-step-tag s1-tag-later">精修页</span>
                       </div>
-                      <div className="s1-guide-desc">精修方案 JSON 在精修页导入 / 导出，不在这里操作。精修方案 JSON ≠ 字幕 JSON。</div>
+                      <div className="s1-guide-desc">精修方案在精修页导出/恢复，不在这里操作。精修方案 ≠ 字幕文件。</div>
                     </div>
                   </div>
                 </div>
@@ -4573,11 +4573,6 @@ export default function App() {
                     返回组合方案
                   </button>
                   <span className="refine-banner-title">成品精修方案工作台</span>
-                  {/* v0.9.10: 旧版导出页备用入口（弱化显示，不影响主流程） */}
-                  <button className="refine-banner-legacy-link" onClick={()=>{stopRefinePlay();setSubStep('export-prep')}}
-                    title="旧版多区导出页（备用，一般无需进入）">
-                    高级 / 旧版导出
-                  </button>
                   {hasEditSegs&&<span className="refine-del-badge refine-cut-badge">✂ 精剪模式</span>}
                   {(hasEditSegs?editDeletedCount:deletedCount)>0&&<span className="refine-del-badge">{hasEditSegs?editDeletedCount:deletedCount} 段已删</span>}
                   <span className="refine-banner-dur">总时长 {fmt(derivedDur)}{derivedDur!==comp.totalDur?` （原 ${fmt(comp.totalDur)}）`:''}</span>
@@ -4589,14 +4584,6 @@ export default function App() {
                     <button className="refine-save-plan-btn" onClick={()=>saveRefinedPlan(comp.id)}>
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                       保存
-                    </button>
-                    <button className="refine-export-plan-btn" onClick={()=>exportRefinePlan(comp.id,comp)}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                      导出 JSON
-                    </button>
-                    <button className="refine-import-plan-btn" onClick={()=>refinePlanImportRef.current?.click()}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="17"/></svg>
-                      导入 JSON
                     </button>
                     <button className="refine-export-now-btn" disabled={refineExportStatus==='loading'||jianyingExportStatus==='loading'}
                       onClick={()=>{stopRefinePlay();exportCurrentFromRefine(comp.id,comp)}}
@@ -4610,6 +4597,23 @@ export default function App() {
                       <span style={{marginRight:1}}>🎬</span>
                       {jianyingExportStatus==='loading'?'生成中…':'导出到剪映草稿'}
                     </button>
+                    <details className="refine-more-actions">
+                      <summary className="refine-more-actions-toggle">更多操作</summary>
+                      <div className="refine-more-actions-menu">
+                        <button className="refine-export-plan-btn" onClick={()=>exportRefinePlan(comp.id,comp)}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          保存当前方案
+                        </button>
+                        <button className="refine-import-plan-btn" onClick={()=>refinePlanImportRef.current?.click()}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="17"/></svg>
+                          恢复之前方案
+                        </button>
+                        <button className="refine-banner-legacy-link" onClick={()=>{stopRefinePlay();setSubStep('export-prep')}}
+                          title="旧版多区导出页（备用，一般无需进入）">
+                          高级 / 旧版导出
+                        </button>
+                      </div>
+                    </details>
                   </div>
                   {refineExportStatus!=='idle'&&refineExportMsg&&(
                     <div className={`refine-export-now-msg ${refineExportStatus}`}>
@@ -6856,7 +6860,7 @@ export default function App() {
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
                         批量导入
                       </button>
-                      <button className={`s2-sub-tool-btn s2-sub-tool-export${editorAnalysis?.subtitleStatus==='real'?'':' disabled'}`} onClick={handleExportCorrectedSubtitles} title={editorAnalysis?.subtitleStatus==='real'?'导出修正后的字幕 JSON':'当前视频没有真实字幕可导出'}>
+                      <button className={`s2-sub-tool-btn s2-sub-tool-export${editorAnalysis?.subtitleStatus==='real'?'':' disabled'}`} onClick={handleExportCorrectedSubtitles} title={editorAnalysis?.subtitleStatus==='real'?'导出修正后的字幕文件':'当前视频没有真实字幕可导出'}>
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                         导出修正
                       </button>
