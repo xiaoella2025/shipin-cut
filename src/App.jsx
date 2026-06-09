@@ -224,7 +224,7 @@ function generateSegments(video, vidIndex) {
     startStr: fmt((dur / count) * i),
     endStr:   fmt((dur / count) * (i + 1)),
     type:     s.type,
-    subtitle: s.sub,
+    subtitle: '',   // 不注入假字幕；真实字幕由字幕 JSON 导入后覆盖
     selected: s.type !== '开场' && s.type !== '结尾',
   }))
 }
@@ -1385,6 +1385,7 @@ export default function App() {
   const [batchImportResult, setBatchImportResult] = useState(null)
   const [batchResultExpanded, setBatchResultExpanded] = useState(false)
   const [showImportGuide, setShowImportGuide]     = useState(false)
+  const [showAdvancedGuide, setShowAdvancedGuide] = useState(false)
 
   const timerRef              = useRef(null)
   const fileInputRef          = useRef(null)
@@ -1672,10 +1673,11 @@ export default function App() {
         const vid    = uploadedVideosRef.current.find(v=>v.id===waiting.id)
         const vidIdx = uploadedVideosRef.current.findIndex(v=>v.id===waiting.id)
         const segs   = generateSegments(vid, vidIdx)
-        const subs   = generateSubtitles(vid, vidIdx)
-        const subCnt = subs.length
+        // 模拟分析不生成假字幕；真实字幕须用"导入字幕 JSON"覆盖
+        const subs   = []
+        const subCnt = 0
         setVideoAnalysis(prev=>{
-          const next={...prev,[waiting.id]:{status:'done',progress:100,segments:segs,subtitleCount:subCnt,subtitles:subs}}
+          const next={...prev,[waiting.id]:{status:'done',progress:100,segments:segs,subtitleCount:subCnt,subtitles:subs,subtitleSource:'none'}}
           videoAnalysisRef.current=next
           return next
         })
@@ -3686,6 +3688,9 @@ export default function App() {
             {uploadedVideos.length>0&&<span className="s1-count">已导入 <strong>{uploadedVideos.length}</strong> 个视频 · 总时长 {fmt(totalDuration)}</span>}
             <span className="s1-hint">支持 MP4 · MOV · AVI · 多选 · 仅本地处理，不上传服务器</span>
           </div>
+          {uploadedVideos.length===0&&(
+            <div className="s1-intro-desc">先导入 3–5 个原始视频素材，进入下一步后可识别字幕并按字幕切分片段。</div>
+          )}
           <div className="s1-content">
             {uploadedVideos.length===0?(
               <div className="s1-empty" onClick={handleImportClick}>
@@ -3705,6 +3710,21 @@ export default function App() {
                     <div className="s1-card-body">
                       <div className="s1-card-name" title={v.name}>{v.name}</div>
                       <div className="s1-card-meta">{v.res!=='—'&&<span>{v.res}</span>}<span>{v.durStr}</span><span>{v.sizeStr}</span></div>
+                      {(()=>{
+                        const ana=videoAnalysis[v.id]
+                        const subSrc=ana?.subtitleSource
+                        const segCnt=ana?.segments?.length||0
+                        const subCnt=ana?.subtitleCount||0
+                        const status=ana?.status
+                        if (!ana||status==='waiting') return <div className="s1-card-status s1-status-wait">等待分析…</div>
+                        if (status==='analyzing') return <div className="s1-card-status s1-status-run">分析中 {Math.round(ana.progress)}%</div>
+                        return (
+                          <div className="s1-card-status s1-status-done">
+                            <span className={subSrc==='real'?'s1-sub-ok':'s1-sub-none'}>{subSrc==='real'?`字幕 ${subCnt} 条`:'未识别字幕'}</span>
+                            <span className="s1-seg-cnt">分段 {segCnt} 个</span>
+                          </div>
+                        )
+                      })()}
                       <div className="s1-card-actions">
                         <button className="s1-act-btn" onClick={()=>setPreviewVid(v)}>▶ 预览</button>
                         <button className="s1-act-btn s1-act-remove" onClick={()=>handleRemoveVideo(v.id)}>× 移除</button>
@@ -3718,50 +3738,41 @@ export default function App() {
                 </div>
               </div>
             )}
-            {/* v0.8.1: 素材说明指引，明确每类素材在哪一步处理 */}
-            <div className="s1-guide">
-              <div className="s1-guide-title">各类素材在哪里处理？</div>
-              <div className="s1-guide-grid">
-
-                <div className="s1-guide-card s1-gc-here">
-                  <div className="s1-guide-card-head">
-                    <span className="s1-guide-icon">🎬</span>
-                    <span className="s1-guide-label">视频素材</span>
-                    <span className="s1-guide-step-tag s1-tag-here">当前页</span>
+            {/* 其他素材说明 — 默认折叠，不干扰主流程 */}
+            <div className="s1-guide-collapsible">
+              <button className="s1-guide-toggle" onClick={()=>setShowAdvancedGuide(p=>!p)}>
+                {showAdvancedGuide?'▲ 收起':'▼ 其他素材在哪里处理？（字幕 JSON / 配音 / 精修方案）'}
+              </button>
+              {showAdvancedGuide&&(
+                <div className="s1-guide s1-guide-inline">
+                  <div className="s1-guide-grid">
+                    <div className="s1-guide-card s1-gc-next">
+                      <div className="s1-guide-card-head">
+                        <span className="s1-guide-icon">📄</span>
+                        <span className="s1-guide-label">字幕 JSON</span>
+                        <span className="s1-guide-step-tag s1-tag-next">第二步</span>
+                      </div>
+                      <div className="s1-guide-desc">在第二步（字幕分段页）导入已识别好的字幕 JSON，或通过本地 tools/whisper 工具生成。字幕 JSON ≠ 精修方案 JSON，请勿混淆。</div>
+                    </div>
+                    <div className="s1-guide-card s1-gc-later">
+                      <div className="s1-guide-card-head">
+                        <span className="s1-guide-icon">🎙</span>
+                        <span className="s1-guide-label">最终语音 / 配音</span>
+                        <span className="s1-guide-step-tag s1-tag-later">精修页</span>
+                      </div>
+                      <div className="s1-guide-desc">配音在精修页的「最终语音轨道」区域导入，不在这里操作。</div>
+                    </div>
+                    <div className="s1-guide-card s1-gc-later">
+                      <div className="s1-guide-card-head">
+                        <span className="s1-guide-icon">📦</span>
+                        <span className="s1-guide-label">精修方案 JSON</span>
+                        <span className="s1-guide-step-tag s1-tag-later">精修页</span>
+                      </div>
+                      <div className="s1-guide-desc">精修方案 JSON 在精修页导入 / 导出，不在这里操作。精修方案 JSON ≠ 字幕 JSON。</div>
+                    </div>
                   </div>
-                  <div className="s1-guide-desc">在这里导入要参与混剪的原始视频文件。后续字幕识别、分段、组合方案、精修和导出都基于这些视频。</div>
                 </div>
-
-                <div className="s1-guide-card s1-gc-next">
-                  <div className="s1-guide-card-head">
-                    <span className="s1-guide-icon">📄</span>
-                    <span className="s1-guide-label">字幕 JSON</span>
-                    <span className="s1-guide-step-tag s1-tag-next">第二步</span>
-                  </div>
-                  <div className="s1-guide-desc">字幕用于理解视频内容、分段和生成组合方案。在字幕处理页可导入已识别好的字幕 JSON，或通过本地识别工具（tools/whisper）生成字幕。</div>
-                  <div className="s1-guide-note">注意：字幕 JSON ≠ 精修方案 JSON，两者格式和用途不同。</div>
-                </div>
-
-                <div className="s1-guide-card s1-gc-later">
-                  <div className="s1-guide-card-head">
-                    <span className="s1-guide-icon">🎙</span>
-                    <span className="s1-guide-label">最终语音 / 配音</span>
-                    <span className="s1-guide-step-tag s1-tag-later">精修页</span>
-                  </div>
-                  <div className="s1-guide-desc">最终语音不在这里导入。请先完成字幕和文案，再进入精修页的「最终语音轨道」区域，导入外部生成的配音文件。精修页会自动对比视频时长与语音时长。</div>
-                </div>
-
-                <div className="s1-guide-card s1-gc-later">
-                  <div className="s1-guide-card-head">
-                    <span className="s1-guide-icon">📦</span>
-                    <span className="s1-guide-label">精修方案 JSON</span>
-                    <span className="s1-guide-step-tag s1-tag-later">精修页 / 导出准备</span>
-                  </div>
-                  <div className="s1-guide-desc">精修方案 JSON 是后期工程存档，保存了字幕稿、文案、剪辑记录和语音记录。请在精修页或导出准备页进行导入 / 导出，不在这里操作。</div>
-                  <div className="s1-guide-note">注意：精修方案 JSON ≠ 字幕 JSON，导入时请区分。</div>
-                </div>
-
-              </div>
+              )}
             </div>
           </div>
           <div className="step-footer">
@@ -6862,7 +6873,9 @@ export default function App() {
                         <div className="s2-seg-card-time">{seg.startStr} – {seg.endStr}</div>
                         {(()=>{
                           const isExp=!!expandedSegs[seg.id]
-                          const displaySubs=segSubs.length>0?segSubs:[{id:'nosub',text:seg.subtitle||'—'}]
+                          const hasRealSubs = editorAnalysis?.subtitleSource==='real'
+                          const fallbackText = hasRealSubs ? (seg.subtitle||'（该段无字幕）') : '暂无真实字幕 — 请导入字幕 JSON'
+                          const displaySubs=segSubs.length>0?segSubs:[{id:'nosub',text:fallbackText}]
                           const needsExpand=displaySubs.length>2||displaySubs.some(s=>s.text.length>20)
                           const shown=(!needsExpand||isExp)?displaySubs:displaySubs.slice(0,2)
                           return (

@@ -12022,3 +12022,26 @@ input[type=range] {
 
 /* selected sticker highlight in preview */
 .refine-sticker.selected { outline:2px dashed var(--accent); outline-offset:2px; }
+
+/* ── Page 1 slim-down & status badges (v0.9.9-step5) ── */
+.s1-intro-desc {
+  font-size: 13px; color: var(--text-muted); padding: 10px 0 4px;
+  text-align: center; letter-spacing: .01em;
+}
+.s1-card-status { font-size: 11px; margin-top: 5px; display: flex; gap: 8px; flex-wrap: wrap; }
+.s1-status-wait { color: var(--text-muted); font-style: italic; }
+.s1-status-run  { color: var(--accent); }
+.s1-status-done { display: flex; gap: 8px; align-items: center; }
+.s1-sub-ok   { color: #4ade80; font-weight: 600; }
+.s1-sub-none { color: var(--text-muted); }
+.s1-seg-cnt  { color: var(--text-2, #aaa); }
+
+/* collapsible guide */
+.s1-guide-collapsible { margin-top: 12px; }
+.s1-guide-toggle {
+  width: 100%; text-align: left; background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 12px; font-size: 12px; color: var(--text-muted);
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.s1-guide-toggle:hover { background: var(--bg-3, #2a2a2a); color: var(--text); }
+.s1-guide-inline { margin-top: 8px; }
