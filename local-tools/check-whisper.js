@@ -40,20 +40,36 @@ let hasError = false
 // ─── 检测 whisper-cli 可执行文件 ──────────────────────────────────────────
 
 process.stdout.write('检测 whisper-cli 可执行文件... ')
-try {
-  const out = execSync(`"${whisperCliPath}" --help 2>&1 || "${whisperCliPath}" -h 2>&1`, {
-    encoding: 'utf8',
-    shell: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  if (out.toLowerCase().includes('usage') || out.toLowerCase().includes('whisper') || out.length > 0) {
-    console.log('✓ 可用')
-  } else {
-    console.log('✓ 可用')
+// 1) 配置里的路径（绝对或 PATH 中）；2) tools/whisper/；3) local-tools/whisper/
+const cliCandidates = []
+if (whisperCliPath) {
+  if (path.isAbsolute(whisperCliPath)) cliCandidates.push(whisperCliPath)
+  cliCandidates.push(whisperCliPath) // PATH / shell 解析
+}
+for (const sub of ['tools', 'local-tools']) {
+  for (const name of ['whisper-cli.exe', 'whisper-cli', 'main.exe', 'main']) {
+    cliCandidates.push(path.resolve(__dirname, '..', sub, 'whisper', name))
   }
-} catch (e) {
+}
+let cliFound = null
+let lastErr = null
+for (const c of cliCandidates) {
+  try {
+    const out = execSync(`"${c}" --help 2>&1 || "${c}" -h 2>&1`, {
+      encoding: 'utf8',
+      shell: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    if (out.toLowerCase().includes('usage') || out.toLowerCase().includes('whisper') || out.length > 0) {
+      cliFound = c; break
+    }
+  } catch (e) { lastErr = e; continue }
+}
+if (cliFound) {
+  console.log(`✓ 可用: ${cliFound}`)
+} else {
   console.log('✗ 不可用')
-  console.error(`  错误: ${e.message.split('\n')[0]}`)
+  if (lastErr) console.error(`  错误: ${lastErr.message.split('\n')[0]}`)
   console.error('  请确认 whisperCliPath 路径正确，whisper.cpp 已编译或已安装')
   console.error('  参考: https://github.com/ggerganov/whisper.cpp')
   hasError = true
@@ -62,8 +78,21 @@ try {
 // ─── 检测模型文件 ──────────────────────────────────────────────────────────
 
 process.stdout.write('检测模型文件... ')
-const absModel = path.isAbsolute(modelPath) ? modelPath : path.resolve(process.cwd(), modelPath)
-if (fs.existsSync(absModel)) {
+let absModel = null
+const candidates = []
+if (path.isAbsolute(modelPath)) {
+  candidates.push(modelPath)
+} else {
+  candidates.push(path.resolve(process.cwd(), modelPath))
+  candidates.push(path.resolve(__dirname, '..', modelPath))
+  // 兜底：tools/whisper/models/ 与 local-tools/whisper/models/
+  candidates.push(path.resolve(__dirname, '..', 'tools', 'whisper', 'models', path.basename(modelPath)))
+  candidates.push(path.resolve(__dirname, '..', 'local-tools', 'whisper', 'models', path.basename(modelPath)))
+}
+for (const c of candidates) {
+  if (fs.existsSync(c)) { absModel = c; break }
+}
+if (absModel) {
   const sizeMB = (fs.statSync(absModel).size / 1024 / 1024).toFixed(1)
   console.log(`✓ 存在 (${sizeMB} MB): ${absModel}`)
 } else {

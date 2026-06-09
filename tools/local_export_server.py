@@ -82,11 +82,12 @@ def parse_multipart(body, content_type):
 # ── v0.9.7: 字幕↔配音自动对齐（本地 whisper.cpp，不接云 API）──────────────────────
 
 def _find_local_tool(names, subdir):
-    """在 local-tools/<subdir>/ 中查找可执行文件，找到返回路径字符串，否则 None。"""
-    for name in names:
-        p = REPO_ROOT / "local-tools" / subdir / name
-        if p.exists():
-            return str(p)
+    """查找可执行文件：先 local-tools/<subdir>/，再 tools/<subdir>/。"""
+    for base in (REPO_ROOT / "local-tools" / subdir, REPO_ROOT / "tools" / subdir):
+        for name in names:
+            p = base / name
+            if p.exists():
+                return str(p)
     return None
 
 
@@ -111,10 +112,22 @@ def check_whisper():
 
     cli = local_cli or (cfg.get("whisperCliPath") or "whisper-cli").strip()
 
-    # 3) 模型文件：优先 local-tools/whisper/models/
-    local_model_dir = REPO_ROOT / "local-tools" / "whisper" / "models"
+    # 3) 模型文件：优先 local-tools/whisper/models/，再 tools/whisper/models/
     local_model = None
-    if local_model_dir.exists():
+    for model_dir in (REPO_ROOT / "local-tools" / "whisper" / "models",
+                      REPO_ROOT / "tools" / "whisper" / "models"):
+        if not model_dir.exists():
+            continue
+        for pattern in ("ggml-small.bin", "ggml-base.bin", "ggml-tiny.bin"):
+            p = model_dir / pattern
+            if p.exists():
+                local_model = str(p)
+                break
+        if not local_model:
+            for p in sorted(model_dir.glob("ggml-*.bin")):
+                local_model = str(p); break
+        if local_model:
+            break
         for pattern in ("ggml-small.bin", "ggml-base.bin", "ggml-tiny.bin"):
             p = local_model_dir / pattern
             if p.exists():
