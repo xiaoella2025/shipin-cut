@@ -3081,14 +3081,12 @@ export default function App() {
   async function doExportToLocalService(compId, comp, dedupOverride = null) {
     if (!compId || !comp) return { ok: false, error: '参数缺失' }
 
-    // Pre-flight health check — done first, before building the heavy payload
+    // Pre-flight connectivity check — any HTTP response means service is reachable
     try {
-      const hResp = await fetch('http://127.0.0.1:8765/health', {
-        signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
+      await fetch('http://127.0.0.1:8765/health', {
+        signal: AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined,
       })
-      if (!hResp.ok) {
-        return { ok: false, error: `本地导出服务返回异常状态 ${hResp.status}，请重启「启动本地导出服务.bat」。`, networkError: true }
-      }
+      // Any response (200, 404, etc.) means the service is running — proceed
     } catch (he) {
       const msg = he?.name === 'AbortError' || he?.name === 'TimeoutError'
         ? '本地服务响应超时，请确认黑窗口没有卡住，或重新启动「启动本地导出服务.bat」。'
@@ -3195,13 +3193,12 @@ export default function App() {
       clearTimeout(timer)
       result = await resp.json()
     } catch (e) {
-      const isConnRefused = e instanceof TypeError || (e.name === 'AbortError' && false)
-      if (isConnRefused && !(e.name === 'AbortError')) {
-        networkError = '本地导出服务未启动。请先双击「启动本地导出服务.bat」，然后再点击「导出成品视频」。'
-      } else if (e.name === 'AbortError') {
+      if (e.name === 'AbortError') {
         networkError = '请求超时（超过10分钟），请检查服务窗口日志。'
+      } else if (e instanceof TypeError) {
+        networkError = '导出请求失败（网络错误），请检查本地服务黑窗口是否仍在运行。'
       } else {
-        networkError = `网络错误：${e.message}`
+        networkError = `导出失败：${e.message}`
       }
       return { ok: false, error: networkError, networkError }
     }

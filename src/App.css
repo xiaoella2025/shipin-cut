@@ -8297,9 +8297,11 @@ input[type=range] {
   opacity: 0.8;
 }
 
-/* 字幕行编辑按钮 — 紧挨字幕文字，默认可见 */
+/* 字幕行编辑按钮 — 紧挨字幕文字，默认可见，不撑满整行 */
 .s2-sub-edit-btn {
   display: inline-block;
+  align-self: flex-start;
+  width: fit-content;
   margin-top: 4px;
   font-size: 13px;
   padding: 3px 10px;
