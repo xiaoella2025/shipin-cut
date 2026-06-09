@@ -557,6 +557,50 @@ class ExportHandler(BaseHTTPRequestHandler):
             "message": msg,
         })
 
+    def _handle_transcribe_video(self):
+        """v0.9.9: 对已同步到 videos/ 的视频做字幕识别，返回真实字幕片段列表。"""
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        try:
+            data = json.loads(body)
+        except Exception as e:
+            self._json({"ok": False, "error": f"JSON 解析失败: {e}"})
+            return
+
+        stored_file = data.get("storedFile", "").strip()
+        if not stored_file:
+            self._json({"ok": False, "error": "缺少 storedFile 参数"})
+            return
+
+        VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+        video_path = VIDEOS_DIR / stored_file
+        if not video_path.exists():
+            self._json({"ok": False, "error": f"视频文件不存在: {stored_file}（请确认已上传到 export_workspace/videos/）"})
+            return
+
+        ok, info, reason = check_whisper()
+        if not ok:
+            self._json({"ok": False, "error": reason, "whisperReason": reason})
+            return
+
+        print(f"[服务] 开始识别字幕：{stored_file}", flush=True)
+        try:
+            segs = run_whisper(str(video_path), info)
+        except subprocess.CalledProcessError as e:
+            self._json({"ok": False, "error": f"whisper-cli 运行失败: {e}"})
+            return
+        except Exception as e:
+            self._json({"ok": False, "error": f"识别过程出错: {e}"})
+            return
+
+        segments = [
+            {"id": i + 1, "start": round(s, 3), "end": round(e, 3), "text": t.strip()}
+            for i, (s, e, t) in enumerate(segs)
+            if t.strip()
+        ]
+        print(f"[服务] 识别完成：{stored_file} → {len(segments)} 条字幕", flush=True)
+        self._json({"ok": True, "segments": segments, "count": len(segments)})
+
     def do_POST(self):
         if self.path == "/upload-video":
             self._handle_upload("video")
@@ -572,6 +616,9 @@ class ExportHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/align-subtitles":
             self._handle_align()
+            return
+        if self.path == "/transcribe-video":
+            self._handle_transcribe_video()
             return
         if self.path == "/export-jianying":
             # 接收 {mp4, srt?, name?} 生成剪映草稿

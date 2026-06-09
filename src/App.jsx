@@ -1655,38 +1655,122 @@ export default function App() {
     return ()=>clearTimeout(t)
   }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── sequential analysis ──
+  // ── sequential analysis — calls real local whisper service ──
 
-  function startNextAnalysis() {
+  async function startNextAnalysis() {
     if (currentlyAnalyzingRef.current) return
     const videos   = uploadedVideosRef.current
     const analysis = videoAnalysisRef.current
     const waiting  = videos.find(v=>analysis[v.id]?.status==='waiting')
     if (!waiting) return
     currentlyAnalyzingRef.current = waiting.id
-    setVideoAnalysis(prev=>({ ...prev, [waiting.id]:{status:'analyzing',progress:0,segments:[],subtitleCount:0} }))
-    let p=0
-    const iv=setInterval(()=>{
-      p+=Math.random()*9+5
-      if (p>=100) {
-        clearInterval(iv)
-        const vid    = uploadedVideosRef.current.find(v=>v.id===waiting.id)
-        const vidIdx = uploadedVideosRef.current.findIndex(v=>v.id===waiting.id)
-        const segs   = generateSegments(vid, vidIdx)
-        // 模拟分析不生成假字幕；真实字幕须用"导入字幕 JSON"覆盖
-        const subs   = []
-        const subCnt = 0
-        setVideoAnalysis(prev=>{
-          const next={...prev,[waiting.id]:{status:'done',progress:100,segments:segs,subtitleCount:subCnt,subtitles:subs,subtitleSource:'none'}}
-          videoAnalysisRef.current=next
-          return next
+
+    const setPhase = (phase, progress=0) =>
+      setVideoAnalysis(prev=>({ ...prev, [waiting.id]:{...prev[waiting.id], phase, progress} }))
+
+    setVideoAnalysis(prev=>({
+      ...prev,
+      [waiting.id]:{ status:'analyzing', progress:0, segments:[], subtitleCount:0, phase:'连接本地服务…' }
+    }))
+
+    try {
+      // 1. 检查本地服务 + whisper
+      let healthData
+      try {
+        const hr = await fetch('http://127.0.0.1:8765/health', {
+          signal: AbortSignal.timeout ? AbortSignal.timeout(3000) : undefined
         })
-        currentlyAnalyzingRef.current=null
-        setTimeout(startNextAnalysis, 700)
-      } else {
-        setVideoAnalysis(prev=>({ ...prev, [waiting.id]:{...prev[waiting.id],progress:Math.min(p,99)} }))
+        healthData = await hr.json()
+      } catch {
+        throw { code:'NO_SERVICE', message:'本地识别服务未启动。\n请先运行：python tools/local_export_server.py' }
       }
-    }, 200)
+      if (!healthData?.whisper?.available) {
+        const reason = healthData?.whisper?.reason || '未知原因'
+        throw { code:'NO_WHISPER', message:`Whisper 未就绪：${reason}\n请参考 LOCAL_VIDEO_TOOLS.md 配置 whisper.cpp` }
+      }
+
+      // 2. 上传视频到服务（若尚未同步）
+      setPhase('上传视频…', 10)
+      let storedFileName = waiting.storedFileName
+      if (!storedFileName) {
+        const blob = await (await fetch(waiting.url)).blob()
+        const r    = await uploadToLocalService('/upload-video', blob, waiting.name)
+        storedFileName = r.fileName
+        setUploadedVideos(prev=>prev.map(v=>
+          v.id===waiting.id ? {...v, synced:true, storedFileName:r.fileName} : v
+        ))
+      }
+
+      // 3. 调用字幕识别（可能耗时较长）
+      setPhase('识别字幕中…（需要几分钟）', 25)
+      const controller = new AbortController()
+      const timer = setTimeout(()=>controller.abort(), 15*60*1000)
+      let td
+      try {
+        const tr = await fetch('http://127.0.0.1:8765/transcribe-video', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ storedFile: storedFileName }),
+          signal: controller.signal,
+        })
+        td = await tr.json()
+      } finally {
+        clearTimeout(timer)
+      }
+      if (!td.ok) throw { code:'TRANSCRIBE_FAIL', message: td.error || '字幕识别失败' }
+
+      // 4. 构建真实字幕 + 按字幕边界切分
+      setPhase('生成分段…', 90)
+      const rawSegs = td.segments || []
+      const vid     = uploadedVideosRef.current.find(v=>v.id===waiting.id)
+      const vidIdx  = uploadedVideosRef.current.findIndex(v=>v.id===waiting.id)
+      const subs    = rawSegs.map((s,i)=>({
+        id:`sub-${waiting.id}-${i}`,
+        startSec: s.start,
+        endSec:   s.end,
+        text:     s.text,
+        start:    s.start,  // generateSegmentsFromSubtitles 读 .start/.end
+        end:      s.end,
+      }))
+      const segs = generateSegmentsFromSubtitles(vid, vidIdx, subs)
+
+      setVideoAnalysis(prev=>{
+        const next={
+          ...prev,
+          [waiting.id]:{
+            status:'done', progress:100,
+            segments:segs, subtitleCount:subs.length,
+            subtitles:subs, subtitleSource:'real',
+            phase:null,
+          }
+        }
+        videoAnalysisRef.current=next
+        return next
+      })
+    } catch(err) {
+      const isAbort = err?.name==='AbortError'
+      const msg = isAbort
+        ? '识别超时（超过15分钟），请检查 whisper.cpp 是否正常运行'
+        : (err?.message || '字幕识别失败')
+      setVideoAnalysis(prev=>{
+        const next={
+          ...prev,
+          [waiting.id]:{
+            status:'error', progress:0,
+            segments:[], subtitleCount:0,
+            subtitles:[], subtitleSource:'none',
+            errorCode: err?.code||'ERROR',
+            errorMessage: msg,
+            phase:null,
+          }
+        }
+        videoAnalysisRef.current=next
+        return next
+      })
+    } finally {
+      currentlyAnalyzingRef.current=null
+      setTimeout(startNextAnalysis, 700)
+    }
   }
 
   // ── handlers ──
@@ -3716,11 +3800,20 @@ export default function App() {
                         const segCnt=ana?.segments?.length||0
                         const subCnt=ana?.subtitleCount||0
                         const status=ana?.status
-                        if (!ana||status==='waiting') return <div className="s1-card-status s1-status-wait">等待分析…</div>
-                        if (status==='analyzing') return <div className="s1-card-status s1-status-run">分析中 {Math.round(ana.progress)}%</div>
+                        if (!ana||status==='waiting') return <div className="s1-card-status s1-status-wait">等待识别…</div>
+                        if (status==='analyzing') return <div className="s1-card-status s1-status-run">{ana.phase||'识别中…'}</div>
+                        if (status==='error') return (
+                          <div className="s1-card-status s1-status-err" title={ana.errorMessage}>
+                            <span>识别失败</span>
+                            <button className="s1-retry-btn" onClick={()=>{
+                              setVideoAnalysis(prev=>({...prev,[v.id]:{...prev[v.id],status:'waiting',errorMessage:null,errorCode:null}}))
+                              setTimeout(startNextAnalysis,150)
+                            }}>重试</button>
+                          </div>
+                        )
                         return (
                           <div className="s1-card-status s1-status-done">
-                            <span className={subSrc==='real'?'s1-sub-ok':'s1-sub-none'}>{subSrc==='real'?`字幕 ${subCnt} 条`:'未识别字幕'}</span>
+                            <span className={subSrc==='real'?'s1-sub-ok':'s1-sub-none'}>{subSrc==='real'?`字幕 ${subCnt} 条`:'无真实字幕'}</span>
                             <span className="s1-seg-cnt">分段 {segCnt} 个</span>
                           </div>
                         )
@@ -6522,9 +6615,11 @@ export default function App() {
                                 {(ana.subtitles?.filter(s=>s.corrected)?.length||0)>0&&
                                   <span className="s2-vid-corrected-pill"> · 已校对</span>}
                               </span>
-                            : ana?.subtitleCount>0
-                              ? <span className="s2-vid-subsrc sim">模拟字幕</span>
-                              : <span className="s2-vid-subsrc none">未导入字幕</span>
+                            : ana?.status==='error'
+                              ? <span className="s2-vid-subsrc none" title={ana.errorMessage}>识别失败 — 点重试</span>
+                              : ana?.status==='analyzing'
+                              ? <span className="s2-vid-subsrc sim">{ana.phase||'识别中…'}</span>
+                              : <span className="s2-vid-subsrc none">暂无字幕</span>
                           }
                         </div>
                         {(ana?.status==='done'||ana?.status==='confirmed')&&(
@@ -6580,12 +6675,18 @@ export default function App() {
                         </div>
                       )}
                       {editorVid&&editorAnalysis?.status==='waiting'&&(
-                        <div className="s2-vid-overlay"><span>等待…</span></div>
+                        <div className="s2-vid-overlay"><span>等待识别…</span></div>
                       )}
                       {editorVid&&editorAnalysis?.status==='analyzing'&&(
                         <div className="s2-vid-overlay">
-                          <span className="s2-vid-analyzing-pct">{Math.round(editorAnalysis.progress)}%</span>
+                          <span className="s2-vid-analyzing-pct">{editorAnalysis.phase||`${Math.round(editorAnalysis.progress)}%`}</span>
                           <div className="s2-vid-ana-bar"><div className="s2-vid-ana-bar-fill" style={{width:`${editorAnalysis.progress}%`}}/></div>
+                        </div>
+                      )}
+                      {editorVid&&editorAnalysis?.status==='error'&&(
+                        <div className="s2-vid-overlay s2-vid-overlay-err">
+                          <span className="s2-vid-err-icon">✕</span>
+                          <span className="s2-vid-err-msg">{editorAnalysis.errorMessage?.split('\n')[0]||'识别失败'}</span>
                         </div>
                       )}
                       {editorVid&&['done','confirmed'].includes(editorAnalysis?.status)&&(
@@ -6874,7 +6975,12 @@ export default function App() {
                         {(()=>{
                           const isExp=!!expandedSegs[seg.id]
                           const hasRealSubs = editorAnalysis?.subtitleSource==='real'
-                          const fallbackText = hasRealSubs ? (seg.subtitle||'（该段无字幕）') : '暂无真实字幕 — 请导入字幕 JSON'
+                          const isErr = editorAnalysis?.status==='error'
+                          const fallbackText = hasRealSubs
+                            ? (seg.subtitle||'（该段无字幕）')
+                            : isErr
+                            ? `识别失败：${editorAnalysis.errorMessage?.split('\n')[0]||'请检查本地服务'}`
+                            : '暂无真实字幕 — 等待字幕识别完成'
                           const displaySubs=segSubs.length>0?segSubs:[{id:'nosub',text:fallbackText}]
                           const needsExpand=displaySubs.length>2||displaySubs.some(s=>s.text.length>20)
                           const shown=(!needsExpand||isExp)?displaySubs:displaySubs.slice(0,2)
