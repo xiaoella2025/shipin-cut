@@ -1917,15 +1917,44 @@ export default function App() {
     if (!seg) return
     const vidId = uploadedVideos[seg.videoIndex]?.id
     const segInVid = seg.segInVid
-    if (!vidId || segInVid == null) return
+
+    // Update videoAnalysis: replace matching subtitle items so getSegSubtitleFromAna returns
+    // the edited text. Also update seg.subtitle fallback.
     setVideoAnalysis(prev => {
-      const segs = (prev[vidId]?.segments || []).map((s, i) =>
-        i === segInVid ? { ...s, subtitle: text } : s
+      const ana = prev[vidId] || {}
+      const matchingSubs = (ana.subtitles || []).filter(
+        s => s.startSec < seg.endSec && s.endSec > seg.startSec
       )
-      const next = { ...prev, [vidId]: { ...prev[vidId], segments: segs } }
+      let newSubs = ana.subtitles || []
+      if (matchingSubs.length > 0) {
+        const matchIds = new Set(matchingSubs.map(s => s.id))
+        const firstStart = matchingSubs[0].startSec
+        const lastEnd   = matchingSubs[matchingSubs.length - 1].endSec
+        const editedSub = {
+          id: `${seg.id}-edited-${Date.now()}`,
+          startSec: firstStart, endSec: lastEnd,
+          start: firstStart, end: lastEnd,
+          text: text.trim() || text,
+          corrected: true,
+        }
+        newSubs = [...(ana.subtitles || []).filter(s => !matchIds.has(s.id)), editedSub]
+          .sort((a, b) => a.startSec - b.startSec)
+      }
+      const newSegs = segInVid != null
+        ? (ana.segments || []).map((s, i) => i === segInVid ? { ...s, subtitle: text } : s)
+        : (ana.segments || [])
+      const next = { ...prev, [vidId]: { ...ana, subtitles: newSubs, segments: newSegs } }
       videoAnalysisRef.current = next
       return next
     })
+
+    // Also update compositions directly so col3SubText recomputes immediately
+    setCompositions(prev => prev.map(c => {
+      if (c.id !== compId) return c
+      const segs = c.segments.map((s, i) => i === segIdx ? { ...s, subtitle: text } : s)
+      return { ...c, segments: segs }
+    }))
+
     setEditingCompSub(null)
     setEditingCompSubText('')
   }
@@ -3051,6 +3080,22 @@ export default function App() {
   // v0.9.1: POST 当前草稿到本地导出服务（仅构建 payload + 调 /export，返回 {ok,output,srt,message,error}）
   async function doExportToLocalService(compId, comp, dedupOverride = null) {
     if (!compId || !comp) return { ok: false, error: '参数缺失' }
+
+    // Pre-flight health check — done first, before building the heavy payload
+    try {
+      const hResp = await fetch('http://127.0.0.1:8765/health', {
+        signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
+      })
+      if (!hResp.ok) {
+        return { ok: false, error: `本地导出服务返回异常状态 ${hResp.status}，请重启「启动本地导出服务.bat」。`, networkError: true }
+      }
+    } catch (he) {
+      const msg = he?.name === 'AbortError' || he?.name === 'TimeoutError'
+        ? '本地服务响应超时，请确认黑窗口没有卡住，或重新启动「启动本地导出服务.bat」。'
+        : '无法连接本地导出服务（127.0.0.1:8765）。请先双击「启动本地导出服务.bat」，等黑窗口出现后再重试。'
+      return { ok: false, error: msg, networkError: true }
+    }
+
     const rc = defaultRcFor(refinedComps[compId])
     const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
     const { segments: derivedSegs, totalDuration } = hasEditSegs
@@ -3136,19 +3181,6 @@ export default function App() {
       voiceDuration: voiceSrc ? voiceDuration : null,
       durationDiff,
     }
-    // Pre-flight health check — avoids showing stale "service not running" state
-    try {
-      const hResp = await fetch('http://127.0.0.1:8765/health', {
-        signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
-      })
-      const hData = await hResp.json().catch(() => ({}))
-      if (!hResp.ok || (!hData?.status && !hData?.ffmpeg && !hData?.whisper)) {
-        return { ok: false, error: '本地导出服务未就绪，请确认「启动本地导出服务.bat」窗口已开启且无错误。', networkError: true }
-      }
-    } catch {
-      return { ok: false, error: '无法连接本地导出服务。请先双击「启动本地导出服务.bat」，等服务窗口出现后再重试。', networkError: true }
-    }
-
     let result
     let networkError = null
     try {
@@ -6994,13 +7026,6 @@ export default function App() {
                                   </span>
                                 )}
                                 {sub.corrected&&<span className="s2-sub-corrected-mark" title="已人工校对">✎</span>}
-                                {!isEditing&&(
-                                  <button
-                                    className="s2-sub-edit-btn"
-                                    onClick={e=>{ e.stopPropagation(); setEditingSubId(sub.id); setEditingSubText(sub.text) }}
-                                    title="编辑此条字幕"
-                                  >编辑</button>
-                                )}
                               </div>
                               {isEditing ? (
                                 <div className="s2-sub-edit-area" onClick={e=>e.stopPropagation()}>
@@ -7017,7 +7042,13 @@ export default function App() {
                                   </div>
                                 </div>
                               ) : (
-                                <div className="s2-sub-text">{sub.text}</div>
+                                <>
+                                  <div className="s2-sub-text">{sub.text}</div>
+                                  <button
+                                    className="s2-sub-edit-btn"
+                                    onClick={e=>{ e.stopPropagation(); setEditingSubId(sub.id); setEditingSubText(sub.text) }}
+                                  >✎ 编辑字幕</button>
+                                </>
                               )}
                             </div>
                           )

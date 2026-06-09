@@ -5986,12 +5986,12 @@ input[type=range] {
   gap: 2px;
 }
 .s2-sub-text {
-  font-size: 14px;
-  color: var(--txt-2);
-  line-height: 1.5;
+  font-size: 15px;
+  color: #e2e8f0;
+  line-height: 1.55;
   word-break: break-word;
 }
-.s2-sub-row.current .s2-sub-text { color: var(--txt); font-weight: 600; }
+.s2-sub-row.current .s2-sub-text { color: #f8fafc; font-weight: 600; }
 .s2-sub-seg {
   font-size: 9px;
   font-weight: 700;
@@ -6146,8 +6146,8 @@ input[type=range] {
   min-height: 20px;
 }
 .s2-seg-card-sub {
-  font-size: 14px;
-  color: #a0aec0;
+  font-size: 15px;
+  color: #e2e8f0;
   line-height: 1.4;
   word-break: break-all;
 }
@@ -6579,8 +6579,8 @@ input[type=range] {
   margin-bottom: 5px;
 }
 .r3-cur-sub {
-  font-size: 14px;
-  color: #b0bec5;
+  font-size: 15px;
+  color: #e2e8f0;
   line-height: 1.5;
   word-break: break-all;
 }
@@ -6684,8 +6684,8 @@ input[type=range] {
   margin-bottom: 3px;
 }
 .r3-cand-sub {
-  font-size: 11px;
-  color: #64748b;
+  font-size: 13px;
+  color: #cbd5e1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8297,22 +8297,20 @@ input[type=range] {
   opacity: 0.8;
 }
 
-/* 字幕行编辑按钮 */
+/* 字幕行编辑按钮 — 紧挨字幕文字，默认可见 */
 .s2-sub-edit-btn {
-  margin-left: auto;
-  font-size: 12px;
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 13px;
   padding: 3px 10px;
-  background: none;
-  border: 1px solid rgba(99,102,241,.4);
-  color: #a5b4fc;
-  border-radius: 3px;
+  background: rgba(99,102,241,.12);
+  border: 1px solid rgba(99,102,241,.5);
+  color: #c7d2fe;
+  border-radius: 4px;
   cursor: pointer;
-  flex-shrink: 0;
-  opacity: 0.5;
-  transition: opacity 0.1s, background 0.1s, color 0.1s;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.s2-sub-row:hover .s2-sub-edit-btn { opacity: 1; }
-.s2-sub-edit-btn:hover { background: rgba(99,102,241,.15); color: #818cf8; opacity: 1; border-color: #6366f1; }
+.s2-sub-edit-btn:hover { background: rgba(99,102,241,.25); color: #e0e7ff; border-color: #818cf8; }
 
 /* 编辑区域 */
 .s2-sub-edit-area {
@@ -12068,14 +12066,14 @@ input[type=range] {
 /* 分段卡片字幕编辑 */
 .s2-seg-sub-edit-wrap { display: flex; flex-direction: column; gap: 4px; }
 .s2-seg-sub-edit-ta { width: 100%; background: var(--bg-surf); border: 1px solid var(--accent); border-radius: var(--r); color: var(--txt); font-size: 13px; padding: 5px 7px; resize: none; font-family: inherit; outline: none; }
-.s2-seg-card-sub-edit-btn { margin-top: 3px; background: none; border: 1px solid var(--bdr-md); border-radius: var(--r); color: var(--txt-2); font-size: 11px; padding: 2px 8px; cursor: pointer; transition: all 0.1s; }
-.s2-seg-card-sub-edit-btn:hover { color: var(--accent); border-color: var(--accent); }
+.s2-seg-card-sub-edit-btn { margin-top: 4px; background: rgba(99,102,241,.1); border: 1px solid rgba(99,102,241,.4); border-radius: var(--r); color: #c7d2fe; font-size: 13px; padding: 3px 10px; cursor: pointer; transition: all 0.12s; display: inline-block; }
+.s2-seg-card-sub-edit-btn:hover { background: rgba(99,102,241,.22); color: #e0e7ff; border-color: #818cf8; }
 .s2-seg-sub-edit-acts { display: flex; gap: 5px; }
 
 /* 组合方案页片段字幕编辑 */
 .r3-cur-sub-wrap { display: flex; flex-direction: column; gap: 5px; }
-.r3-sub-edit-btn { background: none; border: 1px solid var(--bdr-hi); border-radius: var(--r); color: #94a3b8; font-size: 12px; padding: 3px 10px; cursor: pointer; transition: all 0.15s; align-self: flex-start; }
-.r3-sub-edit-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-lo); }
+.r3-sub-edit-btn { background: rgba(99,102,241,.12); border: 1px solid rgba(99,102,241,.5); border-radius: var(--r); color: #c7d2fe; font-size: 13px; padding: 4px 12px; cursor: pointer; transition: all 0.12s; align-self: flex-start; }
+.r3-sub-edit-btn:hover { background: rgba(99,102,241,.25); color: #e0e7ff; border-color: #818cf8; }
 .r3-sub-edit-wrap { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
 .r3-sub-edit-ta { width: 100%; background: var(--bg-surf); border: 1px solid var(--accent); border-radius: var(--r); color: var(--txt); font-size: 14px; padding: 6px 8px; resize: none; font-family: inherit; outline: none; line-height: 1.5; }
 .r3-sub-edit-ta:focus { border-color: var(--accent-hi); }
