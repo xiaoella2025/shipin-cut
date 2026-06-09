@@ -1283,6 +1283,8 @@ export default function App() {
   const [prevSegmentsForUndo, setPrevSegmentsForUndo] = useState(null) // { videoId, segments, subtitles }
   const [editingSubId, setEditingSubId]               = useState(null)
   const [editingSubText, setEditingSubText]           = useState('')
+  const [editingSegSub, setEditingSegSub] = useState(null)  // {segIdx: number}
+  const [editingSegSubText, setEditingSegSubText] = useState('')
   const [subStep, setSubStep]                 = useState('cut')
   const [subColCount, setSubColCount]         = useState(2)
 
@@ -1890,6 +1892,20 @@ export default function App() {
     })
     setEditingSubId(null)
     setEditingSubText('')
+  }
+
+  function handleSaveSegSubEdit(segIdx, text) {
+    const videoId = currentVideoId
+    setVideoAnalysis(prev => {
+      const segs = (prev[videoId]?.segments || []).map((s, i) =>
+        i === segIdx ? { ...s, subtitle: text } : s
+      )
+      const next = { ...prev, [videoId]: { ...prev[videoId], segments: segs } }
+      videoAnalysisRef.current = next
+      return next
+    })
+    setEditingSegSub(null)
+    setEditingSegSubText('')
   }
 
   function handleExportCorrectedSubtitles() {
@@ -3007,7 +3023,7 @@ export default function App() {
     a.click()
     URL.revokeObjectURL(url)
     setRefinedComps(prev => ({ ...prev, [compId]: { ...defaultRcFor(prev[compId]), planExportedAt: now } }))
-    showToast('方案 JSON 已导出')
+    showToast('方案已保存')
   }
 
   // v0.9.1: POST 当前草稿到本地导出服务（仅构建 payload + 调 /export，返回 {ok,output,srt,message,error}）
@@ -3904,7 +3920,7 @@ export default function App() {
             {/* 其他素材说明 — 默认折叠，不干扰主流程 */}
             <div className="s1-guide-collapsible">
               <button className="s1-guide-toggle" onClick={()=>setShowAdvancedGuide(p=>!p)}>
-                {showAdvancedGuide?'▲ 收起':'▼ 其他素材在哪里处理？（字幕 JSON / 配音 / 精修方案）'}
+                {showAdvancedGuide?'▲ 收起':'▼ 其他素材在哪里处理？（字幕文件 / 配音 / 精修方案）'}
               </button>
               {showAdvancedGuide&&(
                 <div className="s1-guide s1-guide-inline">
@@ -3912,10 +3928,10 @@ export default function App() {
                     <div className="s1-guide-card s1-gc-next">
                       <div className="s1-guide-card-head">
                         <span className="s1-guide-icon">📄</span>
-                        <span className="s1-guide-label">字幕 JSON</span>
+                        <span className="s1-guide-label">字幕文件</span>
                         <span className="s1-guide-step-tag s1-tag-next">第二步</span>
                       </div>
-                      <div className="s1-guide-desc">在第二步（字幕分段页）导入已识别好的字幕 JSON，或通过本地 tools/whisper 工具生成。字幕 JSON ≠ 精修方案 JSON，请勿混淆。</div>
+                      <div className="s1-guide-desc">在第二步（字幕分段页）导入已识别好的字幕文件，或通过本地 tools/whisper 工具生成。字幕文件 ≠ 精修方案，请勿混淆。</div>
                     </div>
                     <div className="s1-guide-card s1-gc-later">
                       <div className="s1-guide-card-head">
@@ -3928,7 +3944,7 @@ export default function App() {
                     <div className="s1-guide-card s1-gc-later">
                       <div className="s1-guide-card-head">
                         <span className="s1-guide-icon">📦</span>
-                        <span className="s1-guide-label">精修方案 JSON</span>
+                        <span className="s1-guide-label">精修方案</span>
                         <span className="s1-guide-step-tag s1-tag-later">精修页</span>
                       </div>
                       <div className="s1-guide-desc">精修方案 JSON 在精修页导入 / 导出，不在这里操作。精修方案 JSON ≠ 字幕 JSON。</div>
@@ -7052,6 +7068,7 @@ export default function App() {
                         {(()=>{
                           const isExp=!!expandedSegs[seg.id]
                           const subSt = editorAnalysis?.subtitleStatus
+                          const isEditingThisSub = editingSegSub?.segIdx === i
                           const fallbackText = subSt==='real'
                             ? (seg.subtitle||'（该段无字幕）')
                             : subSt==='failed'
@@ -7062,15 +7079,37 @@ export default function App() {
                           const displaySubs=segSubs.length>0?segSubs:[{id:'nosub',text:fallbackText}]
                           const needsExpand=displaySubs.length>2||displaySubs.some(s=>s.text.length>20)
                           const shown=(!needsExpand||isExp)?displaySubs:displaySubs.slice(0,2)
+                          const canEditSub = subSt==='real' && segSubs.length===0
                           return (
                             <div className="s2-seg-card-subs">
-                              {shown.map((s,si)=>(
-                                <div key={s.id||si} className="s2-seg-card-sub">{s.text}</div>
-                              ))}
-                              {needsExpand&&(
-                                <button className="s2-seg-card-expand" onClick={e=>{e.stopPropagation();setExpandedSegs(p=>({...p,[seg.id]:!p[seg.id]}))}}>
-                                  {isExp?'▲ 收起':`▼ 展开 +${displaySubs.length-2} 条`}
-                                </button>
+                              {isEditingThisSub ? (
+                                <div className="s2-seg-sub-edit-wrap" onClick={e=>e.stopPropagation()}>
+                                  <textarea
+                                    className="s2-seg-sub-edit-ta"
+                                    value={editingSegSubText}
+                                    onChange={e=>setEditingSegSubText(e.target.value)}
+                                    autoFocus
+                                    rows={2}
+                                  />
+                                  <div className="s2-seg-sub-edit-acts">
+                                    <button className="s2-sub-edit-save" onClick={()=>handleSaveSegSubEdit(i, editingSegSubText)}>保存</button>
+                                    <button className="s2-sub-edit-cancel" onClick={()=>{setEditingSegSub(null);setEditingSegSubText('')}}>取消</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  {shown.map((s,si)=>(
+                                    <div key={s.id||si} className="s2-seg-card-sub">{s.text}</div>
+                                  ))}
+                                  {needsExpand&&(
+                                    <button className="s2-seg-card-expand" onClick={e=>{e.stopPropagation();setExpandedSegs(p=>({...p,[seg.id]:!p[seg.id]}))}}>
+                                      {isExp?'▲ 收起':`▼ 展开 +${displaySubs.length-2} 条`}
+                                    </button>
+                                  )}
+                                  {canEditSub&&(
+                                    <button className="s2-seg-card-sub-edit-btn" onClick={e=>{e.stopPropagation();setEditingSegSub({segIdx:i});setEditingSegSubText(seg.subtitle||'')}} title="编辑片段字幕摘要">✎ 编辑</button>
+                                  )}
+                                </>
                               )}
                             </div>
                           )

@@ -6146,8 +6146,8 @@ input[type=range] {
   min-height: 20px;
 }
 .s2-seg-card-sub {
-  font-size: 13px;
-  color: var(--txt-2);
+  font-size: 14px;
+  color: #a0aec0;
   line-height: 1.4;
   word-break: break-all;
 }
@@ -6579,8 +6579,8 @@ input[type=range] {
   margin-bottom: 5px;
 }
 .r3-cur-sub {
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: 14px;
+  color: #b0bec5;
   line-height: 1.5;
   word-break: break-all;
 }
@@ -8300,8 +8300,8 @@ input[type=range] {
 /* 字幕行编辑按钮 */
 .s2-sub-edit-btn {
   margin-left: auto;
-  font-size: 10px;
-  padding: 2px 8px;
+  font-size: 12px;
+  padding: 3px 10px;
   background: none;
   border: 1px solid rgba(99,102,241,.4);
   color: #a5b4fc;
@@ -11777,7 +11777,7 @@ input[type=range] {
 .refine-sticker-preset small { font-size:9px; color:var(--text-muted); }
 .refine-sticker-preset:hover { background:var(--bg-3,rgba(255,255,255,.1)); }
 .refine-subs-list { flex:1; overflow-y:auto; border:1px solid var(--border); border-radius:6px; }
-.refine-subs-row { display:flex; align-items:flex-start; gap:4px; padding:3px 6px; border-bottom:1px solid var(--border); }
+.refine-subs-row { display:flex; align-items:flex-start; gap:4px; padding:5px 8px; border-bottom:1px solid var(--border); }
 .refine-subs-row:last-child { border-bottom:none; }
 .refine-subs-idx { width:20px; font-size:10px; color:var(--text-muted); text-align:right; flex-shrink:0; }
 .refine-subs-times { display:flex; align-items:center; gap:2px; flex-shrink:0; font-size:10px; }
@@ -11785,7 +11785,7 @@ input[type=range] {
 .refine-subs-sep { color:var(--border); font-size:10px; }
 .rs-adj { background:none; border:none; color:var(--text-muted); cursor:pointer; padding:0 2px; font-size:11px; line-height:1; }
 .rs-adj:hover { color:var(--accent); }
-.refine-subs-input { flex:1; background:transparent; border:none; color:var(--text); font-size:12px; padding:2px 4px; border-radius:3px; outline:none; min-width:0; }
+.refine-subs-input { flex:1; background:transparent; border:none; color:var(--text); font-size:14px; padding:2px 4px; border-radius:3px; outline:none; min-width:0; }
 .refine-subs-input:focus { background:var(--bg-2); }
 .refine-subs-ops { display:flex; gap:2px; flex-shrink:0; }
 .rs-op { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:13px; padding:0 3px; border-radius:3px; }
@@ -11797,7 +11797,7 @@ input[type=range] {
 .rs-split-menu { position:absolute; right:0; top:100%; z-index:50; background:var(--bg-1); border:1px solid var(--border); border-radius:5px; box-shadow:0 4px 12px rgba(0,0,0,.3); display:flex; flex-direction:column; min-width:90px; }
 .rs-split-opt { background:none; border:none; color:var(--text); font-size:11px; padding:6px 10px; text-align:left; cursor:pointer; white-space:nowrap; }
 .rs-split-opt:hover { background:var(--bg-2); }
-.refine-subs-input { flex:1; background:var(--bg-2); border:1px solid var(--border); color:var(--text); font-size:12px; padding:3px 6px; border-radius:3px; outline:none; min-width:0; resize:none; font-family:inherit; line-height:1.4; min-height:22px; display:block; }
+.refine-subs-input { flex:1; background:var(--bg-2); border:1px solid var(--border); color:var(--text); font-size:14px; padding:3px 6px; border-radius:3px; outline:none; min-width:0; resize:none; font-family:inherit; line-height:1.4; min-height:22px; display:block; }
 .refine-subs-input:focus { border-color:var(--accent); background:var(--bg-1); }
 
 /* v0.9.5 refine reframe panel */
