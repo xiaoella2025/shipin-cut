@@ -5249,8 +5249,8 @@ input[type=range] {
   border-top: 1px solid var(--bdr);
   display: flex;
   flex-direction: column;
-  max-height: 360px;
-  min-height: 120px;
+  max-height: 520px;
+  min-height: 140px;
 }
 
 .s3-comp-section.tl-flash {
@@ -6312,14 +6312,16 @@ input[type=range] {
 /* preview timeline bar */
 .comp-preview-bar {
   display: flex;
-  height: 72px;
+  height: 96px;
   position: relative;
   cursor: crosshair;
   user-select: none;
   padding: 4px 0;
-  gap: 1px;
+  gap: 2px;
   background: rgba(0,0,0,.18);
   align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* segment blocks inside preview bar */
@@ -6329,15 +6331,15 @@ input[type=range] {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
-  padding: 5px 6px;
-  min-width: 32px;
-  min-height: 48px;
+  justify-content: flex-start;
+  padding: 6px 7px 6px 7px;
+  min-width: 72px;
+  min-height: 72px;
   flex-shrink: 0;
   border-radius: 4px;
   transition: filter .12s;
   overflow: hidden;
-  gap: 2px;
+  gap: 3px;
 }
 .comp-seg-blk:hover {
   filter: brightness(1.18);
@@ -6394,12 +6396,14 @@ input[type=range] {
 }
 .comp-seg-sub {
   font-size: 11px;
-  color: rgba(255,255,255,.85);
-  white-space: nowrap;
+  color: #f1f5f9;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-all;
   width: 100%;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 .comp-seg-dur {
   font-size: 11px;
@@ -6824,7 +6828,7 @@ input[type=range] {
   display: flex;
   flex-direction: column;
   flex: 1;
-  overflow: hidden;
+  overflow-y: auto;
   min-height: 0;
 }
 

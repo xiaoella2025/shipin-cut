@@ -3166,26 +3166,32 @@ export default function App() {
       voiceDuration: voiceSrc ? voiceDuration : null,
       durationDiff,
     }
+    const EXPORT_URL = 'http://127.0.0.1:8765/export'
     let result
     let networkError = null
     try {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 10 * 60 * 1000) // 10 min
-      const resp = await fetch('http://127.0.0.1:8765/export', {
+      const resp = await fetch(EXPORT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         signal: controller.signal,
       })
       clearTimeout(timer)
+      if (!resp.ok) {
+        let errBody = ''
+        try { errBody = await resp.text() } catch { /* ignore */ }
+        return { ok: false, error: `本地服务返回 HTTP ${resp.status}：${errBody.slice(0, 300) || '无响应内容'}` }
+      }
       result = await resp.json()
     } catch (e) {
       if (e.name === 'AbortError') {
         networkError = '请求超时（超过10分钟），请检查服务窗口日志。'
       } else if (e instanceof TypeError) {
-        networkError = '无法连接本地导出服务。请先双击「启动本地导出服务.bat」，等黑窗口出现后再重试。'
+        networkError = `无法连接本地导出服务（${e.name}: ${e.message}）。请求地址：${EXPORT_URL}。请先双击「启动本地导出服务.bat」，等黑窗口出现后再重试。`
       } else {
-        networkError = `导出失败：${e.message}`
+        networkError = `导出失败（${e.name}: ${e.message}）`
       }
       return { ok: false, error: networkError, networkError }
     }
