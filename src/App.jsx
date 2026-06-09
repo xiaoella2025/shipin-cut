@@ -4454,11 +4454,12 @@ export default function App() {
                   const stc=SEG_TYPE_COLORS[seg.type]||'#6366f1'
                   const isSelected=editingSeg?.compId===comp.id&&editingSeg?.segIdx===si
                   const isLocked=(lockedSegs[comp.id]||{})[si]
+                  const segSub=getSegSubtitleFromAna(seg,uploadedVideos[seg.videoIndex]?.id,videoAnalysis)
                   return (
                     <div key={seg.id+'_'+si}
                       className={`comp-seg-blk${isSelected?' editing':''}${isLocked?' locked':''}`}
                       style={{width:w,background:stc+'cc',borderTop:`3px solid ${stc}`}}
-                      title={`${seg.label} · ${seg.type} · V${seg.videoIndex+1}\n${seg.startStr}–${seg.endStr} · ${fmt(dur)}${seg.subtitle?'\n字幕：'+seg.subtitle:''}`}
+                      title={`${seg.label} · ${seg.type} · V${seg.videoIndex+1}\n${seg.startStr}–${seg.endStr} · ${fmt(dur)}${segSub?'\n字幕：'+segSub:''}`}
                       onClick={e=>{
                         e.stopPropagation()
                         stopCompPlay()
@@ -4469,7 +4470,12 @@ export default function App() {
                           let acc=0; for(let i=0;i<si;i++) acc+=comp.segments[i].endSec-comp.segments[i].startSec; return acc
                         })()}))
                       }}>
-                      <span className="comp-seg-inline">{seg.label} · V{seg.videoIndex+1} · {seg.type} · {seg.startStr}-{seg.endStr}</span>
+                      <span className="comp-seg-inline">
+                        <span className="comp-seg-label">{seg.label}</span>
+                        <span className="comp-seg-src"> V{seg.videoIndex+1}</span>
+                        <span className="comp-seg-type">{seg.type}</span>
+                      </span>
+                      {segSub&&<span className="comp-seg-sub">{segSub.slice(0,24)}{segSub.length>24?'…':''}</span>}
                       <div className="comp-seg-move-btns" onClick={e=>e.stopPropagation()}>
                         {si>0&&<button className="comp-seg-mv" title="前移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,-1)}}>←</button>}
                         {si<comp.segments.length-1&&<button className="comp-seg-mv" title="后移" onClick={e=>{e.stopPropagation();moveSegInComp(comp.id,si,+1)}}>→</button>}
