@@ -3081,19 +3081,6 @@ export default function App() {
   async function doExportToLocalService(compId, comp, dedupOverride = null) {
     if (!compId || !comp) return { ok: false, error: '参数缺失' }
 
-    // Pre-flight connectivity check — any HTTP response means service is reachable
-    try {
-      await fetch('http://127.0.0.1:8765/health', {
-        signal: AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined,
-      })
-      // Any response (200, 404, etc.) means the service is running — proceed
-    } catch (he) {
-      const msg = he?.name === 'AbortError' || he?.name === 'TimeoutError'
-        ? '本地服务响应超时，请确认黑窗口没有卡住，或重新启动「启动本地导出服务.bat」。'
-        : '无法连接本地导出服务（127.0.0.1:8765）。请先双击「启动本地导出服务.bat」，等黑窗口出现后再重试。'
-      return { ok: false, error: msg, networkError: true }
-    }
-
     const rc = defaultRcFor(refinedComps[compId])
     const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
     const { segments: derivedSegs, totalDuration } = hasEditSegs
@@ -3196,7 +3183,7 @@ export default function App() {
       if (e.name === 'AbortError') {
         networkError = '请求超时（超过10分钟），请检查服务窗口日志。'
       } else if (e instanceof TypeError) {
-        networkError = '导出请求失败（网络错误），请检查本地服务黑窗口是否仍在运行。'
+        networkError = '无法连接本地导出服务。请先双击「启动本地导出服务.bat」，等黑窗口出现后再重试。'
       } else {
         networkError = `导出失败：${e.message}`
       }
@@ -7025,27 +7012,29 @@ export default function App() {
                                 {sub.corrected&&<span className="s2-sub-corrected-mark" title="已人工校对">✎</span>}
                               </div>
                               {isEditing ? (
-                                <div className="s2-sub-edit-area" onClick={e=>e.stopPropagation()}>
-                                  <textarea
-                                    className="s2-sub-edit-textarea"
-                                    value={editingSubText}
-                                    onChange={e=>setEditingSubText(e.target.value)}
-                                    autoFocus
-                                    rows={2}
-                                  />
-                                  <div className="s2-sub-edit-actions">
-                                    <button className="s2-sub-edit-save" onClick={()=>handleSaveSubEdit(sub.id)}>保存</button>
-                                    <button className="s2-sub-edit-cancel" onClick={()=>{ setEditingSubId(null); setEditingSubText('') }}>取消</button>
+                                <div className="s2-sub-body" onClick={e=>e.stopPropagation()}>
+                                  <div className="s2-sub-edit-area" style={{flex:1}}>
+                                    <textarea
+                                      className="s2-sub-edit-textarea"
+                                      value={editingSubText}
+                                      onChange={e=>setEditingSubText(e.target.value)}
+                                      autoFocus
+                                      rows={2}
+                                    />
+                                    <div className="s2-sub-edit-actions">
+                                      <button className="s2-sub-edit-save" onClick={()=>handleSaveSubEdit(sub.id)}>保存</button>
+                                      <button className="s2-sub-edit-cancel" onClick={()=>{ setEditingSubId(null); setEditingSubText('') }}>取消</button>
+                                    </div>
                                   </div>
                                 </div>
                               ) : (
-                                <>
+                                <div className="s2-sub-body">
                                   <div className="s2-sub-text">{sub.text}</div>
                                   <button
                                     className="s2-sub-edit-btn"
                                     onClick={e=>{ e.stopPropagation(); setEditingSubId(sub.id); setEditingSubText(sub.text) }}
-                                  >✎ 编辑字幕</button>
-                                </>
+                                  >✎ 编辑</button>
+                                </div>
                               )}
                             </div>
                           )
