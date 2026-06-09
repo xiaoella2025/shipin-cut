@@ -229,37 +229,70 @@ function generateSegments(video, vidIndex) {
   }))
 }
 
-// Build segments from real subtitle JSON segments (each has start/end/text)
+// Build segments from real subtitle segments.
+// Accepts both {start,end,text} (raw from /transcribe-video or JSON import)
+// and {startSec,endSec,text} (internal format) — uses whichever is present.
+// Algorithm: group 2-4 subtitles per segment targeting 5-15 s duration.
 function generateSegmentsFromSubtitles(video, vidIndex, subs) {
   if (!subs || !subs.length) return []
-  const n = subs.length
-  const targetGroups = Math.min(6, Math.max(3, Math.ceil(n / 4)))
-  const groupSize = Math.ceil(n / targetGroups)
+
+  // Normalise: accept either .start/.end or .startSec/.endSec
+  const ns = subs.map(s => ({
+    ...s,
+    _start: s.start    ?? s.startSec ?? 0,
+    _end:   s.end      ?? s.endSec   ?? 0,
+  }))
+
+  const TARGET_MAX_DUR = 15  // split before segment exceeds this
+  const MIN_SUBS = 2
+  const MAX_SUBS = 4
+
+  // Greedy: keep adding subs until we've hit MIN_SUBS + (MAX_SUBS or time limit)
   const groups = []
-  for (let i = 0; i < n; i += groupSize) {
-    groups.push(subs.slice(i, Math.min(i + groupSize, n)))
+  let i = 0
+  while (i < ns.length) {
+    const g = [ns[i]]
+    let j = i + 1
+    while (j < ns.length) {
+      const dur = ns[j]._end - g[0]._start
+      if (g.length >= MIN_SUBS && (g.length >= MAX_SUBS || dur >= TARGET_MAX_DUR)) break
+      g.push(ns[j])
+      j++
+    }
+    groups.push(g)
+    i = j
   }
+
+  // Merge trailing singleton into previous group
+  if (groups.length >= 2 && groups[groups.length - 1].length < 2) {
+    const tail = groups.pop()
+    groups[groups.length - 1] = groups[groups.length - 1].concat(tail)
+  }
+
   const totalGroups = groups.length
-  function getType(gi) {
-    if (gi === 0) return '开场'
-    if (gi === totalGroups - 1) return '结尾'
+  const getType = gi => {
+    if (gi === 0)                                  return '开场'
+    if (gi === totalGroups - 1)                    return '结尾'
     if (totalGroups >= 4 && gi === totalGroups - 2) return '成品展示'
     return '制作步骤'
   }
-  return groups.map((group, gi) => {
-    const startSec = group[0].start
-    const endSec   = group[group.length - 1].end
-    const fullText = group.map(s => s.text.trim()).join(' ')
-    const type     = getType(gi)
+
+  return groups.map((g, gi) => {
+    const startSec    = g[0]._start
+    const endSec      = g[g.length - 1]._end
+    const type        = getType(gi)
+    const subtitle    = g.map(s => s.text.trim()).filter(Boolean).join(' ')
+    const subtitleIds = g.map(s => s.id).filter(Boolean)
     return {
-      id:       `${video.id}-rs${gi}`,
+      id:          `${video.id}-rs${gi}`,
       startSec,
       endSec,
-      startStr: fmt(startSec),
-      endStr:   fmt(endSec),
+      startStr:    fmt(startSec),
+      endStr:      fmt(endSec),
       type,
-      subtitle: fullText,
-      selected: type !== '开场' && type !== '结尾',
+      subtitle,
+      subtitleIds,
+      selected:    type !== '开场' && type !== '结尾',
     }
   })
 }
@@ -6817,8 +6850,26 @@ export default function App() {
 
                   <div className="s2-subtitle-columns" ref={subListRef}>
                     {!editorVid&&<div className="s2-sub-empty" style={{width:'100%'}}>从左侧选择视频</div>}
-                    {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-sub-empty" style={{width:'100%'}}><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>等待分析…</div>}
-                    {editorVid&&editorAnalysis?.status==='analyzing'&&<div className="s2-sub-empty" style={{width:'100%'}}><span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>字幕识别中…</div>}
+                    {editorVid&&!editorSubtitles.length&&(editorAnalysis?.subtitleStatus==='running'||editorAnalysis?.subtitleStatus==='pending')&&(
+                      <div className="s2-sub-empty" style={{width:'100%'}}>
+                        <span className="s2s-pulse" style={{display:'inline-block',marginRight:6}}/>
+                        {editorAnalysis.subtitlePhase||'字幕识别中…'}
+                      </div>
+                    )}
+                    {editorVid&&!editorSubtitles.length&&editorAnalysis?.subtitleStatus==='failed'&&(
+                      <div className="s2-sub-empty" style={{width:'100%',flexDirection:'column',gap:8}}>
+                        <span>字幕识别失败：{editorAnalysis.subtitleError?.split('\n')[0]||'请检查本地服务'}</span>
+                        <button className="s1-retry-btn" style={{alignSelf:'center'}} onClick={()=>{
+                          const cv=uploadedVideosRef.current.find(v=>v.id===currentVideoId)
+                          const ci=uploadedVideosRef.current.findIndex(v=>v.id===currentVideoId)
+                          setVideoAnalysis(prev=>({...prev,[currentVideoId]:{...prev[currentVideoId],subtitleStatus:'pending',subtitleError:null}}))
+                          setTimeout(()=>tryTranscribeBackground(currentVideoId,cv,ci),150)
+                        }}>重试识别</button>
+                      </div>
+                    )}
+                    {editorVid&&!editorSubtitles.length&&(editorAnalysis?.subtitleStatus==='none'||(!editorAnalysis?.subtitleStatus&&editorAnalysis?.status!=='waiting'))&&(
+                      <div className="s2-sub-empty" style={{width:'100%'}}>暂无真实字幕</div>
+                    )}
                     {splitIntoSubtitleColumns(editorSubtitles, subColCount).map((col, ci) => (
                       <div key={ci} className="s2-subtitle-col">
                         {col.subs.map((sub, localIdx) => {
@@ -6950,8 +7001,7 @@ export default function App() {
                 />
                 <div className="s2-seg-strip">
                   {!editorVid&&<div className="s2-seg-strip-empty">从左侧选择视频以显示分段</div>}
-                  {editorVid&&editorAnalysis?.status==='analyzing'&&<div className="s2-seg-strip-empty">字幕识别中… {Math.round(editorAnalysis.progress)}%</div>}
-                  {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-seg-strip-empty">等待分析…</div>}
+                  {editorVid&&editorAnalysis?.status==='waiting'&&<div className="s2-seg-strip-empty">生成分段中…</div>}
                   {editorSegs.map((seg,i)=>{
                     const tc=SEG_TYPE_COLORS[seg.type]||'#6366f1'
                     const segLabel=`${editorVidIdx>=0?editorVidIdx+1:'?'}-${i+1}`
