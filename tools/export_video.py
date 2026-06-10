@@ -220,6 +220,28 @@ def resolve_voice(data):
     return None
 
 # ── 裁剪单个片段 ──────────────────────────────────────────────────────────────
+def probe_duration(path):
+    """用 ffprobe 获取媒体时长（秒）。失败返回 None。"""
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, check=True)
+        return float(r.stdout.strip())
+    except Exception:
+        return None
+
+def has_audio_stream(path):
+    """用 ffprobe 检测文件是否含音频流。"""
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, check=True)
+        return "audio" in r.stdout
+    except Exception:
+        return False
+
 def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=False):
     """
     从 video_path 裁剪 [startSec, endSec]，应用速度，输出到 out_path。
@@ -228,6 +250,12 @@ def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=Fa
     """
     start  = seg["startSec"]
     end    = seg["endSec"]
+    # 把 end 钳制到源文件实际时长内：避免请求超过源末尾的区间，
+    # 导致最后片段“有画面但音频已结束”（视频有补帧、音频先结束的常见情况）
+    src_dur = probe_duration(video_path)
+    if src_dur and end > src_dur:
+        log(f"片段 end={end:.2f}s 超过源时长 {src_dur:.2f}s，钳制到 {src_dur:.2f}s")
+        end = src_dur
     dur    = end - start
     if dur <= 0:
         err(f"片段时长无效: {start} → {end}")
@@ -297,10 +325,12 @@ def concat_segments(clip_paths, out_path, has_audio=False):
         "-f", "concat",
         "-safe", "0",
         "-i", list_file,
-        "-c", "copy",
     ]
-    if not has_audio:
-        cmd += ["-an"]
+    if has_audio:
+        # 视频流直接拷贝；音频重新编码以规范时间戳，避免末段音频在 demuxer copy 下被丢弃
+        cmd += ["-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-ac", "2"]
+    else:
+        cmd += ["-c", "copy", "-an"]
     cmd += [out_path]
     run(cmd)
 
@@ -676,6 +706,30 @@ def main():
         ok = cut_segment(seg, video_map[vidx], clip_out, speed, crf=crf, keep_orig_audio=keep_orig_audio)
         if not ok:
             sys.exit(1)
+        # 音频流自检：无额外配音时每个片段都应保留原声（含最后一个片段）
+        if keep_orig_audio:
+            seg_has_audio = has_audio_stream(clip_out)
+            seg_dur = probe_duration(clip_out)
+            log(f"  片段 {i+1} 自检：源={Path(video_map[vidx]).name} "
+                f"区间[{seg['startSec']:.2f}~{seg['endSec']:.2f}]s "
+                f"输出时长={seg_dur:.2f}s 含音频流={'是' if seg_has_audio else '否'}" if seg_dur
+                else f"  片段 {i+1} 自检：含音频流={'是' if seg_has_audio else '否'}")
+            if not seg_has_audio:
+                # 源该区间确实没有音频流时，补一条与视频等长的静音轨，保证 concat 后音频连续
+                log(f"  片段 {i+1} 无音频流，补静音轨以保持拼接后音频连续")
+                silent_out = TEMP_DIR / f"seg_{i:04d}_a.mp4"
+                sd = seg_dur or (seg['endSec'] - seg['startSec'])
+                scmd = [FFMPEG, "-y", "-i", str(clip_out),
+                        "-f", "lavfi", "-t", f"{sd:.3f}",
+                        "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                        "-map", "0:v:0", "-map", "1:a:0",
+                        "-c:v", "copy", "-c:a", "aac", "-shortest", str(silent_out)]
+                try:
+                    run(scmd)
+                    clip_out.unlink()
+                    silent_out.rename(clip_out)
+                except Exception:
+                    log(f"  片段 {i+1} 补静音失败，按原样拼接")
         clip_paths.append(clip_out)
 
     # 拼接
@@ -684,6 +738,10 @@ def main():
     concat_out = TEMP_DIR / f"concat_{safe}_{ts}.mp4"
     log(f"拼接 {len(clip_paths)} 个片段 → {concat_out.name}")
     concat_segments(clip_paths, concat_out, has_audio=keep_orig_audio)
+    if keep_orig_audio:
+        cd = probe_duration(concat_out)
+        log(f"拼接后自检：时长={cd:.2f}s 含音频流={'是' if has_audio_stream(concat_out) else '否'}"
+            if cd else f"拼接后自检：含音频流={'是' if has_audio_stream(concat_out) else '否'}")
 
     # 混合配音或仅复制视频
     final_name = f"{safe}_{ts}.mp4"

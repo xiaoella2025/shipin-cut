@@ -147,13 +147,35 @@ if srt_path and os.path.exists(srt_path):
     cues = parse_srt(srt_path)
     print(f"  SRT 解析到 {len(cues)} 条字幕")
 
+    # 字幕时间钳制到视频时长内：避免最后一条字幕被放到视频末尾之后而被剪映忽略
+    MIN_DUR_US = 300000  # 最短 0.3s
+    written = 0
     for i, (start_us, end_us, text) in enumerate(cues):
+        if not text.strip():
+            continue
+        # 起点超出视频时长：往回挪，保证至少能显示一小段
+        if start_us >= video_dur:
+            start_us = max(0, video_dur - MIN_DUR_US)
+        # 终点超出视频时长：钳制到视频末尾
+        if end_us > video_dur:
+            end_us = video_dur
+        # 时长异常：给一个最小时长
+        if end_us - start_us < MIN_DUR_US:
+            end_us = min(video_dur, start_us + MIN_DUR_US)
+        if end_us <= start_us:
+            print(f"  字幕 [{i+1}] 跳过（时间无效 {start_us}~{end_us}）")
+            continue
         text_seg = TextSegment(
             text=text,
             timerange=Timerange(start=start_us, duration=end_us - start_us)
         )
         sf.add_segment(text_seg, track_name="subtitle")
+        written += 1
         print(f"  字幕 [{i+1}] {start_us/1000000:.1f}s-{end_us/1000000:.1f}s: {text[:40]}")
+    print(f"  字幕轨写入完成：{written}/{len(cues)} 条（视频时长 {video_dur/1000000:.2f}s）")
+    if cues:
+        ls, le, lt = cues[-1]
+        print(f"  [末条字幕] {ls/1000000:.2f}s-{le/1000000:.2f}s: {lt[:60]}")
 else:
     print(f"[3/5] 无 SRT 字幕，跳过字幕轨")
 
