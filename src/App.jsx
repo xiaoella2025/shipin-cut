@@ -3100,11 +3100,14 @@ export default function App() {
     const voiceDuration = voiceSrc?.duration ?? 0
     const durationDiff = voiceSrc ? (voiceDuration - totalDuration) : null
     const now = new Date().toISOString()
+    const compositionIndex = compositions.findIndex(c => c.id === compId)
+    console.log(`[导出] compId=${compId} index=${compositionIndex} name=${comp.name} segments=${derivedSegs.length} hasVoice=${!!exportedVoice}`)
     const payload = {
       version: '0.9.1',
       type: 'refine-plan',
       exportedAt: now,
       compositionId: compId,
+      compositionIndex: compositionIndex >= 0 ? compositionIndex : null,
       compositionName: comp.name,
       summaryScript: rc.summaryScript,
       finalSubtitles: rc.finalSubtitles || null,
@@ -4657,6 +4660,9 @@ export default function App() {
                   <span className="refine-banner-title">成品精修方案工作台</span>
                   {hasEditSegs&&<span className="refine-del-badge refine-cut-badge">✂ 精剪模式</span>}
                   {(hasEditSegs?editDeletedCount:deletedCount)>0&&<span className="refine-del-badge">{hasEditSegs?editDeletedCount:deletedCount} 段已删</span>}
+                  <span className="refine-cur-comp-tag">
+                    当前导出：{comp.name} / 共 {compositions.length} 条
+                  </span>
                   <span className="refine-banner-dur">总时长 {fmt(derivedDur)}{derivedDur!==comp.totalDur?` （原 ${fmt(comp.totalDur)}）`:''}</span>
                   <div className="refine-proto-notice">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>

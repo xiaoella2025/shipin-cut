@@ -172,19 +172,16 @@ def resolve_videos(source_videos):
 # ── 解析音频文件 ──────────────────────────────────────────────────────────────
 def resolve_voice(data):
     """
-    按优先级查找最终语音文件，返回 Path 或 None（None 表示无声导出）。
+    按优先级查找最终语音文件，返回 Path 或 None（None 表示使用原视频音频）。
 
     优先级 1: draft.voice.fileName → audio/ 同名文件
     优先级 2: draft.voiceMeta.fileName → audio/ 同名文件（兼容旧格式）
-    优先级 3: 草稿无记录 + audio/ 只有 1 个音频 → 自动使用
-    优先级 4: 草稿无记录 + audio/ 多个音频 → 报错退出
-    兜底:    草稿无记录 + audio/ 无音频 → 无声导出，打印提示
+    兜底:    draft 没有记录语音文件名 → 返回 None，使用原视频片段自带声音
+             （不再自动扫描 audio/ 文件夹，历史音频文件不影响导出）
     """
-    audio_files = [
-        f for f in AUDIO_DIR.iterdir()
-        if f.is_file() and f.suffix.lower() in AUDIO_EXTS
-    ]
-    audio_map = {f.name.lower(): f for f in audio_files}
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    audio_map = {f.name.lower(): f for f in AUDIO_DIR.iterdir()
+                 if f.is_file() and f.suffix.lower() in AUDIO_EXTS}
 
     # 优先级 1: voice 的同步文件名（storedFileName / fileName / originalName）
     voice = data.get("voice") or {}
@@ -214,24 +211,21 @@ def resolve_voice(data):
         err(f"请在网页精修页重新导入并同步配音，或重新导出剪辑草稿。")
         sys.exit(1)
 
-    # 草稿没有记录语音文件名
-    if len(audio_files) == 1:
-        log(f"草稿未记录语音，已自动使用 audio 文件夹中的唯一音频：{audio_files[0].name}")
-        return audio_files[0]
-    elif len(audio_files) > 1:
-        err("audio 文件夹里有多个音频文件，但剪辑草稿没有记录最终语音文件名。")
-        err("请只保留一个音频文件，或在精修页重新导入最终语音后导出剪辑草稿。")
-        err("检测到的音频文件：")
-        for f in sorted(audio_files, key=lambda x: x.name):
-            err(f"  {f.name}")
-        sys.exit(1)
+    # 草稿没有记录语音文件名 → 使用原视频片段自带声音，不扫描 audio 文件夹
+    audio_count = len(audio_map)
+    if audio_count > 0:
+        log(f"草稿未记录额外配音文件，将使用各片段原视频自带声音（audio/ 中有 {audio_count} 个历史文件，忽略）。")
     else:
-        log("未检测到最终语音文件，本次将导出无声视频。")
-        return None
+        log("草稿未记录额外配音文件，将使用各片段原视频自带声音。")
+    return None
 
 # ── 裁剪单个片段 ──────────────────────────────────────────────────────────────
-def cut_segment(seg, video_path, out_path, speed=1.0, crf=20):
-    """从 video_path 裁剪 [startSec, endSec]，应用速度，输出到 out_path。"""
+def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=False):
+    """
+    从 video_path 裁剪 [startSec, endSec]，应用速度，输出到 out_path。
+    keep_orig_audio=True：保留原视频音频（无额外配音时使用）。
+    keep_orig_audio=False：去掉原声（有额外配音时使用，后续 mux_voice 合入配音）。
+    """
     start  = seg["startSec"]
     end    = seg["endSec"]
     dur    = end - start
@@ -240,26 +234,37 @@ def cut_segment(seg, video_path, out_path, speed=1.0, crf=20):
         return False
 
     vf = ""
+    af = ""
     if abs(speed - 1.0) > 0.01:
         pts_val = 1.0 / speed
         vf = f"setpts={pts_val:.6f}*PTS"
+        if keep_orig_audio:
+            af = _build_atempo(speed)
 
     cmd = [
         FFMPEG, "-y",
         "-ss", str(start),
         "-t",  str(dur),
         "-i",  video_path,
-        "-an",  # 先静音原声，后面合流
     ]
+    if not keep_orig_audio:
+        cmd += ["-an"]  # 去掉原声，后续合入配音
+
     if vf:
         cmd += ["-vf", vf]
+    if keep_orig_audio and af:
+        cmd += ["-af", af]
+
     cmd += [
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
-        out_path,
     ]
+    if keep_orig_audio:
+        # 规范化音频格式，确保各片段可以 concat demuxer 无缝拼接
+        cmd += ["-c:a", "aac", "-ar", "44100", "-ac", "2"]
+    cmd += [out_path]
     try:
         run(cmd)
         return True
@@ -281,20 +286,23 @@ def _build_atempo(speed):
     return ",".join(filters)
 
 # ── 拼接片段列表 ──────────────────────────────────────────────────────────────
-def concat_segments(clip_paths, out_path):
-    """用 concat demuxer 拼接无声视频片段"""
+def concat_segments(clip_paths, out_path, has_audio=False):
+    """用 concat demuxer 拼接视频片段（has_audio=True 时同时拼接音频轨）"""
     list_file = TEMP_DIR / "concat_list.txt"
     with open(list_file, "w", encoding="utf-8") as f:
         for p in clip_paths:
             f.write(f"file '{p.resolve()}'\n")
-    run([
+    cmd = [
         FFMPEG, "-y",
         "-f", "concat",
         "-safe", "0",
         "-i", list_file,
         "-c", "copy",
-        out_path,
-    ])
+    ]
+    if not has_audio:
+        cmd += ["-an"]
+    cmd += [out_path]
+    run(cmd)
 
 # ── 混合配音 ──────────────────────────────────────────────────────────────────
 def mux_voice(video_path, voice_path, out_path, audio_policy):
@@ -645,8 +653,11 @@ def main():
     # 解析素材视频路径
     video_map = resolve_videos(source_vids)
 
-    # 解析配音文件（含 4 级自动匹配逻辑）
+    # 解析配音文件（payload 有明确配音才使用，否则保留原视频音频）
     voice_path = resolve_voice(data)
+    keep_orig_audio = (voice_path is None)  # 无额外配音时保留原视频音频
+
+    log(f"音频策略：{'使用原视频片段自带声音' if keep_orig_audio else f'使用额外配音：{voice_path.name}'}")
 
     # 清理临时目录
     for f in TEMP_DIR.glob("seg_*.mp4"):
@@ -662,7 +673,7 @@ def main():
         speed = seg.get("speed", 1.0) or 1.0
         clip_out = TEMP_DIR / f"seg_{i:04d}.mp4"
         log(f"裁剪片段 {i+1}/{len(timeline)}: {seg.get('label','?')} [{seg['startSec']:.2f}~{seg['endSec']:.2f}s] x{speed}")
-        ok = cut_segment(seg, video_map[vidx], clip_out, speed, crf=crf)
+        ok = cut_segment(seg, video_map[vidx], clip_out, speed, crf=crf, keep_orig_audio=keep_orig_audio)
         if not ok:
             sys.exit(1)
         clip_paths.append(clip_out)
@@ -672,7 +683,7 @@ def main():
     safe = safe_name(comp_name)
     concat_out = TEMP_DIR / f"concat_{safe}_{ts}.mp4"
     log(f"拼接 {len(clip_paths)} 个片段 → {concat_out.name}")
-    concat_segments(clip_paths, concat_out)
+    concat_segments(clip_paths, concat_out, has_audio=keep_orig_audio)
 
     # 混合配音或仅复制视频
     final_name = f"{safe}_{ts}.mp4"
