@@ -242,6 +242,36 @@ def has_audio_stream(path):
     except Exception:
         return False
 
+def probe_video_stream_duration(path):
+    """用 ffprobe 获取视频流时长（秒），与 container duration 不同。失败返回 None。"""
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=20)
+        val = r.stdout.strip()
+        if val and val != "N/A":
+            return round(float(val), 3)
+    except Exception:
+        pass
+    return None
+
+def probe_audio_stream_duration(path):
+    """用 ffprobe 获取音频流时长（秒）。失败返回 None。"""
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=20)
+        val = r.stdout.strip()
+        if val and val != "N/A":
+            return round(float(val), 3)
+    except Exception:
+        pass
+    return None
+
 def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=False):
     """
     从 video_path 裁剪 [startSec, endSec]，应用速度，输出到 out_path。
@@ -261,11 +291,11 @@ def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=Fa
         err(f"片段时长无效: {start} → {end}")
         return False
 
-    vf = ""
-    af = ""
+    vf = "setpts=PTS-STARTPTS"
+    af = "asetpts=PTS-STARTPTS" if keep_orig_audio else ""
     if abs(speed - 1.0) > 0.01:
         pts_val = 1.0 / speed
-        vf = f"setpts={pts_val:.6f}*PTS"
+        vf = f"setpts={pts_val:.6f}*(PTS-STARTPTS)"
         if keep_orig_audio:
             af = _build_atempo(speed)
 
@@ -327,10 +357,14 @@ def concat_segments(clip_paths, out_path, has_audio=False):
         "-i", list_file,
     ]
     if has_audio:
-        # 视频流直接拷贝；音频重新编码以规范时间戳，避免末段音频在 demuxer copy 下被丢弃
-        cmd += ["-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-ac", "2"]
+        # 重新编码视频以消除片段间 DTS/PTS 漂移；音频同步编码规范时间戳
+        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2"]
     else:
-        cmd += ["-c", "copy", "-an"]
+        # 无音频时仍重新编码消除时间戳漂移
+        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-pix_fmt", "yuv420p", "-an"]
     cmd += [out_path]
     run(cmd)
 
@@ -347,7 +381,8 @@ def mux_voice(video_path, voice_path, out_path, audio_policy):
         "-i", voice_path,
         "-map", "0:v:0",
         "-map", "1:a:0",
-        "-c:v", "copy",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-shortest",
         out_path,
@@ -774,8 +809,24 @@ def main():
     concat_out = TEMP_DIR / f"concat_{safe}_{ts}.mp4"
     log(f"拼接 {len(clip_paths)} 个片段 → {concat_out.name}")
     concat_segments(clip_paths, concat_out, has_audio=keep_orig_audio)
+
+    # 时长自检：视频流时长必须与方案预期一致（±0.5s）
+    expected_dur = sum(
+        (seg["endSec"] - seg["startSec"]) / max(seg.get("speed", 1.0) or 1.0, 0.01)
+        for seg in timeline
+    )
+    actual_vid_dur = probe_video_stream_duration(concat_out)
+    actual_fmt_dur = probe_duration(concat_out)
+    actual_aud_dur = probe_audio_stream_duration(concat_out) if keep_orig_audio else None
+    log(f"[时长自检] 方案预期={expected_dur:.3f}s  视频流={actual_vid_dur}s  "
+        f"容器={actual_fmt_dur}s  音频流={actual_aud_dur}s")
+    if actual_vid_dur is not None and abs(actual_vid_dur - expected_dur) > 0.5:
+        err(f"导出视频时长异常：方案预计 {expected_dur:.1f}s，"
+            f"但 clean mp4 视频轨为 {actual_vid_dur:.1f}s。已停止生成剪映草稿。")
+        sys.exit(1)
+
     if keep_orig_audio:
-        cd = probe_duration(concat_out)
+        cd = actual_fmt_dur
         log(f"拼接后自检：时长={cd:.2f}s 含音频流={'是' if has_audio_stream(concat_out) else '否'}"
             if cd else f"拼接后自检：含音频流={'是' if has_audio_stream(concat_out) else '否'}")
 

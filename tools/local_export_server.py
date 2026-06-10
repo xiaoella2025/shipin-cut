@@ -119,6 +119,38 @@ def _probe_has_audio(path):
         return False
 
 
+def _probe_video_stream_duration(path):
+    """用 ffprobe 获取视频流时长（秒）。失败返回 None。"""
+    try:
+        r = subprocess.run(
+            [_ffprobe_bin(), "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=20)
+        val = r.stdout.strip()
+        if val and val != "N/A":
+            return round(float(val), 3)
+    except Exception:
+        pass
+    return None
+
+
+def _probe_audio_stream_duration(path):
+    """用 ffprobe 获取音频流时长（秒）。失败返回 None。"""
+    try:
+        r = subprocess.run(
+            [_ffprobe_bin(), "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=20)
+        val = r.stdout.strip()
+        if val and val != "N/A":
+            return round(float(val), 3)
+    except Exception:
+        pass
+    return None
+
+
 def _write_export_debug(payload):
     """把导出自检数据写入 export_workspace/logs/export_debug_<ts>.json，避免靠截图猜。"""
     try:
@@ -690,6 +722,7 @@ class ExportHandler(BaseHTTPRequestHandler):
             srt_path = data.get("srt") or None
             subtitle_content = data.get("subtitleContent") or None  # 内联 SRT 文本（优先使用）
             draft_name = data.get("name") or None
+            expected_duration = data.get("expectedDuration") or None  # 前端传入方案预期时长（秒）
             print(f"[服务] /export-jianying 请求：mp4={mp4_path} hasSrt={'是' if srt_path else '否'} hasSubContent={'是' if subtitle_content else '否'} name={draft_name}", flush=True)
             if subtitle_content:
                 srt_lines = subtitle_content.strip().split('\n')
@@ -730,11 +763,33 @@ class ExportHandler(BaseHTTPRequestHandler):
             # 优先使用内联生成的临时 SRT；回退到 srt_path（如有）
             actual_srt_path = temp_srt_path or srt_path
 
-            # clean mp4 自检：时长 + 音频流（写入 debug 报告）
+            # clean mp4 自检：时长 + 视频流 + 音频流（写入 debug 报告）
             mp4_duration = _probe_media_duration(mp4_path)
+            mp4_video_dur = _probe_video_stream_duration(mp4_path)
+            mp4_audio_dur = _probe_audio_stream_duration(mp4_path)
             mp4_has_audio = _probe_has_audio(mp4_path)
             print(f"[剪映导出] mp4={mp4_path}", flush=True)
-            print(f"[剪映导出] mp4 时长={mp4_duration}s 含音频流={mp4_has_audio}", flush=True)
+            print(f"[剪映导出] mp4 容器时长={mp4_duration}s 视频流={mp4_video_dur}s 音频流={mp4_audio_dur}s 含音频={mp4_has_audio}", flush=True)
+            if expected_duration is not None:
+                print(f"[剪映导出] 方案预期时长={expected_duration:.3f}s", flush=True)
+            # 时长漂移预检：视频流时长与方案预期差 >0.5s → 拒绝生成草稿
+            if expected_duration is not None and mp4_video_dur is not None:
+                dur_drift = abs(mp4_video_dur - expected_duration)
+                if dur_drift > 0.5:
+                    err_msg = (f"导出视频时长异常：方案预计 {expected_duration:.1f}s，"
+                               f"但 clean mp4 视频轨为 {mp4_video_dur:.1f}s。已停止生成剪映草稿。")
+                    print(f"[剪映导出] {err_msg}", flush=True)
+                    _write_export_debug({
+                        "mode": "jianying", "mp4": mp4_path,
+                        "expectedDuration": expected_duration,
+                        "cleanMp4FormatDuration": mp4_duration,
+                        "cleanMp4VideoDuration": mp4_video_dur,
+                        "cleanMp4AudioDuration": mp4_audio_dur,
+                        "durationMismatch": True,
+                        "error": err_msg, "finalStatus": "fail",
+                    })
+                    self._json({"ok": False, "error": err_msg})
+                    return
 
             # 使用 pyjianying_probe venv
             venv_python = REPO_ROOT / "tmp" / "pyjianying_probe" / ".venv" / "Scripts" / "python"
@@ -774,7 +829,15 @@ class ExportHandler(BaseHTTPRequestHandler):
             debug_payload = {
                 "mode": "jianying",
                 "mp4": mp4_path,
-                "mp4Duration": mp4_duration,
+                "expectedDuration": expected_duration,
+                "cleanMp4FormatDuration": mp4_duration,
+                "cleanMp4VideoDuration": mp4_video_dur,
+                "cleanMp4AudioDuration": mp4_audio_dur,
+                "durationMismatch": (
+                    abs(mp4_video_dur - expected_duration) > 0.5
+                    if (expected_duration is not None and mp4_video_dur is not None)
+                    else None
+                ),
                 "mp4HasAudio": mp4_has_audio,
                 "draftName": draft_name,
                 "tempSrt": temp_srt_path,

@@ -3363,10 +3363,16 @@ export default function App() {
       console.log(`[剪映导出] SRT末条: ${lastSrtBlock.slice(0, 200)}`)
     }
 
+    const hasEditSegs = !!(rc.editSegs && rc.editSegs.length > 0)
+    const { totalDuration: jianyingExpectedDur } = hasEditSegs
+      ? buildEditTimeline(rc.editSegs)
+      : buildDerivedTimeline(targetComp, rc.deletedSegIdxs, rc.speedMap)
+
     const buildJianyingBody = (mp4) => JSON.stringify({
       mp4,
       // 字幕内容直接内嵌——后端写临时 SRT，export_with_jianying.py 收到 --srt，永不触发自动扫描
       subtitleContent: srtContent || undefined,
+      expectedDuration: jianyingExpectedDur,
       options: {
         subtitle: !!jianyingOpts.subtitle,
         voice: !!jianyingOpts.voice,
