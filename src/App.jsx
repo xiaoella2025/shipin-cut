@@ -1326,6 +1326,7 @@ export default function App() {
   const [refineExportMsg, setRefineExportMsg]       = useState('')
   const [lastExportedMp4, setLastExportedMp4]       = useState('')
   const [lastExportedSrt, setLastExportedSrt]       = useState('')
+  const [lastExportedCompId, setLastExportedCompId] = useState(null) // 缓存 mp4 属于哪条方案，防止切方案后误用旧 mp4
   const [jianyingExportStatus, setJianyingExportStatus] = useState('idle') // 'idle'|'loading'|'success'|'error'
   const [jianyingExportMsg, setJianyingExportMsg]       = useState('')
   // v0.9.10: 最近一次成功生成的剪映草稿路径（用于"打开草稿文件夹"按钮）
@@ -3214,6 +3215,7 @@ export default function App() {
       setMsg(r.message || '生成成功！成品视频已保存到 export_workspace/output/')
       setLastExportedMp4(r.output || '')
       setLastExportedSrt(r.srt || '')
+      setLastExportedCompId(compId)
     } else {
       setStatus('error')
       setMsg(r.error || '生成失败，请查看服务窗口日志。')
@@ -3225,8 +3227,10 @@ export default function App() {
     const targetCompId = compId || refineCompId
     const targetComp   = comp   || (targetCompId ? compositions.find(c => c.id === targetCompId) : null)
     setJianyingExportStatus('loading')
-    let mp4ToUse = lastExportedMp4 || ''
-    let srtToUse = lastExportedSrt || ''
+    // 缓存的 mp4 只有属于当前方案时才能复用；切换方案后必须重新生成
+    const cacheValid = !!lastExportedMp4 && lastExportedCompId === targetCompId
+    let mp4ToUse = cacheValid ? lastExportedMp4 : ''
+    let srtToUse = cacheValid ? lastExportedSrt : ''
     if (!mp4ToUse) {
       setJianyingExportMsg('正在准备成品视频…')
       const r = await doExportToLocalService(targetCompId, targetComp)
@@ -3239,6 +3243,7 @@ export default function App() {
       srtToUse = r.srt || ''
       setLastExportedMp4(mp4ToUse)
       setLastExportedSrt(srtToUse)
+      setLastExportedCompId(targetCompId)
     }
     setJianyingExportMsg('正在生成剪映草稿…')
     const srtToSend = jianyingOpts.subtitle ? (srtToUse || undefined) : undefined
@@ -3280,6 +3285,7 @@ export default function App() {
           srtToUse = r.srt || ''
           setLastExportedMp4(mp4ToUse)
           setLastExportedSrt(srtToUse)
+          setLastExportedCompId(targetCompId)
           setJianyingExportMsg('正在生成剪映草稿…')
           const retry = await fetch('http://127.0.0.1:8765/export-jianying', {
             method: 'POST',
