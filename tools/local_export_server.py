@@ -644,6 +644,7 @@ class ExportHandler(BaseHTTPRequestHandler):
                 return
             mp4_path = data.get("mp4", "")
             srt_path = data.get("srt") or None
+            subtitle_content = data.get("subtitleContent") or None  # 内联 SRT 文本（优先使用）
             draft_name = data.get("name") or None
             if not mp4_path:
                 self._json({"ok": False, "error": "缺少 mp4 参数"})
@@ -655,11 +656,29 @@ class ExportHandler(BaseHTTPRequestHandler):
             if not jianying_script.exists():
                 self._json({"ok": False, "error": "export_with_jianying.py 不存在"})
                 return
+
+            # 将内联字幕内容写入临时 SRT 文件（确保每次使用当前方案字幕，绝不复用旧文件）
+            temp_srt_path = None
+            if subtitle_content and subtitle_content.strip():
+                try:
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    temp_srt_dir = WORKSPACE / "temp"
+                    temp_srt_dir.mkdir(parents=True, exist_ok=True)
+                    temp_srt = temp_srt_dir / f"jianying_sub_{ts}.srt"
+                    temp_srt.write_text(subtitle_content, encoding="utf-8")
+                    temp_srt_path = str(temp_srt)
+                    print(f"[服务] 已写入临时字幕文件：{temp_srt.name}（{len(subtitle_content)} 字节）", flush=True)
+                except Exception as e:
+                    print(f"[服务] 写入临时字幕文件失败：{e}，不传 SRT 继续", flush=True)
+
+            # 优先使用内联生成的临时 SRT；回退到 srt_path（如有）
+            actual_srt_path = temp_srt_path or srt_path
+
             # 使用 pyjianying_probe venv
             venv_python = REPO_ROOT / "tmp" / "pyjianying_probe" / ".venv" / "Scripts" / "python"
             cmd = [str(venv_python), str(jianying_script), "--mp4", mp4_path]
-            if srt_path:
-                cmd += ["--srt", srt_path]
+            if actual_srt_path:
+                cmd += ["--srt", actual_srt_path]
             if draft_name:
                 cmd += ["--name", draft_name]
             print(f"[服务] 生成剪映草稿：{cmd}", flush=True)

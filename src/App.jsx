@@ -1325,8 +1325,9 @@ export default function App() {
   const [refineExportStatus, setRefineExportStatus] = useState('idle') // 'idle'|'loading'|'success'|'error'
   const [refineExportMsg, setRefineExportMsg]       = useState('')
   const [lastExportedMp4, setLastExportedMp4]       = useState('')
-  const [lastExportedSrt, setLastExportedSrt]       = useState('')
-  const [lastExportedCompId, setLastExportedCompId] = useState(null) // 缓存 mp4 属于哪条方案，防止切方案后误用旧 mp4
+  const [lastExportedMp4Sig, setLastExportedMp4Sig] = useState('') // full sig: id+segs+voice+subs+burnInSub
+  const [lastJianyingMp4, setLastJianyingMp4]       = useState('') // clean mp4 for Jianying (no burned subs)
+  const [lastJianyingMp4Sig, setLastJianyingMp4Sig] = useState('') // sig: id+segs+voice (no subs)
   const [jianyingExportStatus, setJianyingExportStatus] = useState('idle') // 'idle'|'loading'|'success'|'error'
   const [jianyingExportMsg, setJianyingExportMsg]       = useState('')
   // v0.9.10: 最近一次成功生成的剪映草稿路径（用于"打开草稿文件夹"按钮）
@@ -3078,8 +3079,54 @@ export default function App() {
     showToast('方案已保存')
   }
 
+  // ── 导出签名：compId + segments + voice（不含字幕）用于 Jianying 干净 mp4 缓存 ──
+  function buildBaseSig(compId, comp, rc) {
+    const idx = compositions.findIndex(c => c.id === compId)
+    const hasEdit = !!(rc.editSegs && rc.editSegs.length > 0)
+    let segKey
+    if (hasEdit) {
+      segKey = (rc.editSegs || []).map(e =>
+        `${e.videoIndex ?? '?'}:${+(e.startSec||0).toFixed(3)}:${+(e.endSec||0).toFixed(3)}:${+(e.speed||1).toFixed(2)}`
+      ).join('|')
+    } else {
+      const allSegs = comp?.segments || []
+      const deleted = new Set(rc.deletedSegIdxs || [])
+      const sm = rc.speedMap || {}
+      segKey = allSegs.map((s, i) => {
+        if (deleted.has(i)) return ''
+        return `${s.videoIndex ?? '?'}:${+(s.startSec||0).toFixed(3)}:${+(s.endSec||0).toFixed(3)}:${+(sm[i]||1).toFixed(2)}`
+      }).filter(Boolean).join('|')
+    }
+    const voiceKey = rc.voice ? (rc.voice.storedFileName || rc.voice.fileName || '') : ''
+    const muteKey = rc.audioPolicy?.muteOriginalVideo ? '1' : '0'
+    return `${compId}@${idx}|${segKey}|v:${voiceKey}|mo:${muteKey}`
+  }
+
+  // ── 全量签名：基础签名 + finalSubtitles + burnInSub，用于普通 mp4 缓存 ──
+  function buildFullExportSig(compId, comp, rc) {
+    const base = buildBaseSig(compId, comp, rc)
+    const subKey = (rc.finalSubtitles || [])
+      .map(s => `${+(s.start||0).toFixed(2)}:${+(s.end||0).toFixed(2)}:${s.text||''}`)
+      .join('§')
+    return `${base}|subs:${subKey}|burn:${burnInSub?'1':'0'}`
+  }
+
+  // ── 从 finalSubtitles 生成 SRT 文本（每次导出剪映草稿时调用，不缓存）──
+  function buildSrtContent(subs) {
+    if (!subs || subs.length === 0) return ''
+    const fmt = s => {
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60)
+      const sec = Math.floor(s % 60), ms = Math.round((s % 1) * 1000)
+      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')},${String(ms).padStart(3,'0')}`
+    }
+    return subs.map((sub, i) =>
+      `${i + 1}\n${fmt(sub.start || 0)} --> ${fmt(sub.end || 0)}\n${sub.text || ''}`
+    ).join('\n\n') + '\n'
+  }
+
   // v0.9.1: POST 当前草稿到本地导出服务（仅构建 payload + 调 /export，返回 {ok,output,srt,message,error}）
-  async function doExportToLocalService(compId, comp, dedupOverride = null) {
+  // forJianying=true → 强制 burnInSubtitle:false（Jianying 用干净视频，字幕由剪映字幕轨提供）
+  async function doExportToLocalService(compId, comp, dedupOverride = null, forJianying = false) {
     if (!compId || !comp) return { ok: false, error: '参数缺失' }
 
     const rc = defaultRcFor(refinedComps[compId])
@@ -3102,7 +3149,12 @@ export default function App() {
     const durationDiff = voiceSrc ? (voiceDuration - totalDuration) : null
     const now = new Date().toISOString()
     const compositionIndex = compositions.findIndex(c => c.id === compId)
-    console.log(`[导出] compId=${compId} index=${compositionIndex} name=${comp.name} segments=${derivedSegs.length} hasVoice=${!!exportedVoice}`)
+    const exportSignature = buildBaseSig(compId, comp, rc)
+    const subCount = rc.finalSubtitles?.length ?? 0
+    const firstSubText = rc.finalSubtitles?.[0]?.text ?? ''
+    const firstSeg = derivedSegs[0]
+    console.log(`[导出] compId=${compId} index=${compositionIndex} name=${comp.name} segments=${derivedSegs.length} hasVoice=${!!exportedVoice} forJianying=${forJianying}`)
+    console.log(`[导出] sig=${exportSignature.slice(0,80)} subCount=${subCount} firstSub="${firstSubText.slice(0,30)}" firstSeg=vid${firstSeg?.seg?.videoIndex}:${firstSeg?.seg?.startSec?.toFixed(2)}~${firstSeg?.seg?.endSec?.toFixed(2)}`)
     const payload = {
       version: '0.9.1',
       type: 'refine-plan',
@@ -3110,6 +3162,7 @@ export default function App() {
       compositionId: compId,
       compositionIndex: compositionIndex >= 0 ? compositionIndex : null,
       compositionName: comp.name,
+      exportSignature,
       summaryScript: rc.summaryScript,
       finalSubtitles: rc.finalSubtitles || null,
       copywriting: rc.copywriting,
@@ -3137,7 +3190,9 @@ export default function App() {
             }),
         keepOriginalAudio: keepAudio, backgroundMusic: addMusic,
         autoSubtitle: autoSub, subtitlePosition: subPos, mixStrength: intensity,
-        burnInSubtitle: burnInSub, coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
+        // forJianying=true → 强制关闭字幕烧录，Jianying 草稿使用干净视频 + 可编辑字幕轨
+        burnInSubtitle: forJianying ? false : burnInSub,
+        coverOriginalSub: coverOrigSub, coverOrigSubHeight: coverOrigSubHeight,
         origSubMode: origSubMode,
         reframe: rc.reframe || { enabled: false, aspect: '保留原比例', scale: 1.0, offsetX: 0, offsetY: 0 },
         stickers: getCompStickers(compId),
@@ -3209,97 +3264,109 @@ export default function App() {
   async function exportToLocalService(compId, comp, setStatus = setEpExportStatus, setMsg = setEpExportMsg, dedupOverride = null) {
     setStatus('loading')
     setMsg('正在生成成品视频，请稍候...')
+    const rc = defaultRcFor(refinedComps[compId])
+    const fullSig = buildFullExportSig(compId, comp, rc)
     const r = await doExportToLocalService(compId, comp, dedupOverride)
     if (r.ok) {
       setStatus('success')
       setMsg(r.message || '生成成功！成品视频已保存到 export_workspace/output/')
       setLastExportedMp4(r.output || '')
-      setLastExportedSrt(r.srt || '')
-      setLastExportedCompId(compId)
+      setLastExportedMp4Sig(fullSig)
     } else {
       setStatus('error')
       setMsg(r.error || '生成失败，请查看服务窗口日志。')
     }
   }
 
-  // ── 导出到剪映草稿（一体化：mp4 不存在时自动先 /export 再 /export-jianying） ──
+  // ── 导出到剪映草稿（一体化：字幕始终从当前 finalSubtitles 现场生成，绝不复用旧 SRT）──
   async function exportToJianying(compId, comp) {
     const targetCompId = compId || refineCompId
     const targetComp   = comp   || (targetCompId ? compositions.find(c => c.id === targetCompId) : null)
+    if (!targetCompId || !targetComp) {
+      setJianyingExportStatus('error')
+      setJianyingExportMsg('无法确定当前方案，请重新进入精修页')
+      return
+    }
     setJianyingExportStatus('loading')
-    // 缓存的 mp4 只有属于当前方案时才能复用；切换方案后必须重新生成
-    const cacheValid = !!lastExportedMp4 && lastExportedCompId === targetCompId
-    let mp4ToUse = cacheValid ? lastExportedMp4 : ''
-    let srtToUse = cacheValid ? lastExportedSrt : ''
+
+    // 读取当前方案的最新 rc（不依赖任何缓存状态）
+    const rc = defaultRcFor(refinedComps[targetCompId])
+
+    // Jianying 专用 mp4 缓存：签名只含 compId + segments + voice
+    // （字幕改动不影响干净 mp4，改变字幕只影响 SRT，SRT 始终实时生成）
+    const jianyingMp4Sig = buildBaseSig(targetCompId, targetComp, rc)
+    const jianyingCacheHit = !!lastJianyingMp4 && lastJianyingMp4Sig === jianyingMp4Sig
+
+    let mp4ToUse = jianyingCacheHit ? lastJianyingMp4 : ''
+
     if (!mp4ToUse) {
-      setJianyingExportMsg('正在准备成品视频…')
-      const r = await doExportToLocalService(targetCompId, targetComp)
+      setJianyingExportMsg('正在准备成品视频（干净版，字幕将由剪映字幕轨提供）…')
+      // forJianying=true → burnInSubtitle:false → 干净视频，无烧录字幕
+      const r = await doExportToLocalService(targetCompId, targetComp, null, true)
       if (!r || !r.ok) {
         setJianyingExportStatus('error')
         setJianyingExportMsg(r?.error || '准备成品视频失败，请稍后再试。')
         return
       }
       mp4ToUse = r.output || ''
-      srtToUse = r.srt || ''
-      setLastExportedMp4(mp4ToUse)
-      setLastExportedSrt(srtToUse)
-      setLastExportedCompId(targetCompId)
+      if (!mp4ToUse) {
+        setJianyingExportStatus('error')
+        setJianyingExportMsg('生成成品视频失败（未获得输出路径），请查看服务窗口日志。')
+        return
+      }
+      setLastJianyingMp4(mp4ToUse)
+      setLastJianyingMp4Sig(jianyingMp4Sig)
     }
+
+    // 始终从当前 rc.finalSubtitles 实时生成 SRT 内容——永不复用任何缓存 SRT
+    const freshSubs = (rc.finalSubtitles && rc.finalSubtitles.length > 0) ? rc.finalSubtitles : null
+    const srtContent = (jianyingOpts.subtitle && freshSubs) ? buildSrtContent(freshSubs) : ''
+
+    console.log(`[剪映导出] compId=${targetCompId} subs=${freshSubs?.length ?? 0} srtLen=${srtContent.length} cacheHit=${jianyingCacheHit} sig=${jianyingMp4Sig.slice(0, 60)}`)
+
+    const buildJianyingBody = (mp4) => JSON.stringify({
+      mp4,
+      // 字幕内容直接内嵌——后端写临时 SRT，export_with_jianying.py 收到 --srt，永不触发自动扫描
+      subtitleContent: srtContent || undefined,
+      options: {
+        subtitle: !!jianyingOpts.subtitle,
+        voice: !!jianyingOpts.voice,
+        keepOriginalAudio: !!jianyingOpts.keepOriginalAudio,
+        audioTrackSupported: jianyingAudioTrackSupported,
+      },
+    })
+
     setJianyingExportMsg('正在生成剪映草稿…')
-    const srtToSend = jianyingOpts.subtitle ? (srtToUse || undefined) : undefined
     try {
       const resp = await fetch('http://127.0.0.1:8765/export-jianying', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mp4: mp4ToUse,
-          srt: srtToSend,
-          // 透传选项（当前后端仅用 srt，但保留字段以便后续扩展）
-          options: {
-            subtitle: !!jianyingOpts.subtitle,
-            voice: !!jianyingOpts.voice,
-            keepOriginalAudio: !!jianyingOpts.keepOriginalAudio,
-            audioTrackSupported: jianyingAudioTrackSupported,
-          },
-        }),
+        body: buildJianyingBody(mp4ToUse),
       })
       const data = await resp.json()
       if (data.ok) {
         setJianyingExportStatus('success')
         setJianyingExportMsg(data.message || '剪映草稿已生成，请关闭并重新打开剪映查看。')
-        // v0.9.10: 保存草稿路径，供"打开草稿文件夹"使用
         setLastJianyingDraftName(data.draftName || '')
         setLastJianyingDraftPath(data.draftPath || '')
       } else {
-        // 后端明确报"MP4 文件不存在"时，回退到 /export 再重试一次
         const missingMp4 = /MP4 文件不存在/.test(data.error || '')
         if (missingMp4) {
           setJianyingExportMsg('正在重新准备成品视频…')
-          const r = await doExportToLocalService(targetCompId, targetComp)
+          const r = await doExportToLocalService(targetCompId, targetComp, null, true)
           if (!r || !r.ok) {
             setJianyingExportStatus('error')
             setJianyingExportMsg(r?.error || '重新生成成品视频失败，请稍后再试。')
             return
           }
           mp4ToUse = r.output || ''
-          srtToUse = r.srt || ''
-          setLastExportedMp4(mp4ToUse)
-          setLastExportedSrt(srtToUse)
-          setLastExportedCompId(targetCompId)
+          setLastJianyingMp4(mp4ToUse)
+          setLastJianyingMp4Sig(jianyingMp4Sig)
           setJianyingExportMsg('正在生成剪映草稿…')
           const retry = await fetch('http://127.0.0.1:8765/export-jianying', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              mp4: mp4ToUse,
-              srt: jianyingOpts.subtitle ? (srtToUse || undefined) : undefined,
-              options: {
-                subtitle: !!jianyingOpts.subtitle,
-                voice: !!jianyingOpts.voice,
-                keepOriginalAudio: !!jianyingOpts.keepOriginalAudio,
-                audioTrackSupported: jianyingAudioTrackSupported,
-              },
-            }),
+            body: buildJianyingBody(mp4ToUse),
           })
           const retryData = await retry.json()
           if (retryData.ok) {
