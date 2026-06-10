@@ -3,18 +3,20 @@
 export_with_pyjianying.py - 使用 pyJianYingDraft 将视频/字幕导出为剪映草稿
 
 用法:
-  python export_with_pyjianying.py --video <mp4_path> [--srt <srt_path>] [--name <draft_name>] [--drafts-dir <dir>]
+  python export_with_pyjianying.py --video <mp4_path> [--srt <srt_path>] [--name <draft_name>] [--drafts-dir <dir>] [--expected-subs N]
 
-示例:
-  python export_with_pyjianying.py --video F:/shipin-cut/export_workspace/jianying_test_assets/clip1.mp4 --name MIXCUT_EXPORT_TEST_20260608_001
+原子生成：先在临时草稿目录构建并校验，全部成功后再改名为正式草稿；
+任意一步失败立即删除临时目录并以非零退出码返回，绝不在剪映里留下损坏草稿。
 """
 
 import argparse
 import datetime
 import json
 import os
+import random
 import re
 import shutil
+import sys
 import time
 
 # ─── 参数解析 ────────────────────────────────────────────
@@ -23,6 +25,8 @@ parser = argparse.ArgumentParser(description="使用 pyJianYingDraft 导出剪�
 parser.add_argument("--video", required=True, help="输入 MP4 视频路径（必填）")
 parser.add_argument("--srt", help="输入 SRT 字幕路径（可选）")
 parser.add_argument("--name", help="草稿名称（可选，默认自动生成）")
+parser.add_argument("--expected-subs", type=int, default=-1,
+                    help="期望写入的字幕条数（>=0 时强制校验，写入数不足即失败）")
 parser.add_argument(
     "--drafts-dir",
     default="C:/Users/Admin/AppData/Local/JianyingPro/User Data/Projects/com.lveditor.draft/",
@@ -32,13 +36,14 @@ args = parser.parse_args()
 
 video_path = os.path.abspath(args.video)
 srt_path = os.path.abspath(args.srt) if args.srt else None
+expected_subs = args.expected_subs
 
-# 生成草稿名
+# 生成正式草稿名
 if args.name:
-    draft_name = args.name
+    final_name = args.name
 else:
     now = datetime.datetime.now()
-    draft_name = f"MIXCUT_EXPORT_{now.strftime('%Y%m%d_%H%M%S')}"
+    final_name = f"MIXCUT_EXPORT_{now.strftime('%Y%m%d_%H%M%S')}"
 
 drafts_dir = os.path.abspath(args.drafts_dir)
 
@@ -52,14 +57,23 @@ try:
 except ImportError as e:
     print(f"[错误] 缺少 pyJianYingDraft: {e}")
     print("请先安装: pip install pyJianYingDraft")
-    exit(1)
+    sys.exit(1)
+
+# ─── 前置校验：输入文件必须存在 ───────────────────────────
+
+if not os.path.exists(video_path):
+    print(f"[错误] 视频文件不存在: {video_path}")
+    sys.exit(1)
+if srt_path and not os.path.exists(srt_path):
+    print(f"[错误] SRT 文件不存在: {srt_path}")
+    sys.exit(1)
 
 # ─── SRT 解析 ────────────────────────────────────────────
 
-def parse_srt(srt_path):
+def parse_srt(p):
     """解析 SRT 文件，返回 [(start_us, end_us, text), ...]"""
     cues = []
-    with open(srt_path, 'r', encoding='utf-8-sig') as f:
+    with open(p, 'r', encoding='utf-8-sig') as f:
         content = f.read()
     blocks = re.split(r'\n\s*\n', content.strip())
     for block in blocks:
@@ -83,220 +97,201 @@ def parse_srt(srt_path):
         cues.append((start_us, end_us, text.strip()))
     return cues
 
-# ─── 创建草稿目录结构 ─────────────────────────────────────
+# ─── 受保护草稿（禁止覆盖正式名）─────────────────────────
 
-draft_dir = os.path.join(drafts_dir, draft_name)
+PROTECTED_DRAFTS = ["PYJIANYING_TEST_1V1T", "MIXCUT_EMPTY_TEMPLATE"]
+if final_name in PROTECTED_DRAFTS or "storybound" in final_name.lower():
+    print(f"[错误] 禁止使用受保护草稿名: {final_name}")
+    sys.exit(1)
 
-# ─── 保护重要草稿，不允许覆盖 ──────────────────────────────
+final_dir = os.path.join(drafts_dir, final_name)
 
-PROTECTED_DRAFTS = [
-    "PYJIANYING_TEST_1V1T",
-    "MIXCUT_EMPTY_TEMPLATE",
-]
+# ─── 临时草稿名（原子生成的关键）──────────────────────────
 
-# 检查 Storybound 相关草稿（不区分大小写）
-storybound_pattern = "storybound"
+ts_tag = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+temp_name = f"MIXCUT_TMP_{ts_tag}_{random.randint(1000, 9999)}"
+temp_dir = os.path.join(drafts_dir, temp_name)
 
-if os.path.exists(draft_dir):
-    # 保护重要测试草稿
-    if draft_name in PROTECTED_DRAFTS:
-        print(f"[错误] 禁止覆盖受保护草稿: {draft_name}")
-        print(f"  受保护草稿列表: {PROTECTED_DRAFTS}")
-        print(f"  请使用其他草稿名（--name MY_NEW_DRAFT）")
-        exit(1)
-    # 检查 Storybound 草稿
-    if storybound_pattern in draft_name.lower():
-        print(f"[错误] 禁止覆盖 Storybound 样本草稿: {draft_name}")
-        print(f"  请使用其他草稿名（--name MY_NEW_DRAFT）")
-        exit(1)
-    # 其他草稿直接删除重建（避免 FileExistsError）
-    print(f"[提示] 目录已存在，将删除后重建: {draft_name}")
-    shutil.rmtree(draft_dir)
 
-print(f"[1/5] 创建草稿目录: {draft_name}")
-df = DraftFolder(drafts_dir)
-sf = df.create_draft(draft_name, width=1920, height=1080, fps=30, allow_replace=True)
-print(f"  目录 + draft_meta_info.json 已创建")
+def cleanup_temp():
+    """删除临时草稿目录，确保失败时不在剪映里留下半成品。"""
+    if os.path.isdir(temp_dir):
+        try:
+            shutil.rmtree(temp_dir)
+            print(f"[清理] 已删除临时草稿目录: {temp_name}")
+        except Exception as ce:
+            print(f"[清理] 删除临时草稿目录失败（请手动删除 {temp_dir}）: {ce}")
 
-# ── 添加视频轨 ───────────────────────────────────────────
 
-print(f"[2/5] 添加视频轨...")
-sf.add_track(TrackType.video, "video")
+def fail(msg):
+    """打印错误、清理临时目录、以非零退出码返回。"""
+    print(f"[错误] {msg}")
+    cleanup_temp()
+    sys.exit(1)
 
-video_mat = VideoMaterial(path=video_path, material_name=os.path.basename(video_path))
-sf.add_material(video_mat)
 
-video_dur = video_mat.duration
-print(f"  视频素材: {video_path}")
-print(f"  时长: {video_dur} us ({video_dur/1000000:.2f}s)")
-print(f"  分辨率: {video_mat.width}x{video_mat.height}")
-if video_dur <= 0:
-    print(f"  [警告] video_dur={video_dur} 异常（<=0），字幕将全部被跳过！请检查视频文件是否损坏。")
+# ═══ 在临时目录中原子构建草稿 ═══════════════════════════════
+try:
+    print(f"[1/6] 创建临时草稿目录: {temp_name}")
+    df = DraftFolder(drafts_dir)
+    sf = df.create_draft(temp_name, width=1920, height=1080, fps=30, allow_replace=True)
+    print(f"  临时目录 + draft_meta_info.json 已创建")
 
-video_seg = VideoSegment(
-    material=video_mat,
-    target_timerange=Timerange(start=0, duration=video_dur)
-)
-sf.add_segment(video_seg, track_name="video")
-print(f"  视频片段已添加")
+    # ── 视频轨 ──────────────────────────────────────────
+    print(f"[2/6] 添加视频轨...")
+    sf.add_track(TrackType.video, "video")
+    video_mat = VideoMaterial(path=video_path, material_name=os.path.basename(video_path))
+    sf.add_material(video_mat)
+    video_dur = video_mat.duration
+    print(f"  视频素材: {video_path}")
+    print(f"  时长: {video_dur} us ({video_dur/1000000:.3f}s)")
+    print(f"  分辨率: {video_mat.width}x{video_mat.height}")
+    if not video_dur or video_dur <= 0:
+        fail(f"视频时长异常（video_dur={video_dur}），无法生成草稿。请检查 clean mp4 是否损坏。")
+    video_seg = VideoSegment(material=video_mat,
+                             target_timerange=Timerange(start=0, duration=video_dur))
+    sf.add_segment(video_seg, track_name="video")
+    print(f"  视频片段已添加（时长 {video_dur/1000000:.3f}s）")
 
-# ── 添加字幕轨 ───────────────────────────────────────────
-
-if srt_path and os.path.exists(srt_path):
-    print(f"[3/5] 添加字幕轨 from: {srt_path}")
-    sf.add_track(TrackType.text, "subtitle")
-
-    cues = parse_srt(srt_path)
-    print(f"[剪映字幕] SRT 路径: {srt_path}")
-    print(f"[剪映字幕] 解析到 {len(cues)} 条字幕")
-    print(f"[剪映字幕] 视频时长: {video_dur} us = {video_dur/1000000:.3f}s")
-    if cues:
-        ls0, le0, lt0 = cues[0]
-        lsN, leN, ltN = cues[-1]
-        print(f"[剪映字幕] 首条字幕（clamp前）: {ls0/1000000:.3f}s~{le0/1000000:.3f}s: {lt0[:60]}")
-        print(f"[剪映字幕] 末条字幕（clamp前）: {lsN/1000000:.3f}s~{leN/1000000:.3f}s: {ltN[:60]}")
-
-    # 字幕时间钳制到视频时长内：避免最后一条字幕被放到视频末尾之后而被剪映忽略
-    MIN_DUR_US = 300000  # 最短 0.3s
+    # ── 字幕轨 ──────────────────────────────────────────
     written = 0
-    skipped = 0
-    last_written = None
-    for i, (start_us, end_us, text) in enumerate(cues):
-        if not text.strip():
-            skipped += 1
-            continue
-        orig_start, orig_end = start_us, end_us
-        # 起点超出视频时长：往回挪，保证至少能显示一小段
-        if start_us >= video_dur:
-            start_us = max(0, video_dur - MIN_DUR_US)
-        # 终点超出视频时长：钳制到视频末尾
-        if end_us > video_dur:
-            end_us = video_dur
-        # 时长异常：给一个最小时长
-        if end_us - start_us < MIN_DUR_US:
-            end_us = min(video_dur, start_us + MIN_DUR_US)
-        if end_us <= start_us:
-            print(f"[剪映字幕] 字幕 [{i+1}] 跳过（时间无效 start={start_us} end={end_us} orig={orig_start}~{orig_end}）")
-            skipped += 1
-            continue
-        if orig_start != start_us or orig_end != end_us:
-            print(f"[剪映字幕] 字幕 [{i+1}] 已钳制: {orig_start/1000000:.3f}~{orig_end/1000000:.3f}s → {start_us/1000000:.3f}~{end_us/1000000:.3f}s")
-        text_seg = TextSegment(
-            text=text,
-            timerange=Timerange(start=start_us, duration=end_us - start_us)
-        )
-        sf.add_segment(text_seg, track_name="subtitle")
-        written += 1
-        last_written = (start_us, end_us, text)
-        print(f"[剪映字幕] 字幕 [{i+1}] {start_us/1000000:.2f}s~{end_us/1000000:.2f}s: {text[:40]}")
-    print(f"[剪映字幕] 写入完成：{written}/{len(cues)} 条，跳过 {skipped} 条（视频时长 {video_dur/1000000:.2f}s）")
-    if last_written:
-        lws, lwe, lwt = last_written
-        print(f"[剪映字幕] 最后写入字幕: {lws/1000000:.3f}s~{lwe/1000000:.3f}s: {lwt[:80]}")
-    if cues:
-        ls, le, lt = cues[-1]
-        print(f"[剪映字幕] SRT 末条（原始）: {ls/1000000:.3f}s~{le/1000000:.3f}s: {lt[:60]}")
-else:
-    print(f"[3/5] 无 SRT 字幕，跳过字幕轨")
+    expected_valid = 0
+    if srt_path and os.path.exists(srt_path):
+        print(f"[3/6] 添加字幕轨 from: {srt_path}")
+        sf.add_track(TrackType.text, "subtitle")
+        cues = parse_srt(srt_path)
+        valid_cues = [c for c in cues if c[2].strip()]
+        expected_valid = len(valid_cues)
+        print(f"[剪映字幕] SRT 解析到 {len(cues)} 条（有效 {expected_valid} 条），视频时长 {video_dur/1000000:.3f}s")
+        if cues:
+            lsN, leN, ltN = cues[-1]
+            print(f"[剪映字幕] SRT 末条（clamp前）: {lsN/1000000:.3f}s~{leN/1000000:.3f}s: {ltN[:60]}")
 
-# ─── 保存 ScriptFile（写入 draft_content.json）──────────────
+        MIN_DUR_US = 300000  # 最短 0.3s
+        skipped = 0
+        last_written = None
+        for i, (start_us, end_us, text) in enumerate(cues):
+            if not text.strip():
+                skipped += 1
+                continue
+            orig_start, orig_end = start_us, end_us
+            if start_us >= video_dur:
+                start_us = max(0, video_dur - MIN_DUR_US)
+            if end_us > video_dur:
+                end_us = video_dur
+            if end_us - start_us < MIN_DUR_US:
+                end_us = min(video_dur, start_us + MIN_DUR_US)
+            if end_us <= start_us:
+                # 钳制后仍然无效（视频极短）：放在 0~MIN，保证最后一条仍被写入
+                start_us, end_us = 0, min(video_dur, MIN_DUR_US)
+            if orig_start != start_us or orig_end != end_us:
+                print(f"[剪映字幕] 字幕 [{i+1}] 已钳制: "
+                      f"{orig_start/1000000:.3f}~{orig_end/1000000:.3f}s → "
+                      f"{start_us/1000000:.3f}~{end_us/1000000:.3f}s")
+            text_seg = TextSegment(text=text,
+                                   timerange=Timerange(start=start_us, duration=end_us - start_us))
+            sf.add_segment(text_seg, track_name="subtitle")
+            written += 1
+            last_written = (start_us, end_us, text)
+        print(f"[剪映字幕] 写入完成：{written}/{expected_valid} 条有效（跳过空文本 {skipped} 条）")
+        if last_written:
+            lws, lwe, lwt = last_written
+            print(f"[剪映字幕] 最后写入字幕: {lws/1000000:.3f}s~{lwe/1000000:.3f}s: {lwt[:80]}")
 
-print(f"[4/5] 保存 draft_content.json...")
-sf.save()  # 使用 save() 而非 dump()
+        # ── 字幕完整性闸门：写入数必须等于有效条数 ──
+        if written != expected_valid:
+            fail(f"字幕写入不完整：写入 {written} 条 ≠ 有效 {expected_valid} 条，判定导出失败。")
+        # ── 与前端期望条数交叉校验 ──
+        if expected_subs >= 0 and expected_valid != expected_subs:
+            fail(f"字幕条数与前端期望不符：SRT 有效 {expected_valid} 条 ≠ 期望 {expected_subs} 条。")
+    else:
+        print(f"[3/6] 无 SRT 字幕，仅生成视频轨")
+        if expected_subs > 0:
+            fail(f"前端期望 {expected_subs} 条字幕，但未收到 SRT，判定导出失败。")
 
-print(f"  draft_content.json 已保存")
+    # ── 保存 draft_content.json ─────────────────────────
+    print(f"[4/6] 保存 draft_content.json...")
+    sf.save()
+    content_path = os.path.join(temp_dir, 'draft_content.json')
+    if not os.path.exists(content_path):
+        fail("draft_content.json 未生成。")
+    with open(content_path, 'r', encoding='utf-8') as f:
+        draft_content = json.load(f)
+    timeline_id = draft_content.get('id', '')
+    draft_duration = draft_content.get('duration', 0)
 
-# ── 读取 draft_content.json 获取 timeline id ─────────────
+    # ── 校验轨道完整性 ──────────────────────────────────
+    video_tracks = [t for t in draft_content.get('tracks', []) if t.get('type') == 'video']
+    text_tracks = [t for t in draft_content.get('tracks', []) if t.get('type') == 'text']
+    if not video_tracks:
+        fail("draft_content.json 缺少视频轨。")
+    if written > 0 and not text_tracks:
+        fail(f"应写入 {written} 条字幕但 draft_content.json 缺少字幕轨。")
 
-content_path = os.path.join(draft_dir, 'draft_content.json')
-with open(content_path, 'r', encoding='utf-8') as f:
-    draft_content = json.load(f)
+    # ── 写 meta / layout / settings（用最终路径，便于 rename 后直接正确）──
+    print(f"[5/6] 写入 meta / layout / settings（指向正式名 {final_name}）...")
+    now_s = int(time.time())
+    now_ms = now_s * 1000
+    meta_path = os.path.join(temp_dir, 'draft_meta_info.json')
+    with open(meta_path, 'r', encoding='utf-8') as f:
+        meta = json.load(f)
+    meta['draft_name'] = final_name
+    meta['draft_id'] = timeline_id or meta.get('draft_id', '')
+    meta['draft_fold_path'] = final_dir
+    meta['draft_root_path'] = drafts_dir
+    meta['tm_duration'] = draft_duration
+    meta['tm_draft_create'] = now_ms
+    meta['tm_draft_modified'] = now_ms
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
 
-timeline_id = draft_content.get('id', '')
-print(f"  获取 timeline_id: {timeline_id}")
+    layout = {
+        "activeTimeline": timeline_id,
+        "dockItems": [{
+            "dockIndex": 0, "ratio": 1,
+            "timelineIds": [timeline_id], "timelineNames": ["时间线01"]
+        }],
+        "layoutOrientation": 1
+    }
+    with open(os.path.join(temp_dir, 'timeline_layout.json'), 'w', encoding='utf-8') as f:
+        json.dump(layout, f, ensure_ascii=False, indent=2)
 
-# ── 更新 draft_meta_info.json ────────────────────────────
+    settings_content = (
+        "[General]\n"
+        "cloud_last_modify_platform=windows\n"
+        f"draft_create_time={now_s}\n"
+        f"draft_last_edit_time={now_s}\n"
+        "real_edit_seconds=0\n"
+        "real_edit_keys=0\n"
+    )
+    with open(os.path.join(temp_dir, 'draft_settings'), 'w', encoding='utf-8') as f:
+        f.write(settings_content)
 
-meta_path = os.path.join(draft_dir, 'draft_meta_info.json')
-with open(meta_path, 'r', encoding='utf-8') as f:
-    meta = json.load(f)
+    # ── 原子提交：临时目录 → 正式名 ─────────────────────
+    print(f"[6/6] 校验通过，提交为正式草稿: {final_name}")
+    if os.path.isdir(final_dir):
+        # 仅在临时目录已校验通过后才删除旧的同名正式草稿
+        print(f"  覆盖同名旧草稿: {final_name}")
+        shutil.rmtree(final_dir)
+    os.rename(temp_dir, final_dir)
 
-now_s = int(time.time())
-now_ms = now_s * 1000
+except SystemExit:
+    raise
+except Exception as e:
+    import traceback
+    traceback.print_exc()
+    fail(f"生成草稿过程中出现异常: {e}")
 
-meta['draft_name'] = draft_name
-meta['draft_id'] = timeline_id or meta.get('draft_id', '')
-meta['draft_fold_path'] = draft_dir
-meta['draft_root_path'] = drafts_dir
-meta['tm_duration'] = draft_content.get('duration', 0)
-meta['tm_draft_create'] = now_ms
-meta['tm_draft_modified'] = now_ms
-
-with open(meta_path, 'w', encoding='utf-8') as f:
-    json.dump(meta, f, ensure_ascii=False, indent=2)
-
-print(f"  draft_meta_info.json 已更新（draft_name={draft_name}）")
-
-# ── 写入 timeline_layout.json ────────────────────────────
-
-layout = {
-    "activeTimeline": timeline_id,
-    "dockItems": [{
-        "dockIndex": 0,
-        "ratio": 1,
-        "timelineIds": [timeline_id],
-        "timelineNames": ["时间线01"]
-    }],
-    "layoutOrientation": 1
-}
-
-layout_path = os.path.join(draft_dir, 'timeline_layout.json')
-with open(layout_path, 'w', encoding='utf-8') as f:
-    json.dump(layout, f, ensure_ascii=False, indent=2)
-
-print(f"  timeline_layout.json 已创建")
-
-# ── 写入 draft_settings ──────────────────────────────────
-
-settings_path = os.path.join(draft_dir, 'draft_settings')
-settings_content = f"""[General]
-cloud_last_modify_platform=windows
-draft_create_time={now_s}
-draft_last_edit_time={now_s}
-real_edit_seconds=0
-real_edit_keys=0
-"""
-with open(settings_path, 'w', encoding='utf-8') as f:
-    f.write(settings_content)
-
-print(f"  draft_settings 已创建")
-
-# ─── 验证并列出文件 ───────────────────────────────────────
-
-files = []
-for root, dirs, filenames in os.walk(draft_dir):
-    for f in filenames:
-        fp = os.path.join(root, f)
-        size = os.path.getsize(fp)
-        rel = os.path.relpath(fp, draft_dir)
-        files.append(f"  {rel} ({size} bytes)")
-
-print(f"\n[5/5] 生成文件 ({len(files)} 个):")
-for f in sorted(files):
-    print(f)
-
-# 验证内容
+# ═══ 提交后验证（此时已是正式目录，不再有失败清理）═══════════
+content_path = os.path.join(final_dir, 'draft_content.json')
 with open(content_path, 'r', encoding='utf-8') as f:
     content = json.load(f)
 
-print(f"\n草稿验证:")
-print(f"  平台: {content.get('platform', {}).get('app_source')} {content.get('platform', {}).get('app_version')} ({content.get('platform', {}).get('os')})")
-print(f"  时长: {content.get('duration')} us ({content.get('duration', 0)/1000000:.2f}s)")
+print(f"\n草稿验证（正式目录）:")
+print(f"  目录: {final_dir}")
+print(f"  时长: {content.get('duration')} us ({content.get('duration', 0)/1000000:.3f}s)")
 print(f"  视频轨: {len([t for t in content.get('tracks', []) if t.get('type') == 'video'])}")
 print(f"  字幕轨: {len([t for t in content.get('tracks', []) if t.get('type') == 'text'])}")
-videos = content.get('materials', {}).get('videos', [])
-texts = content.get('materials', {}).get('texts', [])
-print(f"  视频素材: {len(videos)}")
-print(f"  字幕素材: {len(texts)}")
-
-print(f"\n完成: {draft_dir}")
+print(f"  字幕素材: {len(content.get('materials', {}).get('texts', []))}")
+print(f"  写入字幕条数: {written}")
+print(f"\n完成: {final_dir}")

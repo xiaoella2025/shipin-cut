@@ -723,8 +723,35 @@ def main():
                 else f"  [导出片段] {i+1}/{len(timeline)} id={seg_id} 含音频流={'是' if seg_has_audio else '否'}")
             if is_last:
                 log(f"  *** 最后片段音频检查 *** id={seg_id} has_audio={'是' if seg_has_audio else '否'} dur={seg_dur}")
+            if not seg_has_audio and src_has_audio:
+                # 源该区间“有原声”但切片丢了音频：优先重切以保留原声（绝不静音掩盖）
+                log(f"  [音频修复] 片段 {i+1} id={seg_id} 源有原声但切片无音频，改用输出端 seek 重切以保留原声")
+                recut = TEMP_DIR / f"seg_{i:04d}_r.mp4"
+                rstart = seg['startSec']
+                rend   = seg['endSec']
+                if src_dur_pre and rend > src_dur_pre:
+                    rend = src_dur_pre
+                rdur = max(0.0, rend - rstart)
+                # 输出端 seek（-i 在 -ss 前）对音频更精确，避免输入端 seek 落在音频帧间隙
+                rcmd = [FFMPEG, "-y", "-i", str(video_map[vidx]),
+                        "-ss", f"{rstart:.3f}", "-t", f"{rdur:.3f}",
+                        "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
+                        "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-ar", "44100", "-ac", "2", str(recut)]
+                try:
+                    run(rcmd)
+                    if has_audio_stream(recut):
+                        clip_out.unlink()
+                        recut.rename(clip_out)
+                        seg_has_audio = True
+                        log(f"  [音频修复] 片段 {i+1} 重切成功，已恢复原声")
+                    else:
+                        recut.unlink(missing_ok=True)
+                        log(f"  [音频修复] 片段 {i+1} 重切后仍无音频，回退补静音")
+                except Exception as ex:
+                    log(f"  [音频修复] 片段 {i+1} 重切失败（{ex}），回退补静音")
             if not seg_has_audio:
-                # 源该区间确实没有音频流时，补一条与视频等长的静音轨，保证 concat 后音频连续
+                # 源该区间确实没有音频流（或重切仍失败）时，补静音轨保证 concat 后音频连续
                 log(f"  片段 {i+1} 无音频流，补静音轨以保持拼接后音频连续")
                 silent_out = TEMP_DIR / f"seg_{i:04d}_a.mp4"
                 sd = seg_dur or (seg['endSec'] - seg['startSec'])

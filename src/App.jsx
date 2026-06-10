@@ -2704,6 +2704,12 @@ export default function App() {
   }
 
   function saveFinalSubtitles(compId) {
+    const rc = defaultRcFor(refinedComps[compId])
+    const subs = rc.finalSubtitles || []
+    const idx = compositions.findIndex(c => c.id === compId)
+    const last = subs[subs.length - 1]
+    // 保存只写当前 compId，绝不写全局；带 compId 日志便于核对方案隔离
+    console.log(`[字幕保存] compId=${compId} index=${idx} subtitles=${subs.length} first="${subs[0]?.text?.slice(0,20) ?? ''}" last="${last?.text?.slice(0,20) ?? ''}"`)
     updateRefinedComp(compId, {finalSubtitlesSavedAt: new Date().toISOString()})
     showToast('成品字幕已保存')
   }
@@ -3124,6 +3130,27 @@ export default function App() {
     ).join('\n\n') + '\n'
   }
 
+  // ── 统一导出状态入口：所有导出按钮都从这里取当前方案数据，杜绝跨方案串数据 ──
+  // 直接从 refinedComps[compId] 读最新 state（onChange 已实时写入，未保存编辑也在内），
+  // 绝不读取全局字幕、上一次方案字幕或右侧逐句池。
+  function getCurrentRefineExportState(compId, comp) {
+    const cid = compId || refineCompId
+    const c = comp || (cid ? compositions.find(x => x.id === cid) : null)
+    if (!cid || !c) return null
+    const rc = defaultRcFor(refinedComps[cid])
+    const idx = compositions.findIndex(x => x.id === cid)
+    const subs = (rc.finalSubtitles && rc.finalSubtitles.length > 0) ? rc.finalSubtitles : null
+    return {
+      compId: cid,
+      comp: c,
+      compositionIndex: idx,
+      compositionName: c.name,
+      rc,
+      finalSubtitles: subs,
+      exportSignature: buildBaseSig(cid, c, rc),
+    }
+  }
+
   // v0.9.1: POST 当前草稿到本地导出服务（仅构建 payload + 调 /export，返回 {ok,output,srt,message,error}）
   // forJianying=true → 强制 burnInSubtitle:false（Jianying 用干净视频，字幕由剪映字幕轨提供）
   async function doExportToLocalService(compId, comp, dedupOverride = null, forJianying = false) {
@@ -3280,17 +3307,18 @@ export default function App() {
 
   // ── 导出到剪映草稿（一体化：字幕始终从当前 finalSubtitles 现场生成，绝不复用旧 SRT）──
   async function exportToJianying(compId, comp) {
-    const targetCompId = compId || refineCompId
-    const targetComp   = comp   || (targetCompId ? compositions.find(c => c.id === targetCompId) : null)
-    if (!targetCompId || !targetComp) {
+    // 统一从 getCurrentRefineExportState 取当前方案数据，杜绝跨方案串数据
+    const exp = getCurrentRefineExportState(compId, comp)
+    if (!exp) {
       setJianyingExportStatus('error')
       setJianyingExportMsg('无法确定当前方案，请重新进入精修页')
       return
     }
+    const targetCompId = exp.compId
+    const targetComp   = exp.comp
+    const rc           = exp.rc
+    console.log(`[导出字幕] compId=${targetCompId} index=${exp.compositionIndex} name=${exp.compositionName} subtitles=${exp.finalSubtitles?.length ?? 0} first="${exp.finalSubtitles?.[0]?.text?.slice(0,20) ?? ''}" last="${exp.finalSubtitles?.[exp.finalSubtitles.length-1]?.text?.slice(0,20) ?? ''}"`)
     setJianyingExportStatus('loading')
-
-    // 读取当前方案的最新 rc（不依赖任何缓存状态）
-    const rc = defaultRcFor(refinedComps[targetCompId])
 
     // Jianying 专用 mp4 缓存：签名只含 compId + segments + voice
     // （字幕改动不影响干净 mp4，改变字幕只影响 SRT，SRT 始终实时生成）

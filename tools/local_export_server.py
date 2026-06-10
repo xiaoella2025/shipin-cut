@@ -91,6 +91,50 @@ def _find_local_tool(names, subdir):
     return None
 
 
+def _ffprobe_bin():
+    return _find_local_tool(["ffprobe.exe", "ffprobe"], "ffmpeg") or "ffprobe"
+
+
+def _probe_media_duration(path):
+    """用 ffprobe 获取媒体时长（秒）。失败返回 None。"""
+    try:
+        r = subprocess.run(
+            [_ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=20)
+        return round(float(r.stdout.strip()), 3)
+    except Exception:
+        return None
+
+
+def _probe_has_audio(path):
+    """用 ffprobe 检测文件是否含音频流。"""
+    try:
+        r = subprocess.run(
+            [_ffprobe_bin(), "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=20)
+        return "audio" in r.stdout
+    except Exception:
+        return False
+
+
+def _write_export_debug(payload):
+    """把导出自检数据写入 export_workspace/logs/export_debug_<ts>.json，避免靠截图猜。"""
+    try:
+        logs_dir = WORKSPACE / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        out = logs_dir / f"export_debug_{ts}.json"
+        payload = {"timestamp": ts, **payload}
+        out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[导出自检] 已写入报告: {out}", flush=True)
+        return str(out)
+    except Exception as e:
+        print(f"[导出自检] 写报告失败: {e}", flush=True)
+        return None
+
+
 def check_whisper():
     """
     检测本地语音识别组件是否可用。
@@ -663,6 +707,9 @@ class ExportHandler(BaseHTTPRequestHandler):
 
             # 将内联字幕内容写入临时 SRT 文件（确保每次使用当前方案字幕，绝不复用旧文件）
             temp_srt_path = None
+            expected_subs = -1
+            srt_block_count = 0
+            srt_last_block = ''
             if subtitle_content and subtitle_content.strip():
                 try:
                     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -672,14 +719,22 @@ class ExportHandler(BaseHTTPRequestHandler):
                     temp_srt.write_text(subtitle_content, encoding="utf-8")
                     temp_srt_path = str(temp_srt)
                     srt_blocks = [b.strip() for b in subtitle_content.split('\n\n') if b.strip()]
-                    last_block = srt_blocks[-1] if srt_blocks else ''
-                    print(f"[服务] 已写入临时字幕文件：{temp_srt.name}（{len(subtitle_content)} 字节，{len(srt_blocks)} 条）", flush=True)
-                    print(f"[服务] 临时 SRT 最后一条: {repr(last_block[:200])}", flush=True)
+                    srt_block_count = len(srt_blocks)
+                    expected_subs = srt_block_count  # 期望剪映写入的字幕条数
+                    srt_last_block = srt_blocks[-1] if srt_blocks else ''
+                    print(f"[服务] 已写入临时字幕文件：{temp_srt.name}（{len(subtitle_content)} 字节，{srt_block_count} 条）", flush=True)
+                    print(f"[服务] 临时 SRT 最后一条: {repr(srt_last_block[:200])}", flush=True)
                 except Exception as e:
                     print(f"[服务] 写入临时字幕文件失败：{e}，不传 SRT 继续", flush=True)
 
             # 优先使用内联生成的临时 SRT；回退到 srt_path（如有）
             actual_srt_path = temp_srt_path or srt_path
+
+            # clean mp4 自检：时长 + 音频流（写入 debug 报告）
+            mp4_duration = _probe_media_duration(mp4_path)
+            mp4_has_audio = _probe_has_audio(mp4_path)
+            print(f"[剪映导出] mp4={mp4_path}", flush=True)
+            print(f"[剪映导出] mp4 时长={mp4_duration}s 含音频流={mp4_has_audio}", flush=True)
 
             # 使用 pyjianying_probe venv
             venv_python = REPO_ROOT / "tmp" / "pyjianying_probe" / ".venv" / "Scripts" / "python"
@@ -688,6 +743,8 @@ class ExportHandler(BaseHTTPRequestHandler):
                 cmd += ["--srt", actual_srt_path]
             if draft_name:
                 cmd += ["--name", draft_name]
+            if expected_subs >= 0:
+                cmd += ["--expected-subs", str(expected_subs)]
             print(f"[服务] 生成剪映草稿：{cmd}", flush=True)
             try:
                 result = subprocess.run(
@@ -695,6 +752,10 @@ class ExportHandler(BaseHTTPRequestHandler):
                     encoding="utf-8", errors="replace", timeout=180,
                 )
             except Exception as e:
+                _write_export_debug({
+                    "mode": "jianying", "mp4": mp4_path, "error": f"调用失败: {e}",
+                    "finalStatus": "fail",
+                })
                 self._json({"ok": False, "error": f"调用失败: {e}"})
                 return
             # 打印子进程输出，方便排查
@@ -703,11 +764,35 @@ class ExportHandler(BaseHTTPRequestHandler):
             if result.stderr and result.stderr.strip():
                 print(f"[服务] 剪映脚本 stderr:\n{result.stderr[-1000:]}", flush=True)
             print(f"[服务] 剪映脚本退出码: {result.returncode}", flush=True)
+
+            # 从脚本输出解析实际写入字幕条数
+            written_subs = None
+            m_written = re.search(r"写入完成：(\d+)/", result.stdout or "")
+            if m_written:
+                written_subs = int(m_written.group(1))
+
+            debug_payload = {
+                "mode": "jianying",
+                "mp4": mp4_path,
+                "mp4Duration": mp4_duration,
+                "mp4HasAudio": mp4_has_audio,
+                "draftName": draft_name,
+                "tempSrt": temp_srt_path,
+                "srtCueCount": srt_block_count,
+                "srtLastCue": srt_last_block[:200],
+                "expectedSubs": expected_subs,
+                "jianyingWrittenSubtitleCount": written_subs,
+                "returncode": result.returncode,
+            }
+
             if result.returncode == 0:
                 # v0.9.10: 解析草稿名 + 推断草稿路径，给前端用
                 parsed_name, draft_dir = _resolve_jianying_draft_dir(
                     result.stdout or "", draft_name,
                 )
+                debug_payload["finalStatus"] = "success"
+                debug_payload["draftPath"] = draft_dir or ""
+                _write_export_debug(debug_payload)
                 self._json({
                     "ok": True,
                     "message": "剪映草稿生成成功，请在剪映中刷新查看",
@@ -715,7 +800,16 @@ class ExportHandler(BaseHTTPRequestHandler):
                     "draftPath": draft_dir or "",
                 })
             else:
-                self._json({"ok": False, "error": result.stderr or "生成失败"})
+                # 失败：脚本已自行清理临时草稿目录，这里只需如实返回失败
+                err_msg = (result.stderr or "").strip()
+                if not err_msg:
+                    # 错误细节多在 stdout（脚本用 print 输出）
+                    tail = (result.stdout or "").strip().splitlines()[-5:]
+                    err_msg = "\n".join(tail) or "生成失败"
+                debug_payload["finalStatus"] = "fail"
+                debug_payload["error"] = err_msg[:500]
+                _write_export_debug(debug_payload)
+                self._json({"ok": False, "error": err_msg})
             return
         if self.path == "/open-jianying":
             # 打开剪映软件（不直接打开指定草稿）

@@ -28,6 +28,8 @@ parser = argparse.ArgumentParser(description="成品 MP4 + SRT 生成剪映草�
 parser.add_argument("--mp4", help="成品 MP4 路径（可选，默认自动查找 output/ 最新 MP4）")
 parser.add_argument("--srt", help="SRT 字幕路径（可选，默认从 local-output/subtitles/ 匹配）")
 parser.add_argument("--name", help="草稿名称（可选，默认 MIXCUT_成品_YYYYMMDD_HHMMSS）")
+parser.add_argument("--expected-subs", type=int, default=-1,
+                    help="期望写入剪映字幕条数（透传给 pyJianYingDraft 脚本做完整性校验）")
 parser.add_argument(
     "--venv",
     default="F:/shipin-cut/tmp/pyjianying_probe/.venv/Scripts/python",
@@ -118,6 +120,8 @@ jianying_script = os.path.abspath(jianying_script)
 cmd = [args.venv, jianying_script, "--video", mp4_path, "--name", draft_name]
 if srt_path:
     cmd += ["--srt", srt_path]
+if args.expected_subs is not None and args.expected_subs >= 0:
+    cmd += ["--expected-subs", str(args.expected_subs)]
 
 # ─── 打印 SRT 关键信息（方便黑窗口排查）──────────────────────
 if srt_path and os.path.exists(srt_path):
