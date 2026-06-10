@@ -702,7 +702,14 @@ def main():
             sys.exit(1)
         speed = seg.get("speed", 1.0) or 1.0
         clip_out = TEMP_DIR / f"seg_{i:04d}.mp4"
-        log(f"裁剪片段 {i+1}/{len(timeline)}: {seg.get('label','?')} [{seg['startSec']:.2f}~{seg['endSec']:.2f}s] x{speed}")
+        is_last = (i == len(timeline) - 1)
+        seg_label = seg.get('label','?')
+        seg_id    = seg.get('id', '')
+        log(f"裁剪片段 {i+1}/{len(timeline)}{'(最后一段)' if is_last else ''}: {seg_label} id={seg_id} videoIndex={vidx} [{seg['startSec']:.3f}~{seg['endSec']:.3f}s] x{speed}")
+        log(f"  源文件: {video_map[vidx]}")
+        src_dur_pre = probe_duration(video_map[vidx])
+        src_has_audio = has_audio_stream(video_map[vidx])
+        log(f"  源文件时长: {src_dur_pre:.3f}s  源文件含音频: {'是' if src_has_audio else '否'}")
         ok = cut_segment(seg, video_map[vidx], clip_out, speed, crf=crf, keep_orig_audio=keep_orig_audio)
         if not ok:
             sys.exit(1)
@@ -710,10 +717,12 @@ def main():
         if keep_orig_audio:
             seg_has_audio = has_audio_stream(clip_out)
             seg_dur = probe_duration(clip_out)
-            log(f"  片段 {i+1} 自检：源={Path(video_map[vidx]).name} "
-                f"区间[{seg['startSec']:.2f}~{seg['endSec']:.2f}]s "
-                f"输出时长={seg_dur:.2f}s 含音频流={'是' if seg_has_audio else '否'}" if seg_dur
-                else f"  片段 {i+1} 自检：含音频流={'是' if seg_has_audio else '否'}")
+            log(f"  [导出片段] {i+1}/{len(timeline)} id={seg_id} 源={Path(video_map[vidx]).name} "
+                f"区间[{seg['startSec']:.3f}~{seg['endSec']:.3f}]s "
+                f"输出时长={seg_dur:.3f}s 含音频流={'是' if seg_has_audio else '否'}" if seg_dur
+                else f"  [导出片段] {i+1}/{len(timeline)} id={seg_id} 含音频流={'是' if seg_has_audio else '否'}")
+            if is_last:
+                log(f"  *** 最后片段音频检查 *** id={seg_id} has_audio={'是' if seg_has_audio else '否'} dur={seg_dur}")
             if not seg_has_audio:
                 # 源该区间确实没有音频流时，补一条与视频等长的静音轨，保证 concat 后音频连续
                 log(f"  片段 {i+1} 无音频流，补静音轨以保持拼接后音频连续")
@@ -752,6 +761,14 @@ def main():
         log(f"已合成配音 → {final_name}")
     else:
         shutil.copy2(concat_out, final_out)
+
+    # 成品自检日志
+    final_dur = probe_duration(final_out)
+    final_has_audio = has_audio_stream(final_out)
+    log(f"[成品自检] 路径: {final_out}")
+    log(f"[成品自检] 时长: {final_dur:.3f}s  含音频流: {'是' if final_has_audio else '否'}")
+    if not final_has_audio and keep_orig_audio:
+        log(f"[成品自检] 警告：最终输出无音频流，但 keep_orig_audio=True！请检查源文件音频。")
 
     # 清理临时片段
     for f in clip_paths:

@@ -646,6 +646,10 @@ class ExportHandler(BaseHTTPRequestHandler):
             srt_path = data.get("srt") or None
             subtitle_content = data.get("subtitleContent") or None  # 内联 SRT 文本（优先使用）
             draft_name = data.get("name") or None
+            print(f"[服务] /export-jianying 请求：mp4={mp4_path} hasSrt={'是' if srt_path else '否'} hasSubContent={'是' if subtitle_content else '否'} name={draft_name}", flush=True)
+            if subtitle_content:
+                srt_lines = subtitle_content.strip().split('\n')
+                print(f"[服务] subtitleContent 共 {len(srt_lines)} 行", flush=True)
             if not mp4_path:
                 self._json({"ok": False, "error": "缺少 mp4 参数"})
                 return
@@ -667,7 +671,10 @@ class ExportHandler(BaseHTTPRequestHandler):
                     temp_srt = temp_srt_dir / f"jianying_sub_{ts}.srt"
                     temp_srt.write_text(subtitle_content, encoding="utf-8")
                     temp_srt_path = str(temp_srt)
-                    print(f"[服务] 已写入临时字幕文件：{temp_srt.name}（{len(subtitle_content)} 字节）", flush=True)
+                    srt_blocks = [b.strip() for b in subtitle_content.split('\n\n') if b.strip()]
+                    last_block = srt_blocks[-1] if srt_blocks else ''
+                    print(f"[服务] 已写入临时字幕文件：{temp_srt.name}（{len(subtitle_content)} 字节，{len(srt_blocks)} 条）", flush=True)
+                    print(f"[服务] 临时 SRT 最后一条: {repr(last_block[:200])}", flush=True)
                 except Exception as e:
                     print(f"[服务] 写入临时字幕文件失败：{e}，不传 SRT 继续", flush=True)
 
@@ -685,11 +692,17 @@ class ExportHandler(BaseHTTPRequestHandler):
             try:
                 result = subprocess.run(
                     cmd, capture_output=True, text=True,
-                    encoding="utf-8", errors="replace", timeout=120,
+                    encoding="utf-8", errors="replace", timeout=180,
                 )
             except Exception as e:
                 self._json({"ok": False, "error": f"调用失败: {e}"})
                 return
+            # 打印子进程输出，方便排查
+            if result.stdout and result.stdout.strip():
+                print(f"[服务] 剪映脚本输出:\n{result.stdout[-3000:]}", flush=True)
+            if result.stderr and result.stderr.strip():
+                print(f"[服务] 剪映脚本 stderr:\n{result.stderr[-1000:]}", flush=True)
+            print(f"[服务] 剪映脚本退出码: {result.returncode}", flush=True)
             if result.returncode == 0:
                 # v0.9.10: 解析草稿名 + 推断草稿路径，给前端用
                 parsed_name, draft_dir = _resolve_jianying_draft_dir(

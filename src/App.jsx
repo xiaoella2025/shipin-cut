@@ -3322,7 +3322,18 @@ export default function App() {
     const freshSubs = (rc.finalSubtitles && rc.finalSubtitles.length > 0) ? rc.finalSubtitles : null
     const srtContent = (jianyingOpts.subtitle && freshSubs) ? buildSrtContent(freshSubs) : ''
 
-    console.log(`[剪映导出] compId=${targetCompId} subs=${freshSubs?.length ?? 0} srtLen=${srtContent.length} cacheHit=${jianyingCacheHit} sig=${jianyingMp4Sig.slice(0, 60)}`)
+    const lastSub = freshSubs?.[freshSubs.length - 1]
+    const srtBlocks = srtContent ? srtContent.split('\n\n').filter(b => b.trim()) : []
+    const lastSrtBlock = srtBlocks[srtBlocks.length - 1] || ''
+    console.log(`[剪映导出] compId=${targetCompId} subs=${freshSubs?.length ?? 0} srtLen=${srtContent.length} srtBlocks=${srtBlocks.length} cacheHit=${jianyingCacheHit}`)
+    console.log(`[剪映导出] sig=${jianyingMp4Sig.slice(0, 80)}`)
+    console.log(`[剪映导出] mp4=${mp4ToUse}`)
+    if (lastSub) {
+      console.log(`[剪映导出] 最后字幕: start=${lastSub.start?.toFixed(3)}s end=${lastSub.end?.toFixed(3)}s text="${lastSub.text?.slice(0,60)}"`)
+    }
+    if (lastSrtBlock) {
+      console.log(`[剪映导出] SRT末条: ${lastSrtBlock.slice(0, 200)}`)
+    }
 
     const buildJianyingBody = (mp4) => JSON.stringify({
       mp4,

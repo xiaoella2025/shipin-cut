@@ -119,12 +119,31 @@ cmd = [args.venv, jianying_script, "--video", mp4_path, "--name", draft_name]
 if srt_path:
     cmd += ["--srt", srt_path]
 
+# ─── 打印 SRT 关键信息（方便黑窗口排查）──────────────────────
+if srt_path and os.path.exists(srt_path):
+    try:
+        with open(srt_path, 'r', encoding='utf-8-sig') as f:
+            srt_raw = f.read()
+        blocks = [b.strip() for b in srt_raw.split('\n\n') if b.strip()]
+        print(f"[调用前验证] SRT 路径: {srt_path}")
+        print(f"[调用前验证] SRT 共 {len(blocks)} 条字幕")
+        if blocks:
+            last_block = blocks[-1]
+            print(f"[调用前验证] 最后一条字幕:\n{last_block}")
+    except Exception as ex:
+        print(f"[调用前验证] 读取 SRT 失败: {ex}")
+else:
+    print(f"[调用前验证] 无 SRT 字幕")
+
 print(f"\n[调用剪映草稿生成] {' '.join(cmd)}")
 print("─" * 60)
 
 try:
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     print(result.stdout)
+    if result.stderr:
+        print(f"[stderr] {result.stderr[:500]}")
     print("─" * 60)
     print(f"[成功] 剪映草稿已生成: {draft_name}")
     print(f"  成品视频: {mp4_path}")
@@ -134,9 +153,14 @@ try:
     print("  请重新打开剪映专业版查看草稿")
 except subprocess.CalledProcessError as e:
     print("─" * 60)
-    print(f"[WARNING] 剪映草稿生成失败（但成品 MP4 已正常导出）")
+    print(f"[错误] 剪映草稿生成失败（pyJianYingDraft 脚本返回非零退出码）")
     print(f"  成品视频: {mp4_path}")
     if srt_path:
         print(f"  字幕文件: {srt_path}")
-    print(f"  错误信息: {e.stderr}")
-    print("  剪映草稿生成失败，不影响成品视频导出流程")
+    stdout_out = (e.stdout or '').strip()
+    stderr_out = (e.stderr or '').strip()
+    if stdout_out:
+        print(f"  stdout: {stdout_out[-1000:]}")
+    if stderr_out:
+        print(f"  stderr: {stderr_out[-1000:]}")
+    sys.exit(1)  # 向上层（local_export_server.py）传播失败，不能悄悄返回 0
