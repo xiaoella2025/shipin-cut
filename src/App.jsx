@@ -3402,6 +3402,13 @@ export default function App() {
           }
           return
         }
+        // 时长异常等校验失败：清掉干净 mp4 缓存，避免下次重试复用同一份坏文件，确保重新点击必定重新生成
+        const durationMismatch = /时长异常/.test(data.error || '')
+        if (durationMismatch) {
+          console.log(`[剪映导出] 检测到时长异常，已清除缓存 sig=${jianyingMp4Sig.slice(0,80)} mp4=${mp4ToUse}，下次将强制重新生成`)
+          setLastJianyingMp4('')
+          setLastJianyingMp4Sig('')
+        }
         setJianyingExportStatus('error')
         const raw = data.error || '生成失败，请重试'
         setJianyingExportMsg(raw.length > 200 ? '剪映草稿生成失败，请查看本地服务窗口日志。' : raw)

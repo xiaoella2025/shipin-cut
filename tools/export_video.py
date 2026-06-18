@@ -748,6 +748,15 @@ def main():
         ok = cut_segment(seg, video_map[vidx], clip_out, speed, crf=crf, keep_orig_audio=keep_orig_audio)
         if not ok:
             sys.exit(1)
+        # 逐片段时长自检：每个片段切完后立即核对视频流时长，避免某一段的偏差被 concat 稀释/掩盖
+        expected_seg_dur = (seg['endSec'] - seg['startSec']) / max(speed, 0.01)
+        seg_vid_dur = probe_video_stream_duration(clip_out)
+        log(f"  [片段时长自检] {i+1}/{len(timeline)} id={seg_id} 预期={expected_seg_dur:.3f}s 实际视频流={seg_vid_dur}s")
+        if seg_vid_dur is not None and abs(seg_vid_dur - expected_seg_dur) > 0.3:
+            err(f"片段 {i+1}/{len(timeline)} id={seg_id} 源={Path(video_map[vidx]).name} "
+                f"区间[{seg['startSec']:.3f}~{seg['endSec']:.3f}]s x{speed} 时长异常："
+                f"预期 {expected_seg_dur:.3f}s，实际 {seg_vid_dur:.3f}s。已停止生成，不进行拼接。")
+            sys.exit(1)
         # 音频流自检：无额外配音时每个片段都应保留原声（含最后一个片段）
         if keep_orig_audio:
             seg_has_audio = has_audio_stream(clip_out)
@@ -767,19 +776,33 @@ def main():
                 if src_dur_pre and rend > src_dur_pre:
                     rend = src_dur_pre
                 rdur = max(0.0, rend - rstart)
+                # 重切必须套用与原切片相同的变速，否则丢音频片段的输出时长会与方案预期脱节
+                r_vf = "setpts=PTS-STARTPTS"
+                r_af = "asetpts=PTS-STARTPTS"
+                if abs(speed - 1.0) > 0.01:
+                    r_pts_val = 1.0 / speed
+                    r_vf = f"setpts={r_pts_val:.6f}*(PTS-STARTPTS)"
+                    r_af = _build_atempo(speed)
                 # 输出端 seek（-i 在 -ss 前）对音频更精确，避免输入端 seek 落在音频帧间隙
                 rcmd = [FFMPEG, "-y", "-i", str(video_map[vidx]),
                         "-ss", f"{rstart:.3f}", "-t", f"{rdur:.3f}",
+                        "-vf", r_vf, "-af", r_af,
                         "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
                         "-pix_fmt", "yuv420p",
                         "-c:a", "aac", "-ar", "44100", "-ac", "2", str(recut)]
                 try:
                     run(rcmd)
+                    recut_dur = probe_video_stream_duration(recut)
+                    expected_seg_dur = (seg['endSec'] - seg['startSec']) / max(speed, 0.01)
+                    if recut_dur is not None and abs(recut_dur - expected_seg_dur) > 0.3:
+                        err(f"片段 {i+1} id={seg_id} 音频修复重切后时长异常："
+                            f"预期 {expected_seg_dur:.3f}s，实际 {recut_dur:.3f}s。已停止生成。")
+                        sys.exit(1)
                     if has_audio_stream(recut):
                         clip_out.unlink()
                         recut.rename(clip_out)
                         seg_has_audio = True
-                        log(f"  [音频修复] 片段 {i+1} 重切成功，已恢复原声")
+                        log(f"  [音频修复] 片段 {i+1} 重切成功，已恢复原声（时长={recut_dur}s）")
                     else:
                         recut.unlink(missing_ok=True)
                         log(f"  [音频修复] 片段 {i+1} 重切后仍无音频，回退补静音")
