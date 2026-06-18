@@ -410,27 +410,44 @@ def _build_atempo(speed):
 
 # ── 拼接片段列表 ──────────────────────────────────────────────────────────────
 def concat_segments(clip_paths, out_path, has_audio=False):
-    """用 concat demuxer 拼接视频片段（has_audio=True 时同时拼接音频轨）"""
-    list_file = TEMP_DIR / "concat_list.txt"
-    with open(list_file, "w", encoding="utf-8") as f:
-        for p in clip_paths:
-            f.write(f"file '{p.resolve()}'\n")
-    cmd = [
-        FFMPEG, "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", list_file,
-    ]
+    """
+    用 concat filter（而非 concat demuxer）拼接视频片段。
+
+    concat demuxer 是按每个输入文件自身的容器/时间戳元数据来拼接的："看起来"
+    每段单独探测时长都正确，但多段拼接后总时长仍可能被算多——这是 ffmpeg 的已知
+    问题，尤其是片段由 libx264 编码、带 B 帧时容器层 duration/PTS 元数据容易与
+    真实可播放帧数不完全一致，多段相加误差会被放大。concat filter 会把每个输入
+    完整解码后按真实帧序拼接，不依赖容器层 duration 元数据，从根上避免这种"单段
+    探测正常、拼接后总时长却偏长"的情况。
+    """
+    n = len(clip_paths)
+    if n == 0:
+        raise ValueError("concat_segments: 片段列表为空")
+
+    cmd = [FFMPEG, "-y"]
+    for p in clip_paths:
+        cmd += ["-i", str(p)]
+
     if has_audio:
-        # 重新编码视频以消除片段间 DTS/PTS 漂移；音频同步编码规范时间戳
-        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-ar", "44100", "-ac", "2"]
+        parts = "".join(f"[{i}:v:0][{i}:a:0]" for i in range(n))
+        filter_complex = f"{parts}concat=n={n}:v=1:a=1[outv][outa]"
+        cmd += [
+            "-filter_complex", filter_complex,
+            "-map", "[outv]", "-map", "[outa]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-ar", "44100", "-ac", "2",
+        ]
     else:
-        # 无音频时仍重新编码消除时间戳漂移
-        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                "-pix_fmt", "yuv420p", "-an"]
-    cmd += [out_path]
+        parts = "".join(f"[{i}:v:0]" for i in range(n))
+        filter_complex = f"{parts}concat=n={n}:v=1:a=0[outv]"
+        cmd += [
+            "-filter_complex", filter_complex,
+            "-map", "[outv]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-an",
+        ]
+    cmd += [str(out_path)]
     run(cmd)
 
 # ── 混合配音 ──────────────────────────────────────────────────────────────────
@@ -819,11 +836,23 @@ def main():
         # 逐片段时长自检：每个片段切完后立即核对视频流时长，避免某一段的偏差被 concat 稀释/掩盖
         expected_seg_dur = (seg['endSec'] - seg['startSec']) / max(speed, 0.01)
         seg_vid_dur = probe_video_stream_duration(clip_out)
-        log(f"  [片段时长自检] {i+1}/{len(timeline)} id={seg_id} 预期={expected_seg_dur:.3f}s 实际视频流={seg_vid_dur}s")
+        seg_fmt_dur = probe_duration(clip_out)
+        log(f"  [片段时长自检] {i+1}/{len(timeline)} id={seg_id} 预期={expected_seg_dur:.3f}s "
+            f"实际视频流={seg_vid_dur}s 容器={seg_fmt_dur}s")
         if seg_vid_dur is not None and abs(seg_vid_dur - expected_seg_dur) > 0.3:
             msg = (f"片段 {i+1}/{len(timeline)} id={seg_id} 源={Path(video_map[vidx]).name} "
                    f"区间[{seg['startSec']:.3f}~{seg['endSec']:.3f}]s x{speed} 时长异常："
-                   f"预期 {expected_seg_dur:.3f}s，实际 {seg_vid_dur:.3f}s。已停止生成，不进行拼接。")
+                   f"预期 {expected_seg_dur:.3f}s，实际视频流 {seg_vid_dur:.3f}s。已停止生成，不进行拼接。")
+            err(msg)
+            record_segment(i + 1, len(timeline), seg, expected_seg_dur, clip_out,
+                           seg_vid_dur, None, has_audio_stream(video_map[vidx]), None,
+                           False, None, cum_pos, cum_pos + expected_seg_dur)
+            write_debug_report("fail", msg)
+            sys.exit(1)
+        if seg_fmt_dur is not None and abs(seg_fmt_dur - expected_seg_dur) > 0.3:
+            msg = (f"片段 {i+1}/{len(timeline)} id={seg_id} 源={Path(video_map[vidx]).name} "
+                   f"区间[{seg['startSec']:.3f}~{seg['endSec']:.3f}]s x{speed} 容器时长异常："
+                   f"预期 {expected_seg_dur:.3f}s，实际容器时长 {seg_fmt_dur:.3f}s。已停止生成，不进行拼接。")
             err(msg)
             record_segment(i + 1, len(timeline), seg, expected_seg_dur, clip_out,
                            seg_vid_dur, None, has_audio_stream(video_map[vidx]), None,
@@ -914,6 +943,23 @@ def main():
         cum_pos += expected_seg_dur
         clip_paths.append(clip_out)
 
+    # 拼接前自检：记录每个待拼接片段自身的时长，便于排查是否有旧文件/源文件混入
+    concat_inputs_report = []
+    concat_input_sum = 0.0
+    for cp in clip_paths:
+        cp_vid = probe_video_stream_duration(cp)
+        cp_fmt = probe_duration(cp)
+        concat_input_sum += (cp_vid or cp_fmt or 0.0)
+        concat_inputs_report.append({
+            "path": str(cp), "videoStreamDuration": cp_vid, "formatDuration": cp_fmt,
+        })
+    log(f"[拼接前自检] {len(clip_paths)} 个待拼接片段，逐段时长之和={concat_input_sum:.3f}s")
+    _STAGE_REPORT.append({
+        "stage": "pre_concat_inputs", "path": None,
+        "expectedDuration": None, "videoStreamDuration": None, "formatDuration": None,
+        "drift": None, "inputs": concat_inputs_report, "inputDurationSum": round(concat_input_sum, 3),
+    })
+
     # 拼接
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe = safe_name(comp_name)
@@ -940,6 +986,12 @@ def main():
     if actual_vid_dur is not None and abs(actual_vid_dur - expected_dur) > 0.5:
         msg = (f"导出视频时长异常（拼接阶段）：方案预计 {expected_dur:.1f}s，"
                f"但拼接后视频轨为 {actual_vid_dur:.1f}s。已停止生成剪映草稿。")
+        err(msg)
+        write_debug_report("fail", msg)
+        sys.exit(1)
+    if actual_fmt_dur is not None and abs(actual_fmt_dur - expected_dur) > 0.5:
+        msg = (f"导出视频时长异常（拼接阶段，容器时长）：方案预计 {expected_dur:.1f}s，"
+               f"但拼接后容器时长为 {actual_fmt_dur:.1f}s。已停止生成剪映草稿。")
         err(msg)
         write_debug_report("fail", msg)
         sys.exit(1)
