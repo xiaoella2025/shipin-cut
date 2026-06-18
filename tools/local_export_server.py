@@ -17,7 +17,7 @@ import tempfile
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 SCRIPT_DIR     = Path(__file__).resolve().parent
 REPO_ROOT      = SCRIPT_DIR.parent
@@ -1095,7 +1095,7 @@ class ExportHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    server = HTTPServer((HOST, PORT), ExportHandler)
+    server = ThreadingHTTPServer((HOST, PORT), ExportHandler)
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)

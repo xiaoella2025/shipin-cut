@@ -39,39 +39,39 @@ const DEDUP_META = {
 
 const SEGMENT_TEMPLATES = [
   [
-    { type:'开场',     sub:'欢迎来到我的频道，今天分享一道超简单的家常菜' },
-    { type:'食材准备', sub:'准备食材：鸡蛋两个、葱花适量、生抽一勺' },
-    { type:'制作步骤', sub:'热锅冷油，下葱花爆香，加入鸡蛋翻炒' },
-    { type:'成品展示', sub:'出锅！嫩滑可口，配饭绝了' },
-    { type:'结尾',     sub:'记得关注我，每周更新新食谱' },
+    { type:'开场' },
+    { type:'食材准备' },
+    { type:'制作步骤' },
+    { type:'成品展示' },
+    { type:'结尾' },
   ],
   [
-    { type:'开场',     sub:'今天带大家探店，这家藏在小巷子里的宝藏小店' },
-    { type:'环境介绍', sub:'店面不大但很有设计感，灯光氛围超好' },
-    { type:'产品展示', sub:'点了招牌拿铁和芋泥蛋糕，颜值很高' },
-    { type:'评价',     sub:'味道惊喜！奶茶浓郁不甜腻，蛋糕层次丰富' },
-    { type:'结尾',     sub:'探店完毕，喜欢的去打卡，下期见' },
+    { type:'开场' },
+    { type:'环境介绍' },
+    { type:'产品展示' },
+    { type:'评价' },
+    { type:'结尾' },
   ],
   [
-    { type:'开场',     sub:'今天教大家一个实用的技巧，亲测有效' },
-    { type:'背景介绍', sub:'很多人都遇到这个问题，其实方法很简单' },
-    { type:'步骤演示', sub:'第一步：先把材料准备好，按顺序排列' },
-    { type:'步骤演示', sub:'第二步：关键在这里，注意力度要均匀' },
-    { type:'结尾',     sub:'学会了吗？有问题在评论区问我' },
+    { type:'开场' },
+    { type:'背景介绍' },
+    { type:'步骤演示' },
+    { type:'步骤演示' },
+    { type:'结尾' },
   ],
   [
-    { type:'开场',     sub:'今天开箱测评这款网红产品，值不值得买' },
-    { type:'外观展示', sub:'包装精致，做工很好，质感不错' },
-    { type:'功能测试', sub:'实际使用感受，效果比想象中好很多' },
-    { type:'对比评测', sub:'和同类产品对比，性价比明显更高' },
-    { type:'总结',     sub:'综合来看值得购买，链接在评论区' },
+    { type:'开场' },
+    { type:'外观展示' },
+    { type:'功能测试' },
+    { type:'对比评测' },
+    { type:'总结' },
   ],
   [
-    { type:'开场',     sub:'这次来到了一个冷门但绝美的景点' },
-    { type:'景色展示', sub:'远处山峦叠嶂，云雾缭绕，太美了' },
-    { type:'游览记录', sub:'沿着步道走了两个小时，风景各有不同' },
-    { type:'美食打卡', sub:'当地特色小吃，价格实惠味道正宗' },
-    { type:'结尾',     sub:'强烈推荐这个地方，不堵车不拥挤' },
+    { type:'开场' },
+    { type:'景色展示' },
+    { type:'游览记录' },
+    { type:'美食打卡' },
+    { type:'结尾' },
   ],
 ]
 
@@ -295,39 +295,6 @@ function generateSegmentsFromSubtitles(video, vidIndex, subs) {
       selected:    true,  // 真实字幕分段默认全选
     }
   })
-}
-
-function generateSubtitles(video, vidIndex) {
-  const tpl   = SEGMENT_TEMPLATES[vidIndex % SEGMENT_TEMPLATES.length]
-  const dur   = video?.dur > 0 ? video.dur : 60
-  const count = tpl.length
-  const EXTRA = [
-    ['精彩内容即将开始', '请跟着我一起来'],
-    ['注意这里的细节', '大家可以暂停看'],
-    ['关键步骤来了', '注意力度要均匀'],
-    ['接下来非常重要', '按照这个方式操作'],
-    ['这里是重点', '认真学习这个步骤'],
-  ]
-  const extras = EXTRA[vidIndex % EXTRA.length]
-  const subs   = []
-  tpl.forEach((seg, si) => {
-    const segStart = (dur / count) * si
-    const segEnd   = (dur / count) * (si + 1)
-    const segDur   = segEnd - segStart
-    const subCount = si % 2 === 0 ? 2 : 3
-    for (let i = 0; i < subCount; i++) {
-      const subDur = segDur / subCount
-      const start  = segStart + subDur * i
-      const end    = start + subDur * 0.85
-      subs.push({
-        id:       `${video.id}-sub${si}-${i}`,
-        startSec: +start.toFixed(2),
-        endSec:   +end.toFixed(2),
-        text:     i === 0 ? seg.sub : (extras[i - 1] || `${seg.type} 内容 ${i}`),
-      })
-    }
-  })
-  return subs
 }
 
 // Build composition plans from selected segments with type-aware, diversified generation
@@ -1694,7 +1661,7 @@ export default function App() {
     })
     const t=setTimeout(startNextAnalysis, 500)
     return ()=>clearTimeout(t)
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, uploadedVideos]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── sequential analysis: base segments first, whisper runs in background ──
 
@@ -2317,6 +2284,15 @@ export default function App() {
 
   function handleGenerate() {
     if (isGenerating) return
+    const videosWithoutRealSubtitles = uploadedVideos.filter(v => {
+      const ana = videoAnalysisRef.current[v.id]
+      return ana?.subtitleStatus !== 'real' || !(ana?.subtitles?.length > 0)
+    })
+    if (videosWithoutRealSubtitles.length) {
+      const names = videosWithoutRealSubtitles.map(v => v.name).join('、')
+      showToast(`字幕识别未完成或失败，请先完成真实字幕识别。${names ? `未完成：${names}` : ''}`)
+      return
+    }
     setPlaying(false); setGen(true); setDone(false); setGenProg(0); setGenStep(GEN_STEPS[0])
     let p=0, si=0
     const iv=setInterval(()=>{
