@@ -3061,6 +3061,10 @@ export default function App() {
     showToast('方案已保存')
   }
 
+  // 导出管线版本号：每次修改 clean mp4 生成逻辑（export_video.py）后递增，
+  // 确保旧会话里缓存的 lastJianyingMp4 签名必定与新签名不同，强制重新生成，不会复用改动前的坏文件。
+  const CLEAN_EXPORT_VERSION = 'duration-fix-v3'
+
   // ── 导出签名：compId + segments + voice（不含字幕）用于 Jianying 干净 mp4 缓存 ──
   function buildBaseSig(compId, comp, rc) {
     const idx = compositions.findIndex(c => c.id === compId)
@@ -3081,7 +3085,7 @@ export default function App() {
     }
     const voiceKey = rc.voice ? (rc.voice.storedFileName || rc.voice.fileName || '') : ''
     const muteKey = rc.audioPolicy?.muteOriginalVideo ? '1' : '0'
-    return `${compId}@${idx}|${segKey}|v:${voiceKey}|mo:${muteKey}`
+    return `${compId}@${idx}|${segKey}|v:${voiceKey}|mo:${muteKey}|ver:${CLEAN_EXPORT_VERSION}`
   }
 
   // ── 全量签名：基础签名 + finalSubtitles + burnInSub，用于普通 mp4 缓存 ──

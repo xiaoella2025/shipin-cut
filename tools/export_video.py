@@ -15,6 +15,14 @@ import re
 from pathlib import Path
 from datetime import datetime
 
+# Windows 控制台默认编码常是 GBK/CP936；父进程(local_export_server.py)按 UTF-8 解码子进程
+# 输出，编码不一致会让中文日志/错误信息在前端红条里变成乱码。强制本进程标准输出/错误用 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # ── 路径配置 ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR  = Path(__file__).resolve().parent
 REPO_ROOT   = SCRIPT_DIR.parent
@@ -271,6 +279,63 @@ def probe_audio_stream_duration(path):
     except Exception:
         pass
     return None
+
+# ── 分段/分阶段时长追踪：定位 clean mp4 在哪个后处理阶段被拉长 ───────────────────
+_SEGMENT_REPORT = []
+_STAGE_REPORT = []
+
+def record_segment(idx, total, seg, expected_dur, out_path, video_dur, audio_dur,
+                    src_has_audio, out_has_audio, audio_repair, repair_video_dur,
+                    cum_start, cum_end):
+    _SEGMENT_REPORT.append({
+        "index": idx, "total": total,
+        "segId": seg.get("id") or seg.get("esId") or seg.get("segIdx"),
+        "videoIndex": seg.get("videoIndex"),
+        "sourceStart": seg.get("startSec"), "sourceEnd": seg.get("endSec"),
+        "speed": seg.get("speed", 1.0) or 1.0,
+        "expectedSegmentDuration": round(expected_dur, 3),
+        "outputSegmentPath": str(out_path),
+        "outputVideoDuration": video_dur,
+        "outputAudioDuration": audio_dur,
+        "sourceHasAudio": src_has_audio,
+        "outputHasAudio": out_has_audio,
+        "triggeredAudioRepair": audio_repair,
+        "repairOutputVideoDuration": repair_video_dur,
+        "cumulativeExpectedStart": round(cum_start, 3),
+        "cumulativeExpectedEnd": round(cum_end, 3),
+    })
+
+def record_stage(stage, path, expected_dur):
+    """探测某后处理阶段产出文件的视频流时长，记录并返回该时长（便于上层判断是否需要 hard-fail）。"""
+    vid_dur = probe_video_stream_duration(path)
+    fmt_dur = probe_duration(path)
+    drift = (round(vid_dur - expected_dur, 3) if vid_dur is not None else None)
+    _STAGE_REPORT.append({
+        "stage": stage, "path": str(path),
+        "expectedDuration": round(expected_dur, 3),
+        "videoStreamDuration": vid_dur,
+        "formatDuration": fmt_dur,
+        "drift": drift,
+    })
+    log(f"[阶段时长追踪] {stage}: 视频流={vid_dur}s 容器={fmt_dur}s 预期={expected_dur:.3f}s "
+        f"漂移={drift if drift is not None else 'N/A'}s")
+    return vid_dur
+
+def write_debug_report(status, error=None):
+    """把逐片段 + 逐阶段时长数据写入 export_workspace/logs/，供排查 clean mp4 在哪一步被拉长。"""
+    try:
+        logs_dir = WORKSPACE / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        out = logs_dir / f"export_debug_segments_{ts}.json"
+        payload = {
+            "timestamp": ts, "status": status, "error": error,
+            "segments": _SEGMENT_REPORT, "stages": _STAGE_REPORT,
+        }
+        out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        log(f"[导出自检] 逐段/逐阶段时长报告已写入: {out}")
+    except Exception as e:
+        log(f"[导出自检] 写报告失败: {e}")
 
 def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=False):
     """
@@ -730,7 +795,10 @@ def main():
 
     # 逐片段裁剪
     clip_paths = []
+    cum_pos = 0.0
     for i, seg in enumerate(timeline):
+        audio_repair_triggered = False
+        repair_video_dur = None
         vidx = seg.get("videoIndex")
         if vidx is None or vidx not in video_map:
             err(f"片段 {i} 的 videoIndex={vidx} 无法匹配素材")
@@ -753,9 +821,14 @@ def main():
         seg_vid_dur = probe_video_stream_duration(clip_out)
         log(f"  [片段时长自检] {i+1}/{len(timeline)} id={seg_id} 预期={expected_seg_dur:.3f}s 实际视频流={seg_vid_dur}s")
         if seg_vid_dur is not None and abs(seg_vid_dur - expected_seg_dur) > 0.3:
-            err(f"片段 {i+1}/{len(timeline)} id={seg_id} 源={Path(video_map[vidx]).name} "
-                f"区间[{seg['startSec']:.3f}~{seg['endSec']:.3f}]s x{speed} 时长异常："
-                f"预期 {expected_seg_dur:.3f}s，实际 {seg_vid_dur:.3f}s。已停止生成，不进行拼接。")
+            msg = (f"片段 {i+1}/{len(timeline)} id={seg_id} 源={Path(video_map[vidx]).name} "
+                   f"区间[{seg['startSec']:.3f}~{seg['endSec']:.3f}]s x{speed} 时长异常："
+                   f"预期 {expected_seg_dur:.3f}s，实际 {seg_vid_dur:.3f}s。已停止生成，不进行拼接。")
+            err(msg)
+            record_segment(i + 1, len(timeline), seg, expected_seg_dur, clip_out,
+                           seg_vid_dur, None, has_audio_stream(video_map[vidx]), None,
+                           False, None, cum_pos, cum_pos + expected_seg_dur)
+            write_debug_report("fail", msg)
             sys.exit(1)
         # 音频流自检：无额外配音时每个片段都应保留原声（含最后一个片段）
         if keep_orig_audio:
@@ -768,6 +841,7 @@ def main():
             if is_last:
                 log(f"  *** 最后片段音频检查 *** id={seg_id} has_audio={'是' if seg_has_audio else '否'} dur={seg_dur}")
             if not seg_has_audio and src_has_audio:
+                audio_repair_triggered = True
                 # 源该区间“有原声”但切片丢了音频：优先重切以保留原声（绝不静音掩盖）
                 log(f"  [音频修复] 片段 {i+1} id={seg_id} 源有原声但切片无音频，改用输出端 seek 重切以保留原声")
                 recut = TEMP_DIR / f"seg_{i:04d}_r.mp4"
@@ -793,10 +867,16 @@ def main():
                 try:
                     run(rcmd)
                     recut_dur = probe_video_stream_duration(recut)
+                    repair_video_dur = recut_dur
                     expected_seg_dur = (seg['endSec'] - seg['startSec']) / max(speed, 0.01)
                     if recut_dur is not None and abs(recut_dur - expected_seg_dur) > 0.3:
                         err(f"片段 {i+1} id={seg_id} 音频修复重切后时长异常："
                             f"预期 {expected_seg_dur:.3f}s，实际 {recut_dur:.3f}s。已停止生成。")
+                        record_segment(i + 1, len(timeline), seg, expected_seg_dur, recut,
+                                       recut_dur, None, src_has_audio, None,
+                                       audio_repair_triggered, repair_video_dur,
+                                       cum_pos, cum_pos + expected_seg_dur)
+                        write_debug_report("fail", f"片段{i+1} 音频修复重切后时长异常")
                         sys.exit(1)
                     if has_audio_stream(recut):
                         clip_out.unlink()
@@ -824,6 +904,14 @@ def main():
                     silent_out.rename(clip_out)
                 except Exception:
                     log(f"  片段 {i+1} 补静音失败，按原样拼接")
+        final_seg_video_dur = probe_video_stream_duration(clip_out)
+        final_seg_audio_dur = probe_audio_stream_duration(clip_out)
+        record_segment(i + 1, len(timeline), seg, expected_seg_dur, clip_out,
+                       final_seg_video_dur, final_seg_audio_dur,
+                       src_has_audio, has_audio_stream(clip_out),
+                       audio_repair_triggered, repair_video_dur,
+                       cum_pos, cum_pos + expected_seg_dur)
+        cum_pos += expected_seg_dur
         clip_paths.append(clip_out)
 
     # 拼接
@@ -843,9 +931,17 @@ def main():
     actual_aud_dur = probe_audio_stream_duration(concat_out) if keep_orig_audio else None
     log(f"[时长自检] 方案预期={expected_dur:.3f}s  视频流={actual_vid_dur}s  "
         f"容器={actual_fmt_dur}s  音频流={actual_aud_dur}s")
+    _STAGE_REPORT.append({
+        "stage": "concat", "path": str(concat_out),
+        "expectedDuration": round(expected_dur, 3),
+        "videoStreamDuration": actual_vid_dur, "formatDuration": actual_fmt_dur,
+        "drift": (round(actual_vid_dur - expected_dur, 3) if actual_vid_dur is not None else None),
+    })
     if actual_vid_dur is not None and abs(actual_vid_dur - expected_dur) > 0.5:
-        err(f"导出视频时长异常：方案预计 {expected_dur:.1f}s，"
-            f"但 clean mp4 视频轨为 {actual_vid_dur:.1f}s。已停止生成剪映草稿。")
+        msg = (f"导出视频时长异常（拼接阶段）：方案预计 {expected_dur:.1f}s，"
+               f"但拼接后视频轨为 {actual_vid_dur:.1f}s。已停止生成剪映草稿。")
+        err(msg)
+        write_debug_report("fail", msg)
         sys.exit(1)
 
     if keep_orig_audio:
@@ -870,6 +966,14 @@ def main():
     log(f"[成品自检] 时长: {final_dur:.3f}s  含音频流: {'是' if final_has_audio else '否'}")
     if not final_has_audio and keep_orig_audio:
         log(f"[成品自检] 警告：最终输出无音频流，但 keep_orig_audio=True！请检查源文件音频。")
+    stage = "voice_mux" if voice_path else "copy_from_concat"
+    vd = record_stage(stage, final_out, expected_dur)
+    if vd is not None and abs(vd - expected_dur) > 0.5:
+        msg = (f"导出视频时长异常（{stage} 阶段）：方案预计 {expected_dur:.1f}s，"
+               f"但该阶段输出视频轨为 {vd:.1f}s。已停止生成剪映草稿。")
+        err(msg)
+        write_debug_report("fail", msg)
+        sys.exit(1)
 
     # 清理临时片段
     for f in clip_paths:
@@ -889,6 +993,13 @@ def main():
             final_out.unlink()
             shutil.move(str(reframed_out), str(final_out))
             log(f"裁切完成 → {final_name}")
+            vd = record_stage("reframe", final_out, expected_dur)
+            if vd is not None and abs(vd - expected_dur) > 0.5:
+                msg = (f"导出视频时长异常（reframe 画面裁切阶段）：方案预计 {expected_dur:.1f}s，"
+                       f"但裁切后视频轨为 {vd:.1f}s。已停止生成剪映草稿。")
+                err(msg)
+                write_debug_report("fail", msg)
+                sys.exit(1)
 
     # ════════════════════════════════════════════════════════════════════════
     # v0.9.8-hotfix-1: 统一时间线效果层 —— 去重/背景/贴图/字幕 合并为「单次重编码」
@@ -1074,6 +1185,14 @@ def main():
         if sub_file:        applied.append("字幕")
         if res_filter:      applied.append(res_setting)
         log(f"效果合成完成（一次重编码：{' '.join(applied) or '基础'}）→ {final_name}")
+        vd = record_stage("fx_merge(去重/背景/贴图/字幕/分辨率)", final_out, expected_dur)
+        if vd is not None and abs(vd - expected_dur) > 0.5:
+            msg = (f"导出视频时长异常（去重/背景/贴图/字幕合并重编码阶段）：方案预计 {expected_dur:.1f}s，"
+                   f"但该阶段输出视频轨为 {vd:.1f}s。已停止生成剪映草稿。"
+                   f"已启用效果：{' '.join(applied) or '无'}")
+            err(msg)
+            write_debug_report("fail", msg)
+            sys.exit(1)
 
     if sub_file and sub_file.exists():
         try: sub_file.unlink()
@@ -1110,10 +1229,19 @@ def main():
             final_out.unlink()
             shutil.move(str(bgm_out), str(final_out))
             log(f"背景音乐混合完成 → {final_name}")
+            vd = record_stage("bgm_mix", final_out, expected_dur)
+            if vd is not None and abs(vd - expected_dur) > 0.5:
+                msg = (f"导出视频时长异常（背景音乐混合阶段）：方案预计 {expected_dur:.1f}s，"
+                       f"但该阶段输出视频轨为 {vd:.1f}s。已停止生成剪映草稿。")
+                err(msg)
+                write_debug_report("fail", msg)
+                sys.exit(1)
 
     # v0.9.5h: 改善清晰度 —— 裁剪阶段已用 CRF 控制，合并 pass 用 preset medium 提升画质
 
     size_mb = final_out.stat().st_size / 1024 / 1024
+    record_stage("final_output", final_out, expected_dur)
+    write_debug_report("success")
     log(f"完成！输出文件: export_workspace/output/{final_name}  ({size_mb:.1f} MB)")
 
 if __name__ == "__main__":

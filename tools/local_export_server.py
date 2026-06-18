@@ -19,6 +19,16 @@ from datetime import datetime
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+# Windows 控制台默认编码常是 GBK/CP936，会让中文日志乱码；
+# 同时强制子进程(export_video.py / export_with_jianying.py)也用 UTF-8 输出，
+# 否则父进程按 utf-8 解码子进程字节流时中文会变成乱码并传到前端红条。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+SUBPROCESS_ENV = dict(os.environ, PYTHONIOENCODING="utf-8")
+
 SCRIPT_DIR     = Path(__file__).resolve().parent
 REPO_ROOT      = SCRIPT_DIR.parent
 WORKSPACE      = REPO_ROOT / "export_workspace"
@@ -805,6 +815,7 @@ class ExportHandler(BaseHTTPRequestHandler):
                 result = subprocess.run(
                     cmd, capture_output=True, text=True,
                     encoding="utf-8", errors="replace", timeout=180,
+                    env=SUBPROCESS_ENV,
                 )
             except Exception as e:
                 _write_export_debug({
@@ -923,6 +934,7 @@ class ExportHandler(BaseHTTPRequestHandler):
                 encoding="utf-8",
                 errors="replace",
                 timeout=600,
+                env=SUBPROCESS_ENV,
             )
         except subprocess.TimeoutExpired:
             self._json({"ok": False, "error": "生成超时（超过10分钟），请检查视频文件是否过大。"})
