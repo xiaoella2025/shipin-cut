@@ -280,6 +280,39 @@ def probe_audio_stream_duration(path):
         pass
     return None
 
+def probe_stream_metadata(path):
+    """Return timing metadata for the first video/audio streams."""
+    meta = {
+        "formatDuration": probe_duration(path),
+        "videoDuration": None,
+        "audioDuration": None,
+        "videoAvgFrameRate": None,
+        "videoRFrameRate": None,
+        "videoTimeBase": None,
+        "audioTimeBase": None,
+    }
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error",
+             "-show_entries", "stream=index,codec_type,duration,avg_frame_rate,r_frame_rate,time_base",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=20, check=True)
+        data = json.loads(r.stdout or "{}")
+        for stream in data.get("streams", []):
+            if stream.get("codec_type") == "video" and meta["videoDuration"] is None:
+                dur = stream.get("duration")
+                meta["videoDuration"] = round(float(dur), 3) if dur and dur != "N/A" else None
+                meta["videoAvgFrameRate"] = stream.get("avg_frame_rate")
+                meta["videoRFrameRate"] = stream.get("r_frame_rate")
+                meta["videoTimeBase"] = stream.get("time_base")
+            elif stream.get("codec_type") == "audio" and meta["audioDuration"] is None:
+                dur = stream.get("duration")
+                meta["audioDuration"] = round(float(dur), 3) if dur and dur != "N/A" else None
+                meta["audioTimeBase"] = stream.get("time_base")
+    except Exception:
+        pass
+    return meta
+
 # ── 分段/分阶段时长追踪：定位 clean mp4 在哪个后处理阶段被拉长 ───────────────────
 _SEGMENT_REPORT = []
 _STAGE_REPORT = []
@@ -287,6 +320,7 @@ _STAGE_REPORT = []
 def record_segment(idx, total, seg, expected_dur, out_path, video_dur, audio_dur,
                     src_has_audio, out_has_audio, audio_repair, repair_video_dur,
                     cum_start, cum_end):
+    meta = probe_stream_metadata(out_path)
     _SEGMENT_REPORT.append({
         "index": idx, "total": total,
         "segId": seg.get("id") or seg.get("esId") or seg.get("segIdx"),
@@ -295,8 +329,13 @@ def record_segment(idx, total, seg, expected_dur, out_path, video_dur, audio_dur
         "speed": seg.get("speed", 1.0) or 1.0,
         "expectedSegmentDuration": round(expected_dur, 3),
         "outputSegmentPath": str(out_path),
+        "outputFormatDuration": meta["formatDuration"],
         "outputVideoDuration": video_dur,
         "outputAudioDuration": audio_dur,
+        "outputAvgFrameRate": meta["videoAvgFrameRate"],
+        "outputRFrameRate": meta["videoRFrameRate"],
+        "outputTimeBase": meta["videoTimeBase"],
+        "outputAudioTimeBase": meta["audioTimeBase"],
         "sourceHasAudio": src_has_audio,
         "outputHasAudio": out_has_audio,
         "triggeredAudioRepair": audio_repair,
@@ -307,21 +346,28 @@ def record_segment(idx, total, seg, expected_dur, out_path, video_dur, audio_dur
 
 def record_stage(stage, path, expected_dur):
     """探测某后处理阶段产出文件的视频流时长，记录并返回该时长（便于上层判断是否需要 hard-fail）。"""
-    vid_dur = probe_video_stream_duration(path)
-    fmt_dur = probe_duration(path)
+    meta = probe_stream_metadata(path)
+    vid_dur = meta["videoDuration"]
+    fmt_dur = meta["formatDuration"]
+    aud_dur = meta["audioDuration"]
     drift = (round(vid_dur - expected_dur, 3) if vid_dur is not None else None)
     _STAGE_REPORT.append({
         "stage": stage, "path": str(path),
         "expectedDuration": round(expected_dur, 3),
         "videoStreamDuration": vid_dur,
+        "audioStreamDuration": aud_dur,
         "formatDuration": fmt_dur,
+        "avgFrameRate": meta["videoAvgFrameRate"],
+        "rFrameRate": meta["videoRFrameRate"],
+        "timeBase": meta["videoTimeBase"],
+        "audioTimeBase": meta["audioTimeBase"],
         "drift": drift,
     })
-    log(f"[阶段时长追踪] {stage}: 视频流={vid_dur}s 容器={fmt_dur}s 预期={expected_dur:.3f}s "
+    log(f"[阶段时长追踪] {stage}: 视频流={vid_dur}s 音频流={aud_dur}s 容器={fmt_dur}s 预期={expected_dur:.3f}s "
         f"漂移={drift if drift is not None else 'N/A'}s")
     return vid_dur
 
-def write_debug_report(status, error=None):
+def write_debug_report(status, error=None, failed_stage=None):
     """把逐片段 + 逐阶段时长数据写入 export_workspace/logs/，供排查 clean mp4 在哪一步被拉长。"""
     try:
         logs_dir = WORKSPACE / "logs"
@@ -330,6 +376,7 @@ def write_debug_report(status, error=None):
         out = logs_dir / f"export_debug_segments_{ts}.json"
         payload = {
             "timestamp": ts, "status": status, "error": error,
+            "failedStage": failed_stage or (_STAGE_REPORT[-1]["stage"] if status == "fail" and _STAGE_REPORT else None),
             "segments": _SEGMENT_REPORT, "stages": _STAGE_REPORT,
         }
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -356,13 +403,13 @@ def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=Fa
         err(f"片段时长无效: {start} → {end}")
         return False
 
-    vf = "setpts=PTS-STARTPTS"
-    af = "asetpts=PTS-STARTPTS" if keep_orig_audio else ""
+    vf = "fps=30,settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p"
+    af = "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS" if keep_orig_audio else ""
     if abs(speed - 1.0) > 0.01:
         pts_val = 1.0 / speed
-        vf = f"setpts={pts_val:.6f}*(PTS-STARTPTS)"
+        vf = f"fps=30,settb=AVTB,setpts={pts_val:.6f}*(PTS-STARTPTS),format=yuv420p"
         if keep_orig_audio:
-            af = _build_atempo(speed)
+            af = f"{_build_atempo(speed)},aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS"
 
     cmd = [
         FFMPEG, "-y",
@@ -383,6 +430,9 @@ def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=Fa
         "-preset", "fast",
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
+        "-r", "30",
+        "-fps_mode", "cfr",
+        "-video_track_timescale", "90000",
     ]
     if keep_orig_audio:
         # 规范化音频格式，确保各片段可以在 concat filter 阶段无缝拼接
@@ -423,32 +473,68 @@ def concat_segments(clip_paths, out_path, has_audio=False):
     n = len(clip_paths)
     if n == 0:
         raise ValueError("concat_segments: 片段列表为空")
+    target_w, target_h = _concat_target_dimensions(clip_paths)
+    vnorm = (
+        "fps=30,settb=AVTB,setpts=PTS-STARTPTS,"
+        f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+        f"crop={target_w}:{target_h},setsar=1,format=yuv420p"
+    )
 
     cmd = [FFMPEG, "-y"]
     for p in clip_paths:
         cmd += ["-i", str(p)]
 
     if has_audio:
-        parts = "".join(f"[{i}:v:0][{i}:a:0]" for i in range(n))
-        filter_complex = f"{parts}concat=n={n}:v=1:a=1[outv][outa]"
+        chains = []
+        for i in range(n):
+            chains.append(f"[{i}:v:0]{vnorm}[v{i}]")
+            chains.append(f"[{i}:a:0]aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a{i}]")
+        parts = "".join(f"[v{i}][a{i}]" for i in range(n))
+        filter_complex = ";".join(chains + [f"{parts}concat=n={n}:v=1:a=1[outv][outa]"])
         cmd += [
             "-filter_complex", filter_complex,
             "-map", "[outv]", "-map", "[outa]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-pix_fmt", "yuv420p",
+            "-r", "30",
+            "-fps_mode", "cfr",
+            "-video_track_timescale", "90000",
             "-c:a", "aac", "-ar", "44100", "-ac", "2",
         ]
     else:
-        parts = "".join(f"[{i}:v:0]" for i in range(n))
-        filter_complex = f"{parts}concat=n={n}:v=1:a=0[outv]"
+        chains = [
+            f"[{i}:v:0]{vnorm}[v{i}]"
+            for i in range(n)
+        ]
+        parts = "".join(f"[v{i}]" for i in range(n))
+        filter_complex = ";".join(chains + [f"{parts}concat=n={n}:v=1:a=0[outv]"])
         cmd += [
             "-filter_complex", filter_complex,
             "-map", "[outv]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-            "-pix_fmt", "yuv420p", "-an",
+            "-pix_fmt", "yuv420p",
+            "-r", "30",
+            "-fps_mode", "cfr",
+            "-video_track_timescale", "90000",
+            "-an",
         ]
     cmd += [str(out_path)]
     run(cmd)
+    return cmd
+
+def _concat_target_dimensions(clip_paths):
+    """Choose one even canvas for concat filter inputs, preferring the largest clip."""
+    dims = []
+    for p in clip_paths:
+        try:
+            w, h = get_video_dimensions(p)
+            if w > 0 and h > 0:
+                dims.append((w - w % 2, h - h % 2))
+        except Exception:
+            pass
+    if not dims:
+        return (1920, 1080)
+    return max(dims, key=lambda wh: wh[0] * wh[1])
 
 # ── 混合配音 ──────────────────────────────────────────────────────────────────
 def mux_voice(video_path, voice_path, out_path, audio_policy):
@@ -880,18 +966,19 @@ def main():
                     rend = src_dur_pre
                 rdur = max(0.0, rend - rstart)
                 # 重切必须套用与原切片相同的变速，否则丢音频片段的输出时长会与方案预期脱节
-                r_vf = "setpts=PTS-STARTPTS"
-                r_af = "asetpts=PTS-STARTPTS"
+                r_vf = "fps=30,settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p"
+                r_af = "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS"
                 if abs(speed - 1.0) > 0.01:
                     r_pts_val = 1.0 / speed
-                    r_vf = f"setpts={r_pts_val:.6f}*(PTS-STARTPTS)"
-                    r_af = _build_atempo(speed)
+                    r_vf = f"fps=30,settb=AVTB,setpts={r_pts_val:.6f}*(PTS-STARTPTS),format=yuv420p"
+                    r_af = f"{_build_atempo(speed)},aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS"
                 # 输出端 seek（-i 在 -ss 前）对音频更精确，避免输入端 seek 落在音频帧间隙
                 rcmd = [FFMPEG, "-y", "-i", str(video_map[vidx]),
                         "-ss", f"{rstart:.3f}", "-t", f"{rdur:.3f}",
                         "-vf", r_vf, "-af", r_af,
                         "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
                         "-pix_fmt", "yuv420p",
+                        "-r", "30", "-fps_mode", "cfr", "-video_track_timescale", "90000",
                         "-c:a", "aac", "-ar", "44100", "-ac", "2", str(recut)]
                 try:
                     run(rcmd)
@@ -926,7 +1013,10 @@ def main():
                         "-f", "lavfi", "-t", f"{sd:.3f}",
                         "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
                         "-map", "0:v:0", "-map", "1:a:0",
-                        "-c:v", "copy", "-c:a", "aac", "-shortest", str(silent_out)]
+                        "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
+                        "-pix_fmt", "yuv420p",
+                        "-r", "30", "-fps_mode", "cfr", "-video_track_timescale", "90000",
+                        "-c:a", "aac", "-shortest", str(silent_out)]
                 try:
                     run(scmd)
                     clip_out.unlink()
@@ -945,19 +1035,46 @@ def main():
 
     # 拼接前自检：记录每个待拼接片段自身的时长，便于排查是否有旧文件/源文件混入
     concat_inputs_report = []
-    concat_input_sum = 0.0
-    for cp in clip_paths:
-        cp_vid = probe_video_stream_duration(cp)
-        cp_fmt = probe_duration(cp)
-        concat_input_sum += (cp_vid or cp_fmt or 0.0)
+    pre_concat_expected_sum = 0.0
+    pre_concat_format_sum = 0.0
+    pre_concat_video_sum = 0.0
+    pre_concat_audio_sum = 0.0
+    for idx, cp in enumerate(clip_paths):
+        meta = probe_stream_metadata(cp)
+        cp_fmt = meta["formatDuration"]
+        cp_vid = meta["videoDuration"]
+        cp_aud = meta["audioDuration"]
+        expected_seg = _SEGMENT_REPORT[idx]["expectedSegmentDuration"] if idx < len(_SEGMENT_REPORT) else None
+        pre_concat_expected_sum += expected_seg or 0.0
+        pre_concat_format_sum += cp_fmt or 0.0
+        pre_concat_video_sum += cp_vid or 0.0
+        pre_concat_audio_sum += cp_aud or 0.0
         concat_inputs_report.append({
-            "path": str(cp), "videoStreamDuration": cp_vid, "formatDuration": cp_fmt,
+            "path": str(cp),
+            "mtime": datetime.fromtimestamp(cp.stat().st_mtime).isoformat(timespec="seconds"),
+            "expectedSegmentDuration": expected_seg,
+            "videoStreamDuration": cp_vid,
+            "audioStreamDuration": cp_aud,
+            "formatDuration": cp_fmt,
+            "outputFormatDuration": cp_fmt,
+            "outputVideoDuration": cp_vid,
+            "outputAudioDuration": cp_aud,
+            "avg_frame_rate": meta["videoAvgFrameRate"],
+            "r_frame_rate": meta["videoRFrameRate"],
+            "time_base": meta["videoTimeBase"],
+            "audio_time_base": meta["audioTimeBase"],
         })
+    concat_input_sum = pre_concat_video_sum or pre_concat_format_sum
     log(f"[拼接前自检] {len(clip_paths)} 个待拼接片段，逐段时长之和={concat_input_sum:.3f}s")
     _STAGE_REPORT.append({
         "stage": "pre_concat_inputs", "path": None,
-        "expectedDuration": None, "videoStreamDuration": None, "formatDuration": None,
+        "expectedDuration": round(pre_concat_expected_sum, 3),
+        "videoStreamDuration": None, "audioStreamDuration": None, "formatDuration": None,
         "drift": None, "inputs": concat_inputs_report, "inputDurationSum": round(concat_input_sum, 3),
+        "preConcatExpectedSum": round(pre_concat_expected_sum, 3),
+        "preConcatFormatSum": round(pre_concat_format_sum, 3),
+        "preConcatVideoSum": round(pre_concat_video_sum, 3),
+        "preConcatAudioSum": round(pre_concat_audio_sum, 3),
     })
 
     # 拼接
@@ -965,7 +1082,7 @@ def main():
     safe = safe_name(comp_name)
     concat_out = TEMP_DIR / f"concat_{safe}_{ts}.mp4"
     log(f"拼接 {len(clip_paths)} 个片段 → {concat_out.name}")
-    concat_segments(clip_paths, concat_out, has_audio=keep_orig_audio)
+    concat_cmd = concat_segments(clip_paths, concat_out, has_audio=keep_orig_audio)
 
     # 时长自检：视频流时长必须与方案预期一致（±0.5s）
     expected_dur = sum(
@@ -980,20 +1097,28 @@ def main():
     _STAGE_REPORT.append({
         "stage": "concat", "path": str(concat_out),
         "expectedDuration": round(expected_dur, 3),
-        "videoStreamDuration": actual_vid_dur, "formatDuration": actual_fmt_dur,
+        "videoStreamDuration": actual_vid_dur, "audioStreamDuration": actual_aud_dur,
+        "formatDuration": actual_fmt_dur,
+        "concatCommand": [str(part) for part in concat_cmd],
         "drift": (round(actual_vid_dur - expected_dur, 3) if actual_vid_dur is not None else None),
     })
     if actual_vid_dur is not None and abs(actual_vid_dur - expected_dur) > 0.5:
         msg = (f"导出视频时长异常（拼接阶段）：方案预计 {expected_dur:.1f}s，"
                f"但拼接后视频轨为 {actual_vid_dur:.1f}s。已停止生成剪映草稿。")
         err(msg)
-        write_debug_report("fail", msg)
+        write_debug_report("fail", msg, failed_stage="concat")
         sys.exit(1)
     if actual_fmt_dur is not None and abs(actual_fmt_dur - expected_dur) > 0.5:
         msg = (f"导出视频时长异常（拼接阶段，容器时长）：方案预计 {expected_dur:.1f}s，"
                f"但拼接后容器时长为 {actual_fmt_dur:.1f}s。已停止生成剪映草稿。")
         err(msg)
-        write_debug_report("fail", msg)
+        write_debug_report("fail", msg, failed_stage="concat")
+        sys.exit(1)
+    if keep_orig_audio and actual_aud_dur is not None and abs(actual_aud_dur - expected_dur) > 0.5:
+        msg = (f"concat audio duration mismatch: expected {expected_dur:.1f}s, "
+               f"got audio stream {actual_aud_dur:.1f}s. Stop before Jianying draft generation.")
+        err(msg)
+        write_debug_report("fail", msg, failed_stage="concat")
         sys.exit(1)
 
     if keep_orig_audio:
@@ -1275,7 +1400,10 @@ def main():
                 "-filter_complex",
                 f"[0:a]volume=1.0[main];[1:a]volume={bgm_volume:.2f},aloop=-1:size=2e+09[bgm];[main][bgm]amix=inputs=2:duration=first[aout]",
                 "-map", "0:v:0", "-map", "[aout]",
-                "-c:v", "copy", "-c:a", "aac", str(bgm_out),
+                "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+                "-pix_fmt", "yuv420p",
+                "-r", "30", "-fps_mode", "cfr", "-video_track_timescale", "90000",
+                "-c:a", "aac", str(bgm_out),
             ]
             run(cmd)
             final_out.unlink()
