@@ -19,6 +19,11 @@ from datetime import datetime
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+try:
+    import winreg
+except Exception:
+    winreg = None
+
 # Windows 控制台默认编码常是 GBK/CP936，会让中文日志乱码；
 # 同时强制子进程(export_video.py / export_with_jianying.py)也用 UTF-8 输出，
 # 否则父进程按 utf-8 解码子进程字节流时中文会变成乱码并传到前端红条。
@@ -39,8 +44,10 @@ IMAGES_DIR     = WORKSPACE / "images"   # v0.9.8: background images
 EXPORT_SCRIPT  = SCRIPT_DIR / "export_video.py"
 WHISPER_CONFIG = REPO_ROOT / "local-tools" / "whisper.config.json"
 CURRENT_DRAFT  = "web-export-current.json"
+LOCAL_SETTINGS = REPO_ROOT / "config" / "local_settings.json"
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+JIANYING_EXE_NAMES = {"jianyingpro.exe", "capcut.exe"}
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -406,35 +413,222 @@ def _resolve_jianying_draft_dir(stdout_text, hint_name=None):
     return parsed_name, dir_str
 
 
-def _find_jianying_exe():
-    """
-    探测本机 JianyingPro.exe 路径。返回 Path 或 None。
-    仅做"启动剪映软件"用途，不去研究任何剪映协议。
-    """
-    candidates = []
-    # 1) 优先探测当前用户 AppData
-    candidates.append(Path.home() / "AppData" / "Local" / "JianyingPro" / "JianyingPro.exe")
-    # 2) Program Files / (x86) 的常见安装位
-    for pf in (r"C:/Program Files", r"C:/Program Files (x86)"):
-        base = Path(pf)
-        if not base.exists():
-            continue
-        # 直接 JianyingPro 子目录
-        candidates.append(base / "JianyingPro" / "JianyingPro.exe")
-        # 也扫一下 JianyingPro* 开头、JianyingPro 4.x、JianyingPro 5.x 等
+def _load_local_settings():
+    try:
+        if LOCAL_SETTINGS.exists():
+            return json.loads(LOCAL_SETTINGS.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[剪映启动] 读取本地配置失败：{e}", flush=True)
+    return {}
+
+
+def _save_local_settings(data):
+    LOCAL_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    LOCAL_SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _is_allowed_jianying_exe(path):
+    try:
+        p = Path(path).expanduser()
+        return p.exists() and p.is_file() and p.name.lower() in JIANYING_EXE_NAMES
+    except Exception:
+        return False
+
+
+def _clean_exe_path(raw):
+    if not raw:
+        return ""
+    text = str(raw).strip().strip('"')
+    if "," in text:
+        text = text.split(",", 1)[0].strip().strip('"')
+    if text.lower().endswith(".exe"):
+        return text
+    m = re.search(r'([A-Za-z]:\\[^"]+?\.exe)', text, re.I)
+    return m.group(1) if m else text
+
+
+def _find_named_exe_under(base, max_depth=4):
+    try:
+        root = Path(base).expanduser()
+        if not root.exists() or not root.is_dir():
+            return None
+    except Exception:
+        return None
+    queue = [(root, 0)]
+    seen = set()
+    while queue:
+        cur, depth = queue.pop(0)
         try:
-            for entry in base.iterdir():
-                if entry.is_dir() and entry.name.lower().startswith("jianyingpro"):
-                    candidates.append(entry / "JianyingPro.exe")
-        except Exception:
-            pass
-    # 3) 兜底：roaming 之类
-    for c in candidates:
-        try:
-            if c.exists() and c.is_file():
-                return c
+            key = str(cur.resolve()).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            for exe_name in ("JianyingPro.exe", "CapCut.exe"):
+                candidate = cur / exe_name
+                if _is_allowed_jianying_exe(candidate):
+                    return candidate
+            if depth >= max_depth:
+                continue
+            for child in cur.iterdir():
+                if child.is_dir():
+                    queue.append((child, depth + 1))
         except Exception:
             continue
+    return None
+
+
+def _iter_common_jianying_candidates():
+    local_app = Path.home() / "AppData" / "Local"
+    candidates = [
+        local_app / "JianyingPro" / "JianyingPro.exe",
+        local_app / "JianyingPro" / "Apps",
+        local_app / "Programs" / "JianyingPro",
+        local_app / "Programs" / "CapCut",
+        Path(r"C:/Program Files/JianyingPro"),
+        Path(r"C:/Program Files/CapCut"),
+        Path(r"C:/Program Files (x86)/JianyingPro"),
+        Path(r"C:/Program Files (x86)/CapCut"),
+    ]
+    for candidate in candidates:
+        if _is_allowed_jianying_exe(candidate):
+            yield candidate
+        else:
+            found = _find_named_exe_under(candidate)
+            if found:
+                yield found
+
+
+def _tasklist_process(image_name):
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH", "/FI", f"IMAGENAME eq {image_name}"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+        )
+    except Exception:
+        return None
+    for line in (result.stdout or "").splitlines():
+        if image_name.lower() not in line.lower():
+            continue
+        parts = [p.strip().strip('"') for p in line.split('","')]
+        if len(parts) >= 2 and parts[0].lower() == image_name.lower():
+            return {"name": parts[0], "pid": parts[1]}
+    return None
+
+
+def _running_jianying_process():
+    for image_name in ("JianyingPro.exe", "CapCut.exe"):
+        proc = _tasklist_process(image_name)
+        if proc:
+            return proc
+    return None
+
+
+def _focus_process(pid):
+    try:
+        pid_int = int(pid)
+    except Exception:
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                f"$ws=New-Object -ComObject WScript.Shell; $ws.AppActivate({pid_int}) | Out-Null",
+            ],
+            capture_output=True, text=True, timeout=3,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _find_start_menu_shortcut():
+    roots = [
+        Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+        Path(os.environ.get("PROGRAMDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+    ]
+    keywords = ("剪映", "jianying", "capcut")
+    for root in roots:
+        try:
+            if not root.exists():
+                continue
+            for link in root.rglob("*.lnk"):
+                name = link.name.lower()
+                if any(k.lower() in name for k in keywords):
+                    return link
+        except Exception:
+            continue
+    return None
+
+
+def _iter_registry_jianying_candidates():
+    if winreg is None:
+        return
+    keys = [
+        (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ]
+    keywords = ("剪映", "jianying", "capcut")
+    for hive, subkey in keys:
+        try:
+            with winreg.OpenKey(hive, subkey) as root:
+                count = winreg.QueryInfoKey(root)[0]
+                for i in range(count):
+                    try:
+                        name = winreg.EnumKey(root, i)
+                        with winreg.OpenKey(root, name) as item:
+                            display = _registry_value(item, "DisplayName")
+                            if not display or not any(k.lower() in display.lower() for k in keywords):
+                                continue
+                            for value_name in ("InstallLocation", "DisplayIcon", "UninstallString"):
+                                raw = _registry_value(item, value_name)
+                                cleaned = _clean_exe_path(raw)
+                                if _is_allowed_jianying_exe(cleaned):
+                                    yield Path(cleaned)
+                                found = _find_named_exe_under(cleaned, max_depth=4)
+                                if found:
+                                    yield found
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+
+
+def _registry_value(key, name):
+    try:
+        return winreg.QueryValueEx(key, name)[0]
+    except Exception:
+        return ""
+
+
+def _find_jianying_launch_target():
+    """
+    返回 {"mode": "saved|running|exe|shortcut", ...} 或 None。
+    只用于启动剪映/CapCut，不尝试打开具体草稿协议。
+    """
+    settings = _load_local_settings()
+    saved = settings.get("jianyingExePath") or ""
+    if _is_allowed_jianying_exe(saved):
+        return {"mode": "saved", "path": Path(saved)}
+
+    running = _running_jianying_process()
+    if running:
+        return {"mode": "running", "process": running}
+
+    for candidate in _iter_common_jianying_candidates():
+        return {"mode": "exe", "path": candidate}
+
+    for candidate in _iter_registry_jianying_candidates() or []:
+        return {"mode": "exe", "path": candidate}
+
+    shortcut = _find_start_menu_shortcut()
+    if shortcut:
+        return {"mode": "shortcut", "path": shortcut}
+
     return None
 
 
@@ -908,6 +1102,10 @@ class ExportHandler(BaseHTTPRequestHandler):
             # 打开剪映软件（不直接打开指定草稿）
             self._handle_open_jianying()
             return
+        if self.path == "/set-jianying-path":
+            # 保存用户手动配置的剪映 / CapCut 程序路径
+            self._handle_set_jianying_path()
+            return
         if self.path == "/open-path":
             # 在资源管理器中打开一个目录（仅限允许的目录）
             self._handle_open_path()
@@ -1069,18 +1267,60 @@ class ExportHandler(BaseHTTPRequestHandler):
             print(f"[服务] 生成失败：{error_msg}", flush=True)
             self._json({"ok": False, "error": error_msg})
 
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        if not body:
+            return {}
+        return json.loads(body)
+
     # ── v0.9.10: 打开剪映软件（不研究剪映协议，只负责启动 exe） ────────────────
     def _handle_open_jianying(self):
-        exepath = _find_jianying_exe()
-        if not exepath:
+        try:
+            data = self._read_json_body()
+        except Exception as e:
+            self._json({"ok": False, "reason": "bad_json", "message": f"JSON 解析失败: {e}"})
+            return
+        draft_name = (data.get("draftName") or "刚生成的草稿").strip()
+        target = _find_jianying_launch_target()
+        if not target:
             self._json({
                 "ok": False,
-                "error": "未找到剪映安装路径，请手动打开剪映。",
-                "hint": "在常见安装位置未探测到 JianyingPro.exe（已检查 %LocalAppData% 与 Program Files）。",
+                "opened": False,
+                "reason": "not_found",
+                "message": f"未能自动找到剪映安装路径，但草稿已生成。请手动打开剪映，在草稿箱中查找：{draft_name}",
             })
             return
+
+        if target["mode"] == "running":
+            proc = target["process"]
+            focused = _focus_process(proc.get("pid"))
+            self._json({
+                "ok": True,
+                "opened": True,
+                "mode": "running",
+                "running": True,
+                "focused": focused,
+                "process": proc,
+                "message": f"检测到剪映已在运行，请切换到剪映，在草稿箱中查找：{draft_name}",
+            })
+            return
+
         try:
-            # 非阻塞启动，进程独立；服务不被拖住
+            if target["mode"] == "shortcut":
+                path = target["path"]
+                os.startfile(str(path))
+                print(f"[服务] 已尝试通过快捷方式启动剪映：{path}", flush=True)
+                self._json({
+                    "ok": True,
+                    "opened": True,
+                    "mode": "shortcut",
+                    "message": f"已尝试通过快捷方式打开剪映，请在草稿箱中查找：{draft_name}",
+                    "shortcutPath": str(path),
+                })
+                return
+
+            exepath = target["path"]
             subprocess.Popen(
                 [str(exepath)],
                 cwd=str(exepath.parent),
@@ -1090,10 +1330,49 @@ class ExportHandler(BaseHTTPRequestHandler):
                 close_fds=True,
             )
         except Exception as e:
-            self._json({"ok": False, "error": f"启动剪映失败：{e}"})
+            self._json({
+                "ok": False,
+                "opened": False,
+                "reason": "launch_failed",
+                "message": f"找到剪映安装路径，但启动失败。请手动打开剪映，在草稿箱中查找：{draft_name}",
+                "detail": str(e),
+            })
             return
         print(f"[服务] 已尝试启动剪映：{exepath}", flush=True)
-        self._json({"ok": True, "message": f"已尝试打开剪映（{exepath.name}）", "exe": str(exepath)})
+        self._json({
+            "ok": True,
+            "opened": True,
+            "mode": target["mode"],
+            "message": f"已打开剪映，请在草稿箱中查找：{draft_name}",
+            "exePath": str(exepath),
+        })
+
+    def _handle_set_jianying_path(self):
+        try:
+            data = self._read_json_body()
+        except Exception as e:
+            self._json({"ok": False, "reason": "bad_json", "message": f"JSON 解析失败: {e}"})
+            return
+        raw_path = (data.get("path") or "").strip().strip('"')
+        if not _is_allowed_jianying_exe(raw_path):
+            self._json({
+                "ok": False,
+                "reason": "invalid_path",
+                "message": "路径无效。请选择存在的 JianyingPro.exe 或 CapCut.exe。",
+            })
+            return
+        settings = _load_local_settings()
+        settings["jianyingExePath"] = str(Path(raw_path).resolve())
+        try:
+            _save_local_settings(settings)
+        except Exception as e:
+            self._json({"ok": False, "reason": "save_failed", "message": f"保存剪映路径失败：{e}"})
+            return
+        self._json({
+            "ok": True,
+            "message": "已保存剪映路径，下次会优先使用该路径。",
+            "exePath": settings["jianyingExePath"],
+        })
 
     # ── v0.9.10: 在资源管理器中打开一个目录（白名单闸门） ──────────────────────
     def _handle_open_path(self):

@@ -1300,6 +1300,7 @@ export default function App() {
   // v0.9.10: 最近一次成功生成的剪映草稿路径（用于"打开草稿文件夹"按钮）
   const [lastJianyingDraftPath, setLastJianyingDraftPath] = useState('')
   const [lastJianyingDraftName, setLastJianyingDraftName] = useState('')
+  const [showJianyingPathSetup, setShowJianyingPathSetup] = useState(false)
   // 剪映草稿导出选项：字幕轨 / 配音音频轨 / 视频原声
   // 配音音频轨当前版本不支持独立音频（配音已合成进 mp4）
   const [jianyingOpts, setJianyingOpts]               = useState({
@@ -3375,6 +3376,7 @@ export default function App() {
         setJianyingExportMsg(data.message || `已生成剪映草稿：${draftName}。你可以点击「打开草稿文件夹」，或打开剪映后在草稿箱中查找该草稿。`)
         setLastJianyingDraftName(data.draftName || '')
         setLastJianyingDraftPath(data.openPath || data.draftPath || data.draftFolder || '')
+        setShowJianyingPathSetup(false)
       } else {
         const missingMp4 = /MP4 文件不存在/.test(data.error || '')
         if (missingMp4) {
@@ -3401,6 +3403,7 @@ export default function App() {
             setJianyingExportMsg(retryData.message || `已生成剪映草稿：${draftName}。你可以点击「打开草稿文件夹」，或打开剪映后在草稿箱中查找该草稿。`)
             setLastJianyingDraftName(retryData.draftName || '')
             setLastJianyingDraftPath(retryData.openPath || retryData.draftPath || retryData.draftFolder || '')
+            setShowJianyingPathSetup(false)
           } else {
             setJianyingExportStatus('error')
             const raw = retryData.error || '生成失败，请重试'
@@ -3429,12 +3432,42 @@ export default function App() {
   async function openJianyingApp() {
     const draftName = lastJianyingDraftName || '刚生成的草稿'
     try {
-      const resp = await fetch('http://127.0.0.1:8765/open-jianying', { method: 'POST' })
+      const resp = await fetch('http://127.0.0.1:8765/open-jianying', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draftName, draftPath: lastJianyingDraftPath, openDraftFolder: false }),
+      })
       const data = await resp.json().catch(() => ({}))
       if (data.ok) {
-        showToast(`已尝试打开剪映。请在草稿箱中查找：${draftName}`)
+        setShowJianyingPathSetup(false)
+        showToast(data.message || `已打开剪映，请在草稿箱中查找：${draftName}`)
       } else {
-        showToast(`未能自动打开剪映，但草稿已生成。请手动打开剪映，在草稿箱中查找：${draftName}`)
+        if (data.reason === 'not_found' || data.reason === 'launch_failed') {
+          setShowJianyingPathSetup(true)
+        }
+        showToast(data.message || `未能自动打开剪映，但草稿已生成。请手动打开剪映，在草稿箱中查找：${draftName}`)
+      }
+    } catch (e) {
+      showToast('本地导出服务未启动，请先双击「启动本地导出服务.bat」。')
+    }
+  }
+
+  async function configureJianyingPath() {
+    const input = window.prompt('请输入剪映程序路径，例如 C:\\\\...\\\\JianyingPro.exe 或 C:\\\\...\\\\CapCut.exe')
+    if (!input || !input.trim()) return
+    try {
+      const resp = await fetch('http://127.0.0.1:8765/set-jianying-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: input.trim() }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (data.ok) {
+        setShowJianyingPathSetup(false)
+        showToast(data.message || '已保存剪映路径')
+        await openJianyingApp()
+      } else {
+        showToast(data.message || data.error || '剪映路径无效，请选择 JianyingPro.exe 或 CapCut.exe。')
       }
     } catch (e) {
       showToast('本地导出服务未启动，请先双击「启动本地导出服务.bat」。')
@@ -4861,6 +4894,12 @@ export default function App() {
                           title="可选操作：通过本地服务尝试启动剪映软件">
                           🚀 尝试打开剪映
                         </button>
+                        {showJianyingPathSetup&&(
+                          <button className="jianying-success-btn" onClick={configureJianyingPath}
+                            title="手动保存 JianyingPro.exe 或 CapCut.exe 路径">
+                            ⚙ 手动设置剪映路径
+                          </button>
+                        )}
                         {lastJianyingDraftName&&(
                           <span className="jianying-success-draftname" title={lastJianyingDraftPath}>
                             草稿名：{lastJianyingDraftName}
