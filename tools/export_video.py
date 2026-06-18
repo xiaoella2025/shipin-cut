@@ -385,7 +385,7 @@ def cut_segment(seg, video_path, out_path, speed=1.0, crf=20, keep_orig_audio=Fa
         "-pix_fmt", "yuv420p",
     ]
     if keep_orig_audio:
-        # 规范化音频格式，确保各片段可以 concat demuxer 无缝拼接
+        # 规范化音频格式，确保各片段可以在 concat filter 阶段无缝拼接
         cmd += ["-c:a", "aac", "-ar", "44100", "-ac", "2"]
     cmd += [out_path]
     try:
