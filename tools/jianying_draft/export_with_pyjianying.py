@@ -27,6 +27,8 @@ parser.add_argument("--srt", help="输入 SRT 字幕路径（可选）")
 parser.add_argument("--name", help="草稿名称（可选，默认自动生成）")
 parser.add_argument("--expected-subs", type=int, default=-1,
                     help="期望写入的字幕条数（>=0 时强制校验，写入数不足即失败）")
+parser.add_argument("--subtitle-mode", choices=["subtitle", "text"], default="subtitle",
+                    help="字幕材料模式：subtitle=剪映字幕体系；text=普通文本片段 fallback")
 parser.add_argument(
     "--drafts-dir",
     default="C:/Users/Admin/AppData/Local/JianyingPro/User Data/Projects/com.lveditor.draft/",
@@ -96,6 +98,120 @@ def parse_srt(p):
         end_us   = (int(h2)*3600 + int(mi2)*60 + int(s2)) * 1000000 + int(ms2) * 1000
         cues.append((start_us, end_us, text.strip()))
     return cues
+
+
+def _subtitle_content_from_text_material(material):
+    """Reuse pyJianYingDraft text content but normalize it to Jianying subtitle content."""
+    raw = material.get("content") or "{}"
+    try:
+        content = json.loads(raw)
+    except Exception:
+        content = {"text": material.get("name") or raw}
+    text = content.get("text") or material.get("name") or ""
+    styles = content.get("styles") if isinstance(content.get("styles"), list) else []
+    if not styles:
+        styles = [{
+            "fill": {
+                "alpha": 1.0,
+                "content": {
+                    "render_type": "solid",
+                    "solid": {"alpha": 1.0, "color": [1.0, 1.0, 1.0]},
+                },
+            },
+            "range": [0, len(text)],
+            "size": 12.0,
+            "bold": False,
+            "italic": False,
+            "underline": False,
+            "strokes": [{
+                "content": {"solid": {"alpha": 0.0, "color": [0.0, 0.0, 0.0]}},
+                "width": 0.0,
+            }],
+        }]
+    for style in styles:
+        if isinstance(style, dict):
+            style["range"] = [0, len(text)]
+            style.setdefault("size", 12.0)
+            style.setdefault("bold", False)
+            style.setdefault("italic", False)
+            style.setdefault("underline", False)
+            style.setdefault("strokes", [])
+    return json.dumps({"styles": styles, "text": text}, ensure_ascii=False, separators=(",", ":"))
+
+
+def _as_subtitle_material(material):
+    """Convert a pyJianYingDraft text material into Jianying's subtitle material shape."""
+    subtitle = dict(material)
+    subtitle.pop("global_alpha", None)
+    subtitle.update({
+        "content": _subtitle_content_from_text_material(material),
+        "typesetting": material.get("typesetting", 0),
+        "alignment": material.get("alignment", 1),
+        "letter_spacing": material.get("letter_spacing", 0.0),
+        "line_spacing": material.get("line_spacing", 0.02),
+        "line_feed": material.get("line_feed", 1),
+        "line_max_width": material.get("line_max_width", 1.0),
+        "force_apply_line_max_width": material.get("force_apply_line_max_width", False),
+        "check_flag": 31,
+        "type": "subtitle",
+        "fixed_width": -1,
+        "fixed_height": -1,
+        "font_category_id": "",
+        "font_category_name": "",
+        "font_id": "",
+        "font_name": "",
+        "font_path": "",
+        "font_resource_id": "",
+        "font_size": 15.0,
+        "font_source_platform": 0,
+        "font_team_id": "",
+        "font_title": "none",
+        "font_url": "",
+        "fonts": [],
+        "background_style": 0,
+        "background_color": "#000000",
+        "background_alpha": 0.5,
+        "background_round_radius": 0.3,
+        "background_height": 0.14,
+        "background_width": 0.14,
+        "background_horizontal_offset": 0.0,
+        "background_vertical_offset": 0.0,
+        "sub_type": 0,
+        "recognize_type": 0,
+        "is_rich_text": True,
+        "caption_template_info": {
+            "category_id": "",
+            "category_name": "",
+            "effect_id": "",
+            "is_new": False,
+            "path": "",
+            "request_id": "",
+            "resource_id": "",
+            "resource_name": "",
+            "source_platform": 0,
+        },
+        "combo_info": {"text_templates": []},
+        "words": {"end_time": [], "start_time": [], "text": []},
+        "subtitle_keywords": None,
+    })
+    return subtitle
+
+
+def upgrade_text_materials_to_subtitles(draft_content, expected_count):
+    """Upgrade generated SRT text materials to Jianying subtitle materials."""
+    if expected_count <= 0:
+        return 0
+    text_materials = draft_content.get("materials", {}).get("texts") or []
+    if len(text_materials) < expected_count:
+        raise ValueError(f"字幕材料不足：materials.texts={len(text_materials)}，期望 {expected_count}")
+    upgraded = []
+    for index, material in enumerate(text_materials):
+        if index < expected_count:
+            upgraded.append(_as_subtitle_material(material))
+        else:
+            upgraded.append(material)
+    draft_content["materials"]["texts"] = upgraded
+    return expected_count
 
 # ─── 受保护草稿（禁止覆盖正式名）─────────────────────────
 
@@ -217,6 +333,19 @@ try:
         fail("draft_content.json 未生成。")
     with open(content_path, 'r', encoding='utf-8') as f:
         draft_content = json.load(f)
+
+    subtitle_material_count = 0
+    if args.subtitle_mode == "subtitle" and written > 0:
+        try:
+            subtitle_material_count = upgrade_text_materials_to_subtitles(draft_content, written)
+        except Exception as ex:
+            fail(f"字幕材料升级为剪映 subtitle 失败：{ex}")
+        with open(content_path, 'w', encoding='utf-8') as f:
+            json.dump(draft_content, f, ensure_ascii=False, indent=2)
+        print(f"[剪映字幕] 已升级为 subtitle material：{subtitle_material_count}/{written} 条")
+    elif written > 0:
+        print(f"[剪映字幕] 使用普通 text material fallback：{written} 条")
+
     timeline_id = draft_content.get('id', '')
     draft_duration = draft_content.get('duration', 0)
 
@@ -227,6 +356,13 @@ try:
         fail("draft_content.json 缺少视频轨。")
     if written > 0 and not text_tracks:
         fail(f"应写入 {written} 条字幕但 draft_content.json 缺少字幕轨。")
+    if args.subtitle_mode == "subtitle" and written > 0:
+        subtitle_materials = [
+            t for t in draft_content.get('materials', {}).get('texts', [])
+            if t.get('type') == 'subtitle'
+        ]
+        if len(subtitle_materials) != written:
+            fail(f"subtitle material 数量异常：{len(subtitle_materials)} ≠ 写入字幕 {written}。")
 
     # ── 写 meta / layout / settings（用最终路径，便于 rename 后直接正确）──
     print(f"[5/6] 写入 meta / layout / settings（指向正式名 {final_name}）...")
@@ -293,5 +429,6 @@ print(f"  时长: {content.get('duration')} us ({content.get('duration', 0)/1000
 print(f"  视频轨: {len([t for t in content.get('tracks', []) if t.get('type') == 'video'])}")
 print(f"  字幕轨: {len([t for t in content.get('tracks', []) if t.get('type') == 'text'])}")
 print(f"  字幕素材: {len(content.get('materials', {}).get('texts', []))}")
+print(f"  subtitle 素材: {len([t for t in content.get('materials', {}).get('texts', []) if t.get('type') == 'subtitle'])}")
 print(f"  写入字幕条数: {written}")
 print(f"\n完成: {final_dir}")
