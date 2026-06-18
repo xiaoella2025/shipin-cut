@@ -3372,7 +3372,7 @@ export default function App() {
       if (data.ok) {
         const draftName = data.draftName || '未命名草稿'
         setJianyingExportStatus('success')
-        setJianyingExportMsg(data.message || `已生成剪映草稿：${draftName}。请点击「去剪映草稿」继续在剪映中编辑。`)
+        setJianyingExportMsg(data.message || `已生成剪映草稿：${draftName}。你可以点击「打开草稿文件夹」，或打开剪映后在草稿箱中查找该草稿。`)
         setLastJianyingDraftName(data.draftName || '')
         setLastJianyingDraftPath(data.openPath || data.draftPath || data.draftFolder || '')
       } else {
@@ -3398,7 +3398,7 @@ export default function App() {
           if (retryData.ok) {
             const draftName = retryData.draftName || '未命名草稿'
             setJianyingExportStatus('success')
-            setJianyingExportMsg(retryData.message || `已生成剪映草稿：${draftName}。请点击「去剪映草稿」继续在剪映中编辑。`)
+            setJianyingExportMsg(retryData.message || `已生成剪映草稿：${draftName}。你可以点击「打开草稿文件夹」，或打开剪映后在草稿箱中查找该草稿。`)
             setLastJianyingDraftName(retryData.draftName || '')
             setLastJianyingDraftPath(retryData.openPath || retryData.draftPath || retryData.draftFolder || '')
           } else {
@@ -3427,13 +3427,14 @@ export default function App() {
 
   // v0.9.10: 打开剪映软件（前端 → 后端 /open-jianying）
   async function openJianyingApp() {
+    const draftName = lastJianyingDraftName || '刚生成的草稿'
     try {
       const resp = await fetch('http://127.0.0.1:8765/open-jianying', { method: 'POST' })
       const data = await resp.json().catch(() => ({}))
       if (data.ok) {
-        showToast(data.message || '已尝试打开剪映')
+        showToast(`已尝试打开剪映。请在草稿箱中查找：${draftName}`)
       } else {
-        showToast(data.error || '未找到剪映，请手动打开')
+        showToast(`未能自动打开剪映，但草稿已生成。请手动打开剪映，在草稿箱中查找：${draftName}`)
       }
     } catch (e) {
       showToast('本地导出服务未启动，请先双击「启动本地导出服务.bat」。')
@@ -3455,9 +3456,9 @@ export default function App() {
       })
       const data = await resp.json().catch(() => ({}))
       if (data.ok) {
-        showToast(data.message || '已打开草稿文件夹')
+        showToast(`已打开草稿文件夹。请打开剪映，在草稿箱中查找：${lastJianyingDraftName || '刚生成的草稿'}`)
       } else {
-        showToast(data.error || '草稿文件夹不存在，请手动查看剪映本地草稿')
+        showToast(`草稿已生成，但打开草稿文件夹失败。请手动前往：${p}`)
       }
     } catch (e) {
       showToast('本地导出服务未启动，请先双击「启动本地导出服务.bat」。')
@@ -4854,11 +4855,11 @@ export default function App() {
                         <button className="jianying-success-btn" onClick={openJianyingDraftFolder}
                           title={lastJianyingDraftPath ? `本地路径：${lastJianyingDraftPath}` : '通过本地服务打开草稿文件夹'}
                           disabled={!lastJianyingDraftPath}>
-                          📁 去剪映草稿
+                          📁 打开草稿文件夹
                         </button>
                         <button className="jianying-success-btn" onClick={openJianyingApp}
-                          title="通过本地服务尝试启动剪映软件">
-                          🚀 打开剪映
+                          title="可选操作：通过本地服务尝试启动剪映软件">
+                          🚀 尝试打开剪映
                         </button>
                         {lastJianyingDraftName&&(
                           <span className="jianying-success-draftname" title={lastJianyingDraftPath}>

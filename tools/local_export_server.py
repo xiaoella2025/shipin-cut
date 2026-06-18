@@ -883,7 +883,7 @@ class ExportHandler(BaseHTTPRequestHandler):
                 success_name = parsed_name or draft_name or ""
                 self._json({
                     "ok": True,
-                    "message": f"已生成剪映草稿：{success_name or '未命名草稿'}。请点击「去剪映草稿」继续在剪映中编辑。",
+                    "message": f"已生成剪映草稿：{success_name or '未命名草稿'}。你可以点击「打开草稿文件夹」，或打开剪映后在草稿箱中查找该草稿。",
                     "draftName": success_name,
                     "draftPath": draft_dir or "",
                     "draftFolder": draft_folder,
