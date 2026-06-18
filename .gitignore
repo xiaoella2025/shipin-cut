@@ -41,6 +41,10 @@ export_workspace/output/*
 !export_workspace/output/.gitkeep
 export_workspace/temp/*
 !export_workspace/temp/.gitkeep
+export_workspace/tmp/
+export_workspace/logs/
+export_workspace/local-output/
+export_workspace/jianying/
 export_workspace/drafts/*.json
 export_workspace/drafts/
 .claude/
@@ -51,6 +55,7 @@ tmp/
 *.mp4
 *.wav
 *.zip
+*.log
 # 真实剪映草稿样本（参考用，不入版本控制）
 *_e3e97909*/
 *_e3e97909*.zip
