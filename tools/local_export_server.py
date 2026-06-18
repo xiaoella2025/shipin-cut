@@ -864,14 +864,33 @@ class ExportHandler(BaseHTTPRequestHandler):
                 parsed_name, draft_dir = _resolve_jianying_draft_dir(
                     result.stdout or "", draft_name,
                 )
+                draft_folder = str(JIANYING_DRAFT_ROOT)
+                project_root = str(REPO_ROOT)
+                open_path = draft_dir or draft_folder
+                try:
+                    is_jianying_draft = bool(draft_dir) and str(Path(draft_dir).resolve()).lower().startswith(
+                        str(JIANYING_DRAFT_ROOT.resolve()).lower()
+                    )
+                except Exception:
+                    is_jianying_draft = False
                 debug_payload["finalStatus"] = "success"
                 debug_payload["draftPath"] = draft_dir or ""
+                debug_payload["draftFolder"] = draft_folder
+                debug_payload["projectRoot"] = project_root
+                debug_payload["isWrittenToJianyingDraftDir"] = is_jianying_draft
+                debug_payload["openPath"] = open_path
                 _write_export_debug(debug_payload)
+                success_name = parsed_name or draft_name or ""
                 self._json({
                     "ok": True,
-                    "message": "剪映草稿生成成功，请在剪映中刷新查看",
-                    "draftName": parsed_name or "",
+                    "message": f"已生成剪映草稿：{success_name or '未命名草稿'}。请点击「去剪映草稿」继续在剪映中编辑。",
+                    "draftName": success_name,
                     "draftPath": draft_dir or "",
+                    "draftFolder": draft_folder,
+                    "projectRoot": project_root,
+                    "isWrittenToJianyingDraftDir": is_jianying_draft,
+                    "openPath": open_path,
+                    "debug": debug_payload,
                 })
             else:
                 # 失败：脚本已自行清理临时草稿目录，这里只需如实返回失败

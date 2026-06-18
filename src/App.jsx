@@ -3370,10 +3370,11 @@ export default function App() {
       })
       const data = await resp.json()
       if (data.ok) {
+        const draftName = data.draftName || '未命名草稿'
         setJianyingExportStatus('success')
-        setJianyingExportMsg(data.message || '剪映草稿已生成，请关闭并重新打开剪映查看。')
+        setJianyingExportMsg(data.message || `已生成剪映草稿：${draftName}。请点击「去剪映草稿」继续在剪映中编辑。`)
         setLastJianyingDraftName(data.draftName || '')
-        setLastJianyingDraftPath(data.draftPath || '')
+        setLastJianyingDraftPath(data.openPath || data.draftPath || data.draftFolder || '')
       } else {
         const missingMp4 = /MP4 文件不存在/.test(data.error || '')
         if (missingMp4) {
@@ -3395,10 +3396,11 @@ export default function App() {
           })
           const retryData = await retry.json()
           if (retryData.ok) {
+            const draftName = retryData.draftName || '未命名草稿'
             setJianyingExportStatus('success')
-            setJianyingExportMsg(retryData.message || '剪映草稿已生成，请关闭并重新打开剪映查看。')
+            setJianyingExportMsg(retryData.message || `已生成剪映草稿：${draftName}。请点击「去剪映草稿」继续在剪映中编辑。`)
             setLastJianyingDraftName(retryData.draftName || '')
-            setLastJianyingDraftPath(retryData.draftPath || '')
+            setLastJianyingDraftPath(retryData.openPath || retryData.draftPath || retryData.draftFolder || '')
           } else {
             setJianyingExportStatus('error')
             const raw = retryData.error || '生成失败，请重试'
@@ -4849,14 +4851,14 @@ export default function App() {
                     )}
                     {jianyingExportStatus==='success'&&(
                       <div className="jianying-success-actions">
-                        <button className="jianying-success-btn" onClick={openJianyingApp}
-                          title="通过本地服务尝试启动剪映软件">
-                          🚀 打开剪映
-                        </button>
                         <button className="jianying-success-btn" onClick={openJianyingDraftFolder}
                           title={lastJianyingDraftPath ? `本地路径：${lastJianyingDraftPath}` : '通过本地服务打开草稿文件夹'}
                           disabled={!lastJianyingDraftPath}>
-                          📁 打开草稿文件夹
+                          📁 去剪映草稿
+                        </button>
+                        <button className="jianying-success-btn" onClick={openJianyingApp}
+                          title="通过本地服务尝试启动剪映软件">
+                          🚀 打开剪映
                         </button>
                         {lastJianyingDraftName&&(
                           <span className="jianying-success-draftname" title={lastJianyingDraftPath}>
