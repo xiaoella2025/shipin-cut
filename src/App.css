@@ -6831,6 +6831,36 @@ input[type=range] {
 }
 .s2-substep-back:hover { color: #dce4f2; }
 
+/* v0.9.12: 第二步切分变更后旧组合方案失效提示横幅 */
+.s2-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: rgba(245, 158, 11, .12);
+  border-bottom: 1px solid rgba(245, 158, 11, .35);
+  color: #fbbf24;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.s2-stale-banner-icon { font-size: 14px; line-height: 1; }
+.s2-stale-banner-text { flex: 1; font-weight: 500; }
+.s2-stale-banner-btn {
+  font-size: 11px;
+  font-weight: 600;
+  background: #f59e0b;
+  color: #1f1300;
+  border: none;
+  padding: 5px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.s2-stale-banner-btn:hover { background: #fbbf24; }
+.s2-stale-banner-btn:disabled { opacity: .55; cursor: not-allowed; }
+
 /* ── compose view layout ── */
 .s2-compose-view {
   display: flex;

@@ -1260,6 +1260,12 @@ export default function App() {
   // ── step-3 compositions ──
   const [compositions, setCompositions]     = useState([])
   const [selectedCompId, setSelectedCompId] = useState(null)
+  // v0.9.12: 上一次 handleGenerate 生成组合方案时记录的 splitFingerprint，
+  // 与当前 splitFingerprint 比对得到 compositionsStale；不为空才算数。
+  const [compositionsFingerprint, setCompositionsFingerprint] = useState('')
+  const compositionsStale = compositions.length > 0
+    && compositionsFingerprint !== ''
+    && compositionsFingerprint !== splitFingerprint
 
   // ── step-3 composition editing ──
   const [editingSeg, setEditingSeg]         = useState(null)   // {compId, segIdx}
@@ -1515,6 +1521,15 @@ export default function App() {
   const doneCount      = uploadedVideos.filter(v=>['done','confirmed'].includes(videoAnalysis[v.id]?.status)).length
   const totalSubCount  = uploadedVideos.reduce((s,v)=>s+(videoAnalysis[v.id]?.subtitleCount||0), 0)
   const totalSegCount  = uploadedVideos.reduce((s,v)=>s+(videoAnalysis[v.id]?.segments?.length||0), 0)
+
+  // v0.9.12: 第二步字幕切分变更 → 旧组合方案失效闸门
+  // 每次 videoAnalysis 的 segments/selected/边界变都重算一个指纹；
+  // 与上一次生成组合方案时记录的指纹不一致 → compositionsStale=true
+  // 不再静默沿用旧方案。
+  const splitFingerprint = uploadedVideos.map(v => {
+    const segs = videoAnalysis[v.id]?.segments || []
+    return segs.map(s => `${s.id}|${s.selected?1:0}|${s.startSec.toFixed(3)}|${s.endSec.toFixed(3)}|${s.type||''}`).join(',')
+  }).join('||')
 
   // ── effects ──
 
@@ -2314,6 +2329,14 @@ export default function App() {
           const comps = buildCompositions(freshSegs)
           setCompositions(comps)
           setSelectedCompId(comps[0]?.id ?? null)
+          // v0.9.12: 记录本次生成所用 splitFingerprint；之后第二步切分变更
+          // 会让 splitFingerprint 与之不一致，触发 compositionsStale。
+          // 直接用 freshAna/freshVids 现场算，避免依赖闭包里的旧 splitFingerprint。
+          const genFp = freshVids.map(v => {
+            const segs = freshAna[v.id]?.segments || []
+            return segs.map(s => `${s.id}|${s.selected?1:0}|${(+s.startSec).toFixed(3)}|${(+s.endSec).toFixed(3)}|${s.type||''}`).join(',')
+          }).join('||')
+          setCompositionsFingerprint(genFp)
           setSubStep('compose')
         }, 400)
       } else { setGenProg(p) }
@@ -4201,6 +4224,22 @@ export default function App() {
               <span className="s2-substep-title">组合方案编辑</span>
               <span className="s2-substep-info">{compositions.length} 个成品方案 · 点击片段块可替换</span>
               <button className="s2-substep-back" onClick={()=>setSubStep('cut')}>← 返回字幕切片</button>
+            </div>
+          )}
+
+          {/* v0.9.12: 字幕切分已变更，旧组合方案失效提示（不再静默展示旧方案） */}
+          {subStep==='compose'&&compositionsStale&&(
+            <div className="s2-stale-banner">
+              <span className="s2-stale-banner-icon">⚠</span>
+              <span className="s2-stale-banner-text">字幕切分已变更，请重新生成组合方案</span>
+              <button className="s2-stale-banner-btn"
+                disabled={isGenerating || totalSelectedSegs===0}
+                onClick={()=>totalSelectedSegs===0
+                  ? showToast('请先在字幕切片页勾选要参与混剪的片段')
+                  : handleGenerate()}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                立即重新生成
+              </button>
             </div>
           )}
 
@@ -7414,7 +7453,23 @@ export default function App() {
 
       {/* ══ STEP 3: 预览导出 */}
       {step===3&&(
-        <div className="step3 step3-v2">
+        <Fragment>
+          {/* v0.9.12: 字幕切分已变更，旧组合方案失效提示（不再静默展示旧方案） */}
+          {compositionsStale&&(
+            <div className="s2-stale-banner">
+              <span className="s2-stale-banner-icon">⚠</span>
+              <span className="s2-stale-banner-text">字幕切分已变更，请重新生成组合方案</span>
+              <button className="s2-stale-banner-btn"
+                disabled={isGenerating || totalSelectedSegs===0}
+                onClick={()=>totalSelectedSegs===0
+                  ? showToast('请先在第二步字幕切片页勾选要参与混剪的片段')
+                  : handleGenerate()}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                立即重新生成
+              </button>
+            </div>
+          )}
+          <div className="step3 step3-v2">
 
           {/* LEFT: composition list */}
           <aside className="s3v2-left">
@@ -7673,7 +7728,8 @@ export default function App() {
               onComplete={ids=>setExportedComps(prev=>new Set([...prev,...ids]))}
             />
           )}
-        </div>
+          </div>
+        </Fragment>
       )}
 
     </div>
