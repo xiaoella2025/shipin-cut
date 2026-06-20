@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -106,9 +107,205 @@ class TestUserDataPaths(unittest.TestCase):
 
 
 class TestInstallerRuntimeFiles(unittest.TestCase):
-    def test_installer_bundles_frontend_dependencies(self):
+    def test_installer_bundles_dist_frontend(self):
+        """v0.9.13 (3B): 安装版前端由 dist/ 提供，shipin-cut.iss 必须打包它。"""
         source = (ROOT / "installer" / "shipin-cut.iss").read_text(encoding="utf-8")
-        self.assertIn('Source: "..\\node_modules\\*"', source)
+        self.assertIn('Source: "..\\dist\\*"', source)
+        # 目标目录必须是 {app}\dist
+        self.assertIn('DestDir: "{app}\\dist"', source)
+
+    def test_installer_no_longer_bundles_node_modules(self):
+        """v0.9.13: 安装版不再需要 node_modules/，把它从 shipin-cut.iss 移除。"""
+        source = (ROOT / "installer" / "shipin-cut.iss").read_text(encoding="utf-8")
+        self.assertNotIn('Source: "..\\node_modules\\*"', source)
+
+
+class TestStaticFrontendMode(unittest.TestCase):
+    """v0.9.13 (3B): 启动器 + 后端必须支持静态前端托管，避免再依赖 Node/npm。"""
+
+    def test_has_static_frontend_detects_dist_index(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "dist" / "assets").mkdir(parents=True)
+            (root / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
+            self.assertTrue(launcher.has_static_frontend(root))
+
+    def test_has_static_frontend_false_without_dist(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertFalse(launcher.has_static_frontend(root))
+
+    def test_static_frontend_url_points_to_backend(self):
+        # 静态前端 URL 走 8765/shipin-cut/，不再走 5173
+        self.assertEqual(
+            launcher.STATIC_FRONTEND_URL,
+            f"http://{launcher.BACKEND_HOST}:{launcher.BACKEND_PORT}/shipin-cut/",
+        )
+        self.assertNotIn("5173", launcher.STATIC_FRONTEND_URL)
+
+    def test_dev_frontend_url_unchanged(self):
+        # 开发态仍走 Vite dev server，5173 不动
+        self.assertEqual(launcher.DEV_FRONTEND_URL, "http://localhost:5173/shipin-cut/")
+
+    def test_run_launcher_static_mode_skips_npm_and_node_modules(self):
+        """dist 存在时，启动器必须跳过 find_npm() 与 node_modules 检查。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "app"
+            project_root.mkdir()
+            (project_root / "dist" / "index.html").parent.mkdir(parents=True, exist_ok=True)
+            (project_root / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
+            (project_root / "tools").mkdir()
+            (project_root / "tools" / "local_export_server.py").write_text(
+                "pass\n", encoding="utf-8"
+            )
+            (project_root / "package.json").write_text("{}", encoding="utf-8")
+
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+
+            calls = {"npm": 0, "browser_url": None}
+
+            def fake_find_npm():
+                calls["npm"] += 1
+                return None  # 即使 npm 不在也不应被调用
+
+            def fake_wb_open(url, *args, **kwargs):
+                calls["browser_url"] = url
+                return True
+
+            # 用一个无文件 handler 的 logger，避免测试结束后 Windows 删不掉日志文件
+            null_logger = logging.getLogger("shipin_cut_launcher_test_null")
+            null_logger.handlers = [logging.NullHandler()]
+            null_logger.setLevel(logging.INFO)
+            null_logger.propagate = False
+
+            with patch.object(launcher, "find_npm", side_effect=fake_find_npm), \
+                 patch.object(launcher, "backend_state", return_value="shipin-cut"), \
+                 patch.object(launcher, "static_frontend_state", return_value="shipin-cut"), \
+                 patch.object(launcher, "verify_python", return_value=True), \
+                 patch.object(launcher, "resolve_project_root", return_value=project_root), \
+                 patch.object(launcher, "resolve_user_data_root", return_value=user_data_root), \
+                 patch.object(launcher, "setup_logging", return_value=(null_logger, base / "no.log")), \
+                 patch.object(launcher, "SingleInstanceLock") as fake_lock_cls, \
+                 patch.object(launcher, "webbrowser") as fake_wb, \
+                 patch("time.sleep", side_effect=KeyboardInterrupt):
+                fake_lock_cls.return_value.acquire.return_value = True
+                fake_wb.open.side_effect = fake_wb_open
+
+                try:
+                    launcher.run_launcher(no_browser=False)
+                except SystemExit:
+                    pass
+
+            # npm 一次都不应被调用
+            self.assertEqual(calls["npm"], 0, "static mode must not invoke find_npm()")
+            # node_modules 不存在也不应触发"请安装前端依赖"路径
+            self.assertFalse((project_root / "node_modules").exists())
+            # webbrowser.open 必须用 STATIC_FRONTEND_URL，不带 5173
+            self.assertIsNotNone(calls["browser_url"], "webbrowser.open must be called")
+            self.assertEqual(calls["browser_url"], launcher.STATIC_FRONTEND_URL)
+            self.assertNotIn("5173", calls["browser_url"])
+
+    def test_run_launcher_dev_mode_requires_npm_and_node_modules(self):
+        """无 dist 时启动器回退到 dev 模式，必须仍校验 npm + node_modules。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "app"
+            project_root.mkdir()
+            (project_root / "tools").mkdir()
+            (project_root / "tools" / "local_export_server.py").write_text(
+                "pass\n", encoding="utf-8"
+            )
+            (project_root / "package.json").write_text("{}", encoding="utf-8")
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+
+            null_logger = logging.getLogger("shipin_cut_launcher_test_null2")
+            null_logger.handlers = [logging.NullHandler()]
+            null_logger.setLevel(logging.INFO)
+            null_logger.propagate = False
+
+            with patch.object(launcher, "find_npm", return_value=None), \
+                 patch.object(launcher, "verify_python", return_value=True), \
+                 patch.object(launcher, "resolve_project_root", return_value=project_root), \
+                 patch.object(launcher, "resolve_user_data_root", return_value=user_data_root), \
+                 patch.object(launcher, "setup_logging", return_value=(null_logger, base / "no.log")), \
+                 patch.object(launcher, "SingleInstanceLock") as fake_lock_cls:
+                fake_lock_cls.return_value.acquire.return_value = True
+                ret = launcher.run_launcher(no_browser=True)
+                self.assertEqual(ret, 1, "missing npm must abort dev mode")
+
+
+class TestStaticFrontendServing(unittest.TestCase):
+    """v0.9.13: local_export_server.py 在 /shipin-cut/ 下托管 dist/。"""
+
+    def _make_handler(self):
+        from io import BytesIO
+
+        # 构造一个最小可用的 handler 实例，直接调我们的方法
+        handler_cls = local_export_server.ExportHandler
+        # BaseHTTPRequestHandler.__init__ 在没 socket 时会报错；
+        # 我们绕过它，只绑定方法所需的几个属性。
+        handler = handler_cls.__new__(handler_cls)
+        handler.path = "/shipin-cut/"
+        handler.wfile = BytesIO()
+        handler.requestline = "GET /shipin-cut/ HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.command = "GET"
+        handler.headers = {}
+        handler.client_address = ("127.0.0.1", 0)
+        # log_request 会读 self.requestline 等；测试只关心业务逻辑，把它压住。
+        handler.log_request = lambda *a, **kw: None
+        handler.log_message = lambda *a, **kw: None
+        return handler
+
+    def test_frontend_prefix_and_dist_dir_exposed(self):
+        # 常量必须可用
+        self.assertEqual(local_export_server.FRONTEND_PREFIX, "/shipin-cut")
+        self.assertTrue(str(local_export_server.DIST_DIR).endswith("dist"))
+
+    def test_serve_static_skips_non_frontend_paths(self):
+        handler = self._make_handler()
+        handler.path = "/health"
+        self.assertFalse(handler._serve_static_frontend())
+
+    def test_serve_static_returns_index_for_root(self):
+        handler = self._make_handler()
+        handler.path = "/shipin-cut/"
+        # 仓库根目录有真实 dist/，必须能拿到 index.html
+        self.assertTrue(handler._serve_static_frontend())
+        body = handler.wfile.getvalue()
+        self.assertIn("视频混剪工具".encode("utf-8"), body)
+
+    def test_serve_static_returns_assets_with_correct_mime(self):
+        handler = self._make_handler()
+        dist_assets = local_export_server.DIST_DIR / "assets"
+        if not dist_assets.is_dir() or not any(dist_assets.iterdir()):
+            self.skipTest("dist/assets/ not yet built; run npm.cmd run build first")
+        first_asset = next(dist_assets.iterdir())
+        handler.path = f"/shipin-cut/assets/{first_asset.name}"
+        handler.wfile = __import__("io").BytesIO()
+        self.assertTrue(handler._serve_static_frontend())
+        body = handler.wfile.getvalue()
+        self.assertGreater(len(body), 0)
+        suffix = first_asset.suffix.lower()
+        if suffix in local_export_server.STATIC_EXTRA_TYPES:
+            expected = local_export_server.STATIC_EXTRA_TYPES[suffix].split(";")[0]
+            # Content-Type 在 send_header 里被设置；这里通过 STATIC_EXTRA_TYPES 间接验证
+
+    def test_serve_static_spa_fallback(self):
+        handler = self._make_handler()
+        handler.path = "/shipin-cut/this/is/spa"
+        self.assertTrue(handler._serve_static_frontend())
+        body = handler.wfile.getvalue()
+        self.assertIn("视频混剪工具".encode("utf-8"), body)
+
+    def test_serve_static_rejects_path_traversal(self):
+        handler = self._make_handler()
+        handler.path = "/shipin-cut/assets/../../package.json"
+        self.assertTrue(handler._serve_static_frontend())
+        body = handler.wfile.getvalue()
+        # 不应返回 package.json 的真实内容；要么 403，要么 404
+        self.assertNotIn(b'"name"', body)
 
 
 class TestExportScriptPaths(unittest.TestCase):

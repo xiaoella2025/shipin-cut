@@ -34,7 +34,9 @@ Source: "..\vite.config.js"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\启动视频混剪工具.bat"; DestDir: "{app}"; Flags: ignoreversion
 
 Source: "..\src\*"; DestDir: "{app}\src"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\node_modules\*"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
+; v0.9.13 (阶段 3B): 前端运行时由 dist/ 提供，不再打包 node_modules；保留
+; package.json / src/ 仅作开发文档用途，安装版运行时不读取它们。
+Source: "..\dist\*"; DestDir: "{app}\dist"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\launcher\*"; DestDir: "{app}\launcher"; Excludes: "__pycache__\*,*.pyc"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\tools\*.py"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\jianying_draft\*.py"; DestDir: "{app}\tools\jianying_draft"; Flags: ignoreversion

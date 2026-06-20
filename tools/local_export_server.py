@@ -15,6 +15,7 @@ import re
 import shutil
 import tempfile
 import subprocess
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -62,6 +63,21 @@ JIANYING_EXE_NAMES = {"jianyingpro.exe", "capcut.exe"}
 
 HOST = "127.0.0.1"
 PORT = 8765
+
+# v0.9.13: 静态前端托管（阶段 3B）。
+# Vite 把 base 设为 /shipin-cut/，所以产物里所有 asset URL 都带 /shipin-cut/ 前缀；
+# 安装版不再跑 npm dev，由后端直接把 dist/ 暴露在该前缀下。
+FRONTEND_PREFIX = "/shipin-cut"
+DIST_DIR = REPO_ROOT / "dist"
+STATIC_EXTRA_TYPES = {
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+}
 
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac"}
@@ -697,6 +713,65 @@ class ExportHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _guess_content_type(self, suffix: str) -> str:
+        """按后缀挑 Content-Type；未知后缀回退到 octet-stream。"""
+        if suffix in STATIC_EXTRA_TYPES:
+            return STATIC_EXTRA_TYPES[suffix]
+        guessed, _ = mimetypes.guess_type(f"x{suffix}")
+        return guessed or "application/octet-stream"
+
+    def _serve_static_frontend(self) -> bool:
+        """v0.9.13: 托管 dist/ 在 FRONTEND_PREFIX 下。
+
+        返回 True 表示该请求已被处理（无论成功/失败）；未匹配则返回 False，
+        让调用方继续走 API 路由。
+        """
+        path = self.path
+        if "?" in path:
+            path = path.split("?", 1)[0]
+        if not (path == FRONTEND_PREFIX or path.startswith(FRONTEND_PREFIX + "/")):
+            return False
+        if not DIST_DIR.is_dir():
+            # 没 dist/ 时让 API 路由继续，不静默吞掉其它路径
+            self._json({"ok": False, "error": "前端构建产物缺失，请联系管理员。"}, 404)
+            return True
+
+        rel = path[len(FRONTEND_PREFIX):]  # 空串或 "/xxx"
+        if rel == "" or rel == "/":
+            target = DIST_DIR / "index.html"
+        elif rel.startswith("/assets/"):
+            # 只允许 assets/ 目录直接读盘，其余 SPA 路径走 fallback
+            candidate = (DIST_DIR / rel.lstrip("/")).resolve()
+            try:
+                candidate.relative_to(DIST_DIR.resolve())
+            except ValueError:
+                self._json({"ok": False, "error": "forbidden"}, 403)
+                return True
+            target = candidate
+        else:
+            # SPA fallback：/shipin-cut/<其他路径> 一律回到 index.html
+            target = DIST_DIR / "index.html"
+
+        if not target.is_file():
+            self._json({"ok": False, "error": "not found"}, 404)
+            return True
+
+        try:
+            body = target.read_bytes()
+        except OSError as exc:
+            self._json({"ok": False, "error": f"读取失败: {exc}"}, 500)
+            return True
+
+        content_type = self._guess_content_type(target.suffix.lower())
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", len(body))
+        self.send_header("Cache-Control", "no-cache")
+        self._cors()
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def do_OPTIONS(self):
         self.send_response(200)
         self._cors()
@@ -729,6 +804,8 @@ class ExportHandler(BaseHTTPRequestHandler):
             auds = [f.name for f in AUDIO_DIR.iterdir()
                     if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
             self._json({"ok": True, "videos": sorted(vids), "audio": sorted(auds)})
+        elif self._serve_static_frontend():
+            pass  # 静态前端已处理
         else:
             self._json({"ok": False, "error": "not found"}, 404)
 

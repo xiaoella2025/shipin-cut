@@ -25,7 +25,9 @@ BACKEND_PORT = 8765
 FRONTEND_HOST = "127.0.0.1"
 FRONTEND_PORT = 5173
 BACKEND_HEALTH_URL = f"http://{BACKEND_HOST}:{BACKEND_PORT}/health"
-FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}/shipin-cut/"
+DEV_FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}/shipin-cut/"
+# v0.9.13 (阶段 3B): 安装版用后端托管 dist/，不再跑 Vite dev server。
+STATIC_FRONTEND_URL = f"http://{BACKEND_HOST}:{BACKEND_PORT}/shipin-cut/"
 BACKEND_SERVICE_ID = "shipin-cut-local-export"
 START_TIMEOUT_SECONDS = 30
 
@@ -154,7 +156,30 @@ def frontend_state() -> str:
     if not port_is_open(FRONTEND_HOST, FRONTEND_PORT):
         return "stopped"
     try:
-        status, body, content_type = fetch_url(FRONTEND_URL)
+        status, body, content_type = fetch_url(DEV_FRONTEND_URL)
+        html = body.decode("utf-8", errors="replace")
+        if status == 200 and "text/html" in content_type and "视频混剪工具" in html:
+            return "shipin-cut"
+    except (OSError, UnicodeDecodeError, urllib.error.URLError):
+        pass
+    return "occupied"
+
+
+def has_static_frontend(project_root: Path) -> bool:
+    """v0.9.13: dist/index.html 存在即视为可用静态前端。
+
+    安装版按这一标志跳过 Node/npm 校验与 Vite dev 启动；
+    dev 模式如果没有 dist/ 则继续回退到 npm run dev。
+    """
+    return (project_root / "dist" / "index.html").is_file()
+
+
+def static_frontend_state() -> str:
+    """v0.9.13: 静态前端模式下，后端托管 /shipin-cut/ 即视为已就绪。"""
+    if not port_is_open(BACKEND_HOST, BACKEND_PORT):
+        return "stopped"
+    try:
+        status, body, content_type = fetch_url(STATIC_FRONTEND_URL)
         html = body.decode("utf-8", errors="replace")
         if status == 200 and "text/html" in content_type and "视频混剪工具" in html:
             return "shipin-cut"
@@ -264,13 +289,15 @@ def write_runtime_state(path: Path, processes: dict[str, subprocess.Popen]) -> N
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def wait_for_existing_launcher(logger: logging.Logger, no_browser: bool) -> int:
+def wait_for_existing_launcher(
+    logger: logging.Logger, no_browser: bool, frontend_checker, frontend_url: str
+) -> int:
     logger.info("检测到视频混剪工具正在启动或运行，将复用现有服务。")
     deadline = time.monotonic() + START_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        if backend_state() == "shipin-cut" and frontend_state() == "shipin-cut":
+        if backend_state() == "shipin-cut" and frontend_checker() == "shipin-cut":
             if not no_browser:
-                webbrowser.open(FRONTEND_URL)
+                webbrowser.open(frontend_url)
             logger.info("服务已运行，浏览器页面已打开。")
             return 0
         time.sleep(0.5)
@@ -286,12 +313,24 @@ def run_launcher(no_browser: bool = False) -> int:
         print(f"[错误] {exc}")
         return 1
 
+    # v0.9.13: dist/ 存在则进入静态前端模式，跳过 Vite dev 与 Node/npm 校验。
+    static_mode = has_static_frontend(project_root)
+    if static_mode:
+        frontend_url = STATIC_FRONTEND_URL
+        frontend_checker = static_frontend_state
+    else:
+        frontend_url = DEV_FRONTEND_URL
+        frontend_checker = frontend_state
+
     try:
         user_data_root = resolve_user_data_root()
         user_paths = ensure_user_data_dirs(user_data_root)
-        vite_config_path = prepare_runtime_vite_config(
-            user_paths["runtime"], user_paths["cache"] / "vite", project_root
-        )
+        if static_mode:
+            vite_config_path = None
+        else:
+            vite_config_path = prepare_runtime_vite_config(
+                user_paths["runtime"], user_paths["cache"] / "vite", project_root
+            )
         logger, log_path = setup_logging(user_paths["launcher_logs"])
     except OSError as exc:
         print(f"[错误] 无法创建用户数据目录：{exc}")
@@ -301,10 +340,14 @@ def run_launcher(no_browser: bool = False) -> int:
     logger.info("项目根目录：%s", project_root)
     logger.info("用户数据目录：%s", user_data_root)
     logger.info("启动日志：%s", log_path)
+    if static_mode:
+        logger.info("检测到 dist/index.html，进入静态前端模式（不依赖 Node/npm）。")
+    else:
+        logger.info("未检测到 dist/，使用 Vite dev 模式（需要 Node/npm）。")
 
     lock = SingleInstanceLock(user_paths["runtime"] / "launcher.lock")
     if not lock.acquire():
-        return wait_for_existing_launcher(logger, no_browser)
+        return wait_for_existing_launcher(logger, no_browser, frontend_checker, frontend_url)
 
     owned: dict[str, subprocess.Popen] = {}
     runtime_path = user_paths["runtime"] / "runtime.json"
@@ -316,22 +359,29 @@ def run_launcher(no_browser: bool = False) -> int:
             logger.error("未检测到 Python，请联系管理员安装运行环境。")
             return 1
 
-        npm = find_npm()
-        if not npm:
-            logger.error("未检测到 Node / npm，请联系管理员安装运行环境。")
-            return 1
-        if not (project_root / "node_modules").is_dir():
-            logger.error("首次启动需要安装前端依赖，请联系管理员。")
-            return 1
+        if static_mode:
+            # v0.9.13: 安装版不依赖 Node/npm，不做 npm/node_modules 校验。
+            npm = None
+        else:
+            npm = find_npm()
+            if not npm:
+                logger.error("未检测到 Node / npm，请联系管理员安装运行环境。")
+                return 1
+            if not (project_root / "node_modules").is_dir():
+                logger.error("首次启动需要安装前端依赖，请联系管理员。")
+                return 1
 
         backend = backend_state()
         if backend == "occupied":
             logger.error("8765 端口被其他程序占用，请关闭占用该端口的程序后重试。")
             return 1
 
-        frontend = frontend_state()
+        frontend = frontend_checker()
         if frontend == "occupied":
-            logger.error("5173 端口被其他程序占用，请关闭占用该端口的程序后重试。")
+            if static_mode:
+                logger.error("后端 /shipin-cut/ 返回异常，请检查 dist/ 是否完整。")
+            else:
+                logger.error("5173 端口被其他程序占用，请关闭占用该端口的程序后重试。")
             return 1
 
         child_log = child_log_path.open("a", encoding="utf-8", buffering=1)
@@ -353,37 +403,47 @@ def run_launcher(no_browser: bool = False) -> int:
                 return 1
             logger.info("本地服务已启动（PID %s）。", process.pid)
 
-        if frontend == "shipin-cut":
-            logger.info("检测到前端页面已运行，复用 5173 端口。")
+        if static_mode:
+            # 静态前端不需要额外进程；只需确认后端能服务 /shipin-cut/。
+            if frontend_checker() == "shipin-cut":
+                logger.info("检测到静态前端已就绪（后端托管 dist/）。")
+            else:
+                logger.info("等待后端托管静态前端…")
+                if not wait_for_state(frontend_checker, "shipin-cut", START_TIMEOUT_SECONDS):
+                    logger.error("静态前端启动失败，请查看日志：%s", child_log_path)
+                    return 1
         else:
-            logger.info("正在启动前端页面")
-            process = start_process(
-                [
-                    npm,
-                    "run",
-                    "dev",
-                    "--",
-                    "--host",
-                    FRONTEND_HOST,
-                    "--port",
-                    str(FRONTEND_PORT),
-                    "--strictPort",
-                    "--config",
-                    str(vite_config_path),
-                ],
-                project_root,
-                child_log,
-            )
-            owned["frontend"] = process
-            write_runtime_state(runtime_path, owned)
-            if not wait_for_state(frontend_state, "shipin-cut", START_TIMEOUT_SECONDS, process):
-                logger.error("前端页面启动失败，请查看日志：%s", child_log_path)
-                return 1
-            logger.info("前端页面已启动（PID %s）。", process.pid)
+            if frontend == "shipin-cut":
+                logger.info("检测到前端页面已运行，复用 5173 端口。")
+            else:
+                logger.info("正在启动前端页面")
+                process = start_process(
+                    [
+                        npm,
+                        "run",
+                        "dev",
+                        "--",
+                        "--host",
+                        FRONTEND_HOST,
+                        "--port",
+                        str(FRONTEND_PORT),
+                        "--strictPort",
+                        "--config",
+                        str(vite_config_path),
+                    ],
+                    project_root,
+                    child_log,
+                )
+                owned["frontend"] = process
+                write_runtime_state(runtime_path, owned)
+                if not wait_for_state(frontend_checker, "shipin-cut", START_TIMEOUT_SECONDS, process):
+                    logger.error("前端页面启动失败，请查看日志：%s", child_log_path)
+                    return 1
+                logger.info("前端页面已启动（PID %s）。", process.pid)
 
         if not no_browser:
-            webbrowser.open(FRONTEND_URL)
-            logger.info("浏览器已打开：%s", FRONTEND_URL)
+            webbrowser.open(frontend_url)
+            logger.info("浏览器已打开：%s", frontend_url)
         logger.info("视频混剪工具已就绪，请保持本窗口打开。")
 
         while True:
