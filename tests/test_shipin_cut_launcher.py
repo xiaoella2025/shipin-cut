@@ -62,17 +62,30 @@ class TestUserDataPaths(unittest.TestCase):
 
     def test_runtime_vite_config_uses_user_cache(self):
         with tempfile.TemporaryDirectory() as td:
-            user_data_root = Path(td) / "ShipinCut"
+            base = Path(td)
+            project_root = base / "Program Files" / "ShipinCut"
+            project_root.mkdir(parents=True)
+            (project_root / "vite.config.js").write_text(
+                "import react from '@vitejs/plugin-react'\n"
+                "export default { plugins: [react()], base: '/' }\n",
+                encoding="utf-8",
+            )
+            user_data_root = base / "LocalAppData" / "ShipinCut"
             paths = launcher.ensure_user_data_dirs(user_data_root)
 
             config_path = launcher.prepare_runtime_vite_config(
-                paths["runtime"], paths["cache"] / "vite"
+                paths["runtime"], paths["cache"] / "vite", project_root
             )
             source = config_path.read_text(encoding="utf-8")
 
             self.assertEqual(config_path.parent, user_data_root / "runtime")
             self.assertIn("/shipin-cut/", source)
             self.assertIn((paths["cache"] / "vite").as_posix(), source)
+            # The runtime config must import the project's vite.config.js so the
+            # React plugin is preserved (otherwise App.jsx references React
+            # without importing it and the dev server renders a blank page).
+            self.assertIn("baseConfig", source)
+            self.assertIn(project_root.as_uri(), source)
 
     def test_backend_writable_paths_use_launcher_data_root(self):
         with tempfile.TemporaryDirectory() as td:

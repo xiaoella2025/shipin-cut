@@ -76,12 +76,25 @@ def ensure_user_data_dirs(user_data_root: Path) -> dict[str, Path]:
     return paths
 
 
-def prepare_runtime_vite_config(runtime_dir: Path, cache_dir: Path) -> Path:
+def prepare_runtime_vite_config(runtime_dir: Path, cache_dir: Path, project_root: Path) -> Path:
+    """Generate the runtime Vite config.
+
+    The config is written to the writable user-data runtime dir rather than the
+    read-only install location, so that ``cacheDir`` can be redirected there.
+    We still need the React plugin (and any other plugins) declared in the
+    project's ``vite.config.js`` — without it, App.jsx transforms to
+    ``React.createElement(...)`` calls but only imports the named hooks, and the
+    browser hits ``ReferenceError: React is not defined`` and renders blank.
+    Importing the original config via a ``file://`` URL preserves those plugins.
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     config_path = runtime_dir / "vite.config.mjs"
     cache_value = json.dumps(cache_dir.as_posix(), ensure_ascii=False)
+    source_config_url = (project_root / "vite.config.js").as_uri()
     config_path.write_text(
+        f"import baseConfig from {json.dumps(source_config_url)}\n"
         "export default {\n"
+        "  ...baseConfig,\n"
         "  base: '/shipin-cut/',\n"
         f"  cacheDir: {cache_value},\n"
         "}\n",
@@ -277,7 +290,7 @@ def run_launcher(no_browser: bool = False) -> int:
         user_data_root = resolve_user_data_root()
         user_paths = ensure_user_data_dirs(user_data_root)
         vite_config_path = prepare_runtime_vite_config(
-            user_paths["runtime"], user_paths["cache"] / "vite"
+            user_paths["runtime"], user_paths["cache"] / "vite", project_root
         )
         logger, log_path = setup_logging(user_paths["launcher_logs"])
     except OSError as exc:
