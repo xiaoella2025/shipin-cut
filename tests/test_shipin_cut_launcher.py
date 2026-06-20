@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -107,6 +109,125 @@ class TestInstallerRuntimeFiles(unittest.TestCase):
     def test_installer_bundles_frontend_dependencies(self):
         source = (ROOT / "installer" / "shipin-cut.iss").read_text(encoding="utf-8")
         self.assertIn('Source: "..\\node_modules\\*"', source)
+
+
+class TestExportScriptPaths(unittest.TestCase):
+    """v0.9.10: 安装版下 export_video.py / export_with_jianying.py 不再写死
+    REPO_ROOT/export_workspace；它们和 local_export_server.py 一样读
+    SHIPIN_CUT_DATA_ROOT，否则回退到仓库根目录的开发态路径。"""
+
+    def _writable_fake_repo(self, td):
+        base = Path(td)
+        repo_root = base / "Program Files" / "ShipinCut"
+        repo_root.mkdir(parents=True)
+        (repo_root / "export_workspace").mkdir(parents=True)
+        return base, repo_root
+
+    def _probe_module_attr(self, module, attr, env):
+        """在隔离子进程里导入 module 并打印 module.<attr>，避开 export_with_jianying
+        在 import 阶段跑 argparse 的副作用。"""
+        bootstrap = (
+            "import sys;"
+            "sys.path.insert(0,r'" + str(ROOT / "tools") + "');"
+            "sys.argv=['probe'];"
+        )
+        script = bootstrap + f"import {module};print(getattr({module},'{attr}'))"
+        return subprocess.run(
+            [sys.executable, "-c", script],
+            env=env, capture_output=True, text=True, check=False,
+        )
+
+    def test_export_video_workspace_uses_data_root_when_set(self):
+        with tempfile.TemporaryDirectory() as td:
+            base, repo_root = self._writable_fake_repo(td)
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+            env = {k: v for k, v in os.environ.items() if k != "SHIPIN_CUT_DATA_ROOT"}
+            env["SHIPIN_CUT_DATA_ROOT"] = str(user_data_root)
+
+            probe = self._probe_module_attr("export_video", "WORKSPACE", env)
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            self.assertEqual(probe.stdout.strip(), str(user_data_root / "workspace"))
+            self.assertNotIn(str(repo_root), probe.stdout)
+
+    def test_export_video_success_marker_is_relative_to_workspace(self):
+        """v0.9.11: 成功行「完成！输出文件: ...」必须输出相对 WORKSPACE 的路径，
+        否则安装版（WORKSPACE = %LOCALAPPDATA%\\ShipinCut\\workspace）下后端
+        用 WORKSPACE / rel 拼回绝对路径时会去找不存在的
+        <workspace>\\export_workspace\\output\\<name>，导致 /export 报
+        "生成失败" 假阴性。开发态下应输出 export_workspace/output/<name>，
+        安装态下应输出 output/<name>。"""
+        source = (ROOT / "tools" / "export_video.py").read_text(encoding="utf-8")
+        # 不能继续硬编码 export_workspace/output/ 前缀
+        self.assertNotIn("export_workspace/output/{final_name}", source)
+        self.assertIn("rel_str", source)
+
+    def test_export_video_workspace_falls_back_to_repo_root(self):
+        """开发态（不注入 SHIPIN_CUT_DATA_ROOT）继续走仓库根目录下的 export_workspace。
+        子进程里 REPO_ROOT 就是 export_video.py 所在的真实 tools/ 的父目录，
+        即本仓库根目录 F:\\shipin-cut，fallback 分支必须落到那里。"""
+        with tempfile.TemporaryDirectory() as td:
+            base, _ = self._writable_fake_repo(td)
+            env = {k: v for k, v in os.environ.items() if k != "SHIPIN_CUT_DATA_ROOT"}
+
+            probe = self._probe_module_attr("export_video", "WORKSPACE", env)
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            # export_video.WORKSPACE 应该等于脚本所在 tools/ 的父目录 + export_workspace
+            self.assertEqual(probe.stdout.strip(), str(ROOT / "export_workspace"))
+            self.assertNotIn("workspace", probe.stdout.replace(str(ROOT / "export_workspace"), ""))
+
+    def test_export_with_jianying_uses_data_root_when_set(self):
+        """export_with_jianying.py 在 import 阶段就跑 argparse + 主流程，没法
+        直接 import。改用 exec 执行从 import 块到 WORKSPACE_DIR/SUBTITLE_DIR
+        赋值为止的源码片段，验证路径解析逻辑。"""
+        source = (ROOT / "tools" / "export_with_jianying.py").read_text(encoding="utf-8")
+        # 截取到 SUBTITLE_DIR 赋值的最后一个分支结束
+        marker = "SUBTITLE_DIR  = SCRIPT_DIR.parent / \"local-output\" / \"subtitles\""
+        cut_at = source.index(marker) + len(marker)
+        snippet = source[:cut_at]
+        # main 流程使用 SCRIPT_DIR 做绝对路径定位，把 __file__ 指向真实脚本
+        snippet = snippet.replace(
+            "SCRIPT_DIR = Path(__file__).resolve().parent",
+            "SCRIPT_DIR = Path(r'" + str(ROOT / "tools" / "export_with_jianying.py")
+            + "').resolve().parent",
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            base, _ = self._writable_fake_repo(td)
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+            env = {k: v for k, v in os.environ.items() if k != "SHIPIN_CUT_DATA_ROOT"}
+            env["SHIPIN_CUT_DATA_ROOT"] = str(user_data_root)
+
+            probe = subprocess.run(
+                [sys.executable, "-c",
+                 snippet + "\nprint(WORKSPACE_DIR);print(SUBTITLE_DIR)"],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            out = probe.stdout.strip().splitlines()
+            self.assertEqual(out[0], str(user_data_root / "workspace"))
+            self.assertEqual(out[1], str(user_data_root / "local-output" / "subtitles"))
+            self.assertNotIn(str(ROOT), probe.stdout)
+
+    def test_local_export_server_safe_open_path_accepts_data_root_workspace(self):
+        """安装版下 _is_safe_open_path 必须把 WORKSPACE 视作合法父目录，
+        否则"打开草稿文件夹"会被闸门拒掉。这里临时替换 WORKSPACE 引用，模拟
+        launcher 把 WORKSPACE 重定向到用户数据目录之后的运行环境。"""
+        workspace = Path(tempfile.mkdtemp(prefix="shipin-test-ws-"))
+        try:
+            drafts = workspace / "drafts"
+            drafts.mkdir(parents=True)
+
+            with patch.object(local_export_server, "WORKSPACE", new=workspace), \
+                 patch.object(local_export_server, "JIANYING_DRAFT_ROOT",
+                              new=workspace / "no-jianying"):
+                ok = local_export_server._is_safe_open_path(drafts)
+                self.assertTrue(
+                    ok,
+                    "_is_safe_open_path must accept the resolved WORKSPACE root",
+                )
+        finally:
+            import shutil
+            shutil.rmtree(workspace, ignore_errors=True)
 
 
 class TestServiceDetection(unittest.TestCase):

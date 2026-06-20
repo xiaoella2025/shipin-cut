@@ -21,6 +21,22 @@ import datetime
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+# 与 tools/local_export_server.py / tools/export_video.py 保持一致：launcher
+# 注入 SHIPIN_CUT_DATA_ROOT（安装版下指向 %LOCALAPPDATA%\ShipinCut）时，
+# 成品 MP4 与字幕的查找都落到用户数据目录下，避免在只读的 {app} 下创建
+# export_workspace / local-output 触发 WinError 5；开发模式下未注入则继续走
+# 仓库根目录下的 export_workspace / local-output，不破坏现有开发流程。
+SCRIPT_DIR = Path(__file__).resolve().parent
+_data_root = os.environ.get("SHIPIN_CUT_DATA_ROOT")
+if _data_root:
+    _data_root_p = Path(_data_root).expanduser().resolve()
+    WORKSPACE_DIR = _data_root_p / "workspace"
+    SUBTITLE_DIR  = _data_root_p / "local-output" / "subtitles"
+else:
+    WORKSPACE_DIR = SCRIPT_DIR.parent / "export_workspace"
+    SUBTITLE_DIR  = SCRIPT_DIR.parent / "local-output" / "subtitles"
 
 # ─── 参数解析 ────────────────────────────────────────────
 
@@ -47,8 +63,7 @@ if args.mp4:
     print(f"[成品视频] {mp4_path}")
 else:
     # 自动查找 export_workspace/output/ 下最新的 MP4
-    output_dir = os.path.join(os.path.dirname(__file__), "..", "export_workspace", "output")
-    output_dir = os.path.abspath(output_dir)
+    output_dir = str(WORKSPACE_DIR / "output")
     mp4_files = []
     if os.path.exists(output_dir):
         mp4_files = [
@@ -78,8 +93,7 @@ else:
     # 自动匹配：从 local-output/subtitles/ 查找与 MP4 同名的 .srt
     # 例如：export_workspace/output/成品视频_1_20260602.mp4 → local-output/subtitles/1.srt
     mp4_basename = os.path.splitext(os.path.basename(mp4_path))[0]
-    subtitle_dir = os.path.join(os.path.dirname(__file__), "..", "local-output", "subtitles")
-    subtitle_dir = os.path.abspath(subtitle_dir)
+    subtitle_dir = str(SUBTITLE_DIR)
 
     # 策略：查找 manifest 确认 MP4 basename 对应的 SRT
     manifest_path = os.path.join(subtitle_dir, "subtitle-manifest.json")
@@ -93,8 +107,16 @@ else:
             # 匹配 videoFilename 部分（去掉扩展名）
             video_base = os.path.splitext(video_name)[0]
             if video_base in mp4_basename or mp4_basename in video_base:
-                potential_srt = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", srt))
-                if os.path.exists(potential_srt):
+                # manifest 中的 srt 字段是相对仓库根目录的路径；
+                # 安装版下 SRT 由后端内联下发到 workspace/temp，dev 模式下才会命中这里。
+                if os.path.isabs(srt) and os.path.exists(srt):
+                    potential_srt = srt
+                elif _data_root:
+                    # 安装版下 manifest 不存在或路径漂移，跳过即可（前端通常会直接传 --srt）
+                    potential_srt = None
+                else:
+                    potential_srt = os.path.abspath(os.path.join(str(SCRIPT_DIR.parent), srt))
+                if potential_srt and os.path.exists(potential_srt):
                     srt_path = potential_srt
                     print(f"[字幕文件]（自动匹配）{srt_path}")
                     break

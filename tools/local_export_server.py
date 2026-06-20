@@ -647,7 +647,8 @@ def _is_safe_open_path(p: Path):
     """
     /open-path 的安全闸门：只允许打开以下三类目录，避开系统/用户根目录。
     1) 剪映草稿根目录及其子目录
-    2) 项目 export_workspace 及其子目录
+    2) 当前可写 workspace 根目录（含 SHIPIN_CUT_DATA_ROOT 下的 workspace，
+       兼容安装版；dev 下指向 REPO_ROOT/export_workspace）
     3) 用户桌面（避免误开时仍能到合理位置）
     """
     try:
@@ -665,7 +666,10 @@ def _is_safe_open_path(p: Path):
     safe_parents = []
     if JIANYING_DRAFT_ROOT.exists():
         safe_parents.append(JIANYING_DRAFT_ROOT)
-    safe_parents.append((REPO_ROOT / "export_workspace").resolve())
+    # 安装版下 WORKSPACE 已经指向 %LOCALAPPDATA%\ShipinCut\workspace，
+    # 用它而不是写死的 REPO_ROOT/export_workspace，否则该路径不存在导致
+    # "打开草稿文件夹"被闸门拒掉。
+    safe_parents.append(WORKSPACE.resolve())
     desktop = Path.home() / "Desktop"
     if desktop.exists():
         safe_parents.append(desktop)
@@ -1205,7 +1209,10 @@ class ExportHandler(BaseHTTPRequestHandler):
         if output_file:
             p = Path(output_file)
             if not p.is_absolute():
-                p = REPO_ROOT / output_file
+                # export_video.py 输出的相对路径是相对脚本自身的 REPO_ROOT；
+                # 安装版下 WORKSPACE 已经重定向到 %LOCALAPPDATA%\ShipinCut\workspace，
+                # 必须用 WORKSPACE 而不是 REPO_ROOT，否则会去 {app} 下找导致 IsADirectoryError / 找不到。
+                p = WORKSPACE / output_file
             if p.exists() and p.stat().st_size > 0:
                 final_output = str(p)
 

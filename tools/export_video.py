@@ -26,7 +26,17 @@ for _stream in (sys.stdout, sys.stderr):
 # ── 路径配置 ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR  = Path(__file__).resolve().parent
 REPO_ROOT   = SCRIPT_DIR.parent
-WORKSPACE   = REPO_ROOT / "export_workspace"
+
+# 与 tools/local_export_server.py 的 resolve_writable_paths 保持一致：launcher
+# 启动时会注入 SHIPIN_CUT_DATA_ROOT（安装版下指向 %LOCALAPPDATA%\ShipinCut），
+# 此时可写 workspace 必须落到用户数据目录下，{app} 是只读的，开发模式下没有该
+# 环境变量则继续走仓库根目录下的 export_workspace，不破坏现有开发流程。
+_data_root = os.environ.get("SHIPIN_CUT_DATA_ROOT")
+if _data_root:
+    WORKSPACE = Path(_data_root).expanduser().resolve() / "workspace"
+else:
+    WORKSPACE = REPO_ROOT / "export_workspace"
+
 DRAFTS_DIR  = WORKSPACE / "drafts"
 VIDEOS_DIR  = WORKSPACE / "videos"
 AUDIO_DIR   = WORKSPACE / "audio"
@@ -1422,7 +1432,15 @@ def main():
     size_mb = final_out.stat().st_size / 1024 / 1024
     record_stage("final_output", final_out, expected_dur)
     write_debug_report("success")
-    log(f"完成！输出文件: export_workspace/output/{final_name}  ({size_mb:.1f} MB)")
+    # 输出相对 WORKSPACE 的路径（开发态 = export_workspace/output/<name>，
+    # 安装态 = output/<name>）；local_export_server.py 用 WORKSPACE / rel 解析，
+    # 这样两种部署模式下都能正确还原绝对路径
+    try:
+        rel = final_out.resolve().relative_to(WORKSPACE.resolve())
+        rel_str = rel.as_posix()
+    except ValueError:
+        rel_str = str(final_out)
+    log(f"完成！输出文件: {rel_str}  ({size_mb:.1f} MB)")
 
 if __name__ == "__main__":
     main()
