@@ -40,8 +40,20 @@ Source: "..\tools\*.py"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\jianying_draft\*.py"; DestDir: "{app}\tools\jianying_draft"; Flags: ignoreversion
 Source: "..\tools\jianying_draft\*.json"; DestDir: "{app}\tools\jianying_draft"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\tools\jianying_draft\templates\MIXCUT_EMPTY_TEMPLATE_REAL\*"; DestDir: "{app}\tools\jianying_draft\templates\MIXCUT_EMPTY_TEMPLATE_REAL"; Excludes: ".backup\*,.locked"; Flags: ignoreversion recursesubdirs createallsubdirs
+; v0.9.10: 字幕识别依赖（whisper.cpp 二进制 + 模型）。这两个目录已在 .gitignore 中
+; （tools/* 与 local-tools/whisper.config.json 未提交），但本机本地存在时会被打进安装包，
+; 缺失则安装后 /transcribe-video 会返回 "未找到 whisper-cli"。
+Source: "..\tools\whisper\*.exe"; DestDir: "{app}\tools\whisper"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\tools\whisper\*.dll"; DestDir: "{app}\tools\whisper"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\tools\whisper\models\*.bin"; DestDir: "{app}\tools\whisper\models"; Flags: ignoreversion skipifsourcedoesntexist
+; v0.9.10: ffmpeg/ffprobe（用户机器通常不带，依赖系统 PATH 易失败；从 D:\ffmpeg\bin 打进
+; local-tools\ffmpeg\，让 _find_local_tool 在安装目录内直接命中）。该路径在本机构建机上才存在，
+; skipifsourcedoesntexist 允许在缺少该第三方工具的开发机上跳过，仅靠系统 PATH 上的 ffmpeg 兜底。
+Source: "D:\ffmpeg\bin\ffmpeg.exe"; DestDir: "{app}\local-tools\ffmpeg"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "D:\ffmpeg\bin\ffprobe.exe"; DestDir: "{app}\local-tools\ffmpeg"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\local-tools\*.js"; DestDir: "{app}\local-tools"; Flags: ignoreversion
 Source: "..\local-tools\package.json"; DestDir: "{app}\local-tools"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\local-tools\whisper.config.json"; DestDir: "{app}\local-tools"; Flags: ignoreversion skipifsourcedoesntexist
 
 Source: "..\docs\本地启动器说明-20260618.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\docs\安装版实施清单-20260618.md"; DestDir: "{app}\docs"; Flags: ignoreversion
