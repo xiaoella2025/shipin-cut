@@ -230,6 +230,85 @@ class TestExportScriptPaths(unittest.TestCase):
             shutil.rmtree(workspace, ignore_errors=True)
 
 
+class TestJianyingRuntime(unittest.TestCase):
+    """v0.9.11: /export-jianying 不再硬编码 tmp\\pyjianying_probe\\.venv\\Scripts\\python，
+    改用后端 sys.executable + PYTHONPATH 指到 tools/pyjianying_runtime/。安装版下
+    这两个组合必须可用；dev 模式下若 pyjianying_runtime 不存在则回退到 .venv/site-packages。"""
+
+    def test_handler_source_drops_hardcoded_dev_venv_path(self):
+        """local_export_server.py 里 /export-jianying 不再硬编码
+        tmp\\pyjianying_probe\\.venv\\Scripts\\python 作为执行解释器路径，
+        否则安装版 {app}\\tmp\\pyjianying_probe\\... 不存在会直接 WinError 2。
+        dev 回退路径（Lib\\site-packages）只在 pyjianying_runtime 缺失时才走，
+        不阻塞安装版。"""
+        source = (ROOT / "tools" / "local_export_server.py").read_text(encoding="utf-8")
+        # 拦截点：Scripts\\python 是 Windows .exe 路径，只在 venv 解释器调用
+        # 场景下出现；Lib\\site-packages 作为 dev 回退保留是 OK 的。
+        self.assertNotIn(
+            r"tmp" + "\\" + "pyjianying_probe" + "\\" + ".venv" + "\\" + "Scripts" + "\\" + "python",
+            source,
+        )
+        # 必须改用 sys.executable + pyjianying_runtime 注入 PYTHONPATH
+        self.assertIn("sys.executable", source)
+        self.assertIn("pyjianying_runtime", source)
+        self.assertIn("PYTHONPATH", source)
+
+    def test_orchestrator_drops_dash_dash_venv_arg(self):
+        """tools/export_with_jianying.py 里的 --venv argparse 字段已经无人使用，
+        删除避免误导；改用 sys.executable + pyjianying_runtime 透传。"""
+        source = (ROOT / "tools" / "export_with_jianying.py").read_text(encoding="utf-8")
+        self.assertNotIn('"--venv"', source)
+        self.assertNotIn("args.venv", source)
+        self.assertIn("sys.executable", source)
+        self.assertIn("pyjianying_runtime", source)
+
+    def test_pyjianying_runtime_bundled_alongside_tools(self):
+        """tools/pyjianying_runtime/ 必须随仓库一起提交，pyJianYingDraft +
+        pymediainfo + uiautomation + comtypes 都在（uiautomation 间接拉 comtypes，
+        pyJianYingDraft 在 import 期就触达 jianying_controller → uiautomation）。"""
+        runtime = ROOT / "tools" / "pyjianying_runtime"
+        self.assertTrue(runtime.is_dir(), "tools/pyjianying_runtime must exist for installer bundling")
+        for pkg in ("pyJianYingDraft", "pymediainfo", "uiautomation", "comtypes"):
+            self.assertTrue(
+                (runtime / pkg / "__init__.py").is_file(),
+                f"tools/pyjianying_runtime/{pkg}/__init__.py must be present",
+            )
+        # MediaInfo.dll 必须随 pymediainfo 一起打包
+        self.assertTrue(
+            (runtime / "pymediainfo" / "MediaInfo.dll").is_file(),
+            "pymediainfo/MediaInfo.dll must be bundled so pymediainfo.MediaInfo() works",
+        )
+
+    def test_bundled_runtime_imports_under_backend_python(self):
+        """用系统 Python 模拟后端运行时，把 runtime 注入 PYTHONPATH 后必须能
+        import pyJianYingDraft + DraftFolder + pymediainfo。这是安装版路径下
+        /export-jianying 的关键可用性闸门。"""
+        runtime = ROOT / "tools" / "pyjianying_runtime"
+        if not runtime.is_dir():
+            self.skipTest("tools/pyjianying_runtime not yet populated")
+
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env["PYTHONPATH"] = str(runtime)
+        probe = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; "
+             "from pyJianYingDraft import DraftFolder, VideoMaterial, VideoSegment, "
+             "TextSegment, TrackType, Timerange; "
+             "import pymediainfo; import uiautomation; import comtypes; "
+             "print('ok')"],
+            env=env, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertIn("ok", probe.stdout)
+
+    def test_installer_iss_bundles_pyjianying_runtime(self):
+        """shipin-cut.iss 必须把 tools/pyjianying_runtime/ 加入安装包，
+        否则装出来的 {app}\\tools\\pyjianying_runtime 为空，运行时会报
+        '未找到 pyJianYingDraft 运行时'。"""
+        source = (ROOT / "installer" / "shipin-cut.iss").read_text(encoding="utf-8")
+        self.assertIn("tools\\pyjianying_runtime", source)
+
+
 class TestServiceDetection(unittest.TestCase):
     @patch.object(launcher, "port_is_open", return_value=False)
     def test_backend_stopped(self, _port):

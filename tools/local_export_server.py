@@ -1010,21 +1010,42 @@ class ExportHandler(BaseHTTPRequestHandler):
                     self._json({"ok": False, "error": err_msg})
                     return
 
-            # 使用 pyjianying_probe venv
-            venv_python = REPO_ROOT / "tmp" / "pyjianying_probe" / ".venv" / "Scripts" / "python"
-            cmd = [str(venv_python), str(jianying_script), "--mp4", mp4_path]
+            # v0.9.11: 不再硬编码 dev venv 的 Windows .exe 解释器路径。安装版下整个
+            # venv 不存在，会 WinError 2。改用当前后端 Python + tools/pyjianying_runtime/
+            # （被打进安装包，read-only），PYTHONPATH 指过去；dev 模式下若该目录
+            # 不存在，自动回退到本机开发态 venv 的 site-packages（向后兼容老开发机）。
+            pyjianying_path = SCRIPT_DIR / "pyjianying_runtime"
+            if not pyjianying_path.is_dir():
+                pyjianying_path = REPO_ROOT / "tmp" / "pyjianying_probe" / ".venv" / "Lib" / "site-packages"
+            if not pyjianying_path.is_dir():
+                err_msg = (
+                    f"未找到 pyJianYingDraft 运行时：{pyjianying_path} 不存在。"
+                    "安装版应随包携带 tools/pyjianying_runtime/；开发态应激活 "
+                    "tmp/pyjianying_probe/.venv 后再启动后端。"
+                )
+                print(f"[服务] {err_msg}", flush=True)
+                _write_export_debug({
+                    "mode": "jianying", "mp4": mp4_path, "error": err_msg,
+                    "finalStatus": "fail",
+                })
+                self._json({"ok": False, "error": err_msg})
+                return
+            jianying_env = dict(SUBPROCESS_ENV,
+                                PYTHONPATH=str(pyjianying_path) + os.pathsep +
+                                SUBPROCESS_ENV.get("PYTHONPATH", ""))
+            cmd = [sys.executable, str(jianying_script), "--mp4", mp4_path]
             if actual_srt_path:
                 cmd += ["--srt", actual_srt_path]
             if draft_name:
                 cmd += ["--name", draft_name]
             if expected_subs >= 0:
                 cmd += ["--expected-subs", str(expected_subs)]
-            print(f"[服务] 生成剪映草稿：{cmd}", flush=True)
+            print(f"[服务] 生成剪映草稿：python={sys.executable} runtime={pyjianying_path}", flush=True)
             try:
                 result = subprocess.run(
                     cmd, capture_output=True, text=True,
                     encoding="utf-8", errors="replace", timeout=180,
-                    env=SUBPROCESS_ENV,
+                    env=jianying_env,
                 )
             except Exception as e:
                 _write_export_debug({

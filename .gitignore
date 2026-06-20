@@ -23,6 +23,10 @@ tools/*
 !tools/local_export_server.py
 !tools/export_with_jianying.py
 !tools/jianying_draft/
+# v0.9.11: 装包必须携带的 pyJianYingDraft 运行时（从开发态 .venv 拷出，
+# 装包前已 strip 掉 __pycache__/）。随包走，安装版才能 import。
+!tools/pyjianying_runtime/
+tools/pyjianying_runtime/**/__pycache__/
 tools/jianying_draft/__pycache__/
 # 剪映模板内部运行时状态（备份与锁文件不入库）
 tools/jianying_draft/templates/**/.backup/

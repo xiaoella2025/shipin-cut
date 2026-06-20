@@ -40,6 +40,10 @@ Source: "..\tools\*.py"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\jianying_draft\*.py"; DestDir: "{app}\tools\jianying_draft"; Flags: ignoreversion
 Source: "..\tools\jianying_draft\*.json"; DestDir: "{app}\tools\jianying_draft"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\tools\jianying_draft\templates\MIXCUT_EMPTY_TEMPLATE_REAL\*"; DestDir: "{app}\tools\jianying_draft\templates\MIXCUT_EMPTY_TEMPLATE_REAL"; Excludes: ".backup\*,.locked"; Flags: ignoreversion recursesubdirs createallsubdirs
+; v0.9.11: pyJianYingDraft 运行时（pyJianYingDraft + pymediainfo + uiautomation + comtypes）。
+; 装包前从 tmp/pyjianying_probe/.venv/Lib/site-packages 拷出到 tools/pyjianying_runtime/，
+; 后端通过 PYTHONPATH 把该目录挂到 sys.path，不再依赖 tmp/.venv 这条路。
+Source: "..\tools\pyjianying_runtime\*"; DestDir: "{app}\tools\pyjianying_runtime"; Excludes: "__pycache__\*,*.pyc"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; v0.9.10: 字幕识别依赖（whisper.cpp 二进制 + 模型）。这两个目录已在 .gitignore 中
 ; （tools/* 与 local-tools/whisper.config.json 未提交），但本机本地存在时会被打进安装包，
 ; 缺失则安装后 /transcribe-video 会返回 "未找到 whisper-cli"。

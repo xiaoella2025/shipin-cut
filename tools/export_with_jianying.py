@@ -46,11 +46,6 @@ parser.add_argument("--srt", help="SRT 字幕路径（可选，默认从 local-o
 parser.add_argument("--name", help="草稿名称（可选，默认 MIXCUT_成品_YYYYMMDD_HHMMSS）")
 parser.add_argument("--expected-subs", type=int, default=-1,
                     help="期望写入剪映字幕条数（透传给 pyJianYingDraft 脚本做完整性校验）")
-parser.add_argument(
-    "--venv",
-    default="F:/shipin-cut/tmp/pyjianying_probe/.venv/Scripts/python",
-    help="pyJianYingDraft venv 中的 Python 解释器路径"
-)
 args = parser.parse_args()
 
 # ─── 成品 MP4 路径解析 ────────────────────────────────────
@@ -139,7 +134,21 @@ print(f"[草稿名称] {draft_name}")
 jianying_script = os.path.join(os.path.dirname(__file__), "jianying_draft", "export_with_pyjianying.py")
 jianying_script = os.path.abspath(jianying_script)
 
-cmd = [args.venv, jianying_script, "--video", mp4_path, "--name", draft_name]
+# v0.9.11: 不再依赖 tmp\pyjianying_probe\.venv\Scripts\python。
+# 安装版下改用 sys.executable（后端 Python）+ 把 tools/pyjianying_runtime
+# 透传给 PYTHONPATH；开发态下若父进程已经设了 PYTHONPATH（如 launcher 注入），
+# 直接透传；都没有时回退到本机 repo 的 tmp/.../.venv/Lib/site-packages 继续工作。
+_pyjianying_path = SCRIPT_DIR / "pyjianging_runtime"  # typo 防御：下面兜底
+if not _pyjianying_path.is_dir():
+    _pyjianying_path = SCRIPT_DIR / "pyjianying_runtime"
+if not _pyjianying_path.is_dir():
+    _pyjianying_path = SCRIPT_DIR.parent / "tmp" / "pyjianying_probe" / ".venv" / "Lib" / "site-packages"
+_sub_env = dict(os.environ, PYTHONIOENCODING="utf-8")
+if _pyjianying_path.is_dir():
+    existing_pp = _sub_env.get("PYTHONPATH", "")
+    _sub_env["PYTHONPATH"] = str(_pyjianying_path) + (os.pathsep + existing_pp if existing_pp else "")
+
+cmd = [sys.executable, jianying_script, "--video", mp4_path, "--name", draft_name]
 if srt_path:
     cmd += ["--srt", srt_path]
 if args.expected_subs is not None and args.expected_subs >= 0:
@@ -166,7 +175,7 @@ print("─" * 60)
 
 try:
     result = subprocess.run(cmd, check=True, capture_output=True, text=True,
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace", env=_sub_env)
     print(result.stdout)
     if result.stderr:
         print(f"[stderr] {result.stderr[:500]}")
