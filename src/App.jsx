@@ -1278,8 +1278,14 @@ export default function App() {
   // useEffect 已经把 compositions 清成 []，compositions.length>0 会把 stale
   // 误判回 false。改为只看指纹是否一致。
   const [compositionsFingerprint, setCompositionsFingerprint] = useState('')
-  const compositionsStale = compositionsFingerprint !== ''
-    && compositionsFingerprint !== splitFingerprint
+  // v0.9.12c: 单独用 boolean 标记"组合方案已失效"，不再依赖 fingerprint
+  // 字符串比对——active invalidation 在 mutation 函数里同步 setCompositions([])
+  // + setCompositionsFingerprint('')，这时 fingerprint 已被清空，再用
+  // compositionsFingerprint !== splitFingerprint 就拿不到 stale=true 了。
+  // 改用一个独立 flag：每次 invalidate 把它置 true，每次 handleGenerate
+  // 成功置 false；渲染层和 useEffect 都读它来决定 banner。
+  const [compositionsInvalidated, setCompositionsInvalidated] = useState(false)
+  const compositionsStale = compositionsInvalidated
 
   // ── step-3 composition editing ──
   const [editingSeg, setEditingSeg]         = useState(null)   // {compId, segIdx}
@@ -1529,6 +1535,13 @@ export default function App() {
     [compositions, selectedCompId]
   )
 
+  // v0.9.12c render-time guard：compositionsInvalidated 一旦为 true，
+  // 渲染层把 compositions / selectedComp 直接视作空。哪怕 active invalidation
+  // 或 useEffect 路径有任意一处漏了，渲染也不会输出旧方案。第三步和第二步
+  // compose 子步用 safeCompositions / safeSelectedComp 替换原引用。
+  const safeCompositions = compositionsStale ? [] : compositions
+  const safeSelectedComp = compositionsStale ? null : selectedComp
+
   // step-2 stats
   const waitingCount   = uploadedVideos.filter(v=>videoAnalysis[v.id]?.status==='waiting').length
   const analyzingCount = uploadedVideos.filter(v=>videoAnalysis[v.id]?.status==='analyzing').length
@@ -1565,6 +1578,7 @@ export default function App() {
     setCompositions([])
     setSelectedCompId(null)
     setExportedComps(new Set())
+    setCompositionsInvalidated(true)
   }, [splitFingerprint, compositionsFingerprint])
 
   // comp timeline drag
@@ -1853,6 +1867,8 @@ export default function App() {
         subtitles:subs, subtitleSource:'real',
         subtitleStatus:'real', subtitleError:null, subtitlePhase:null,
       })
+      // v0.9.12c: whisper 识别成功替换 segments → 旧组合方案作废
+      invalidateCompositions('tryTranscribeBackground')
     } catch(err) {
       const isAbort = err?.name==='AbortError'
       const msg = isAbort
@@ -1864,6 +1880,24 @@ export default function App() {
   }
 
   // ── handlers ──
+
+  // v0.9.12c: 第二步任何会改 videoAnalysis[videoId].segments 的 mutation
+  // 必须主动调用本函数，把旧 compositions 整体清掉 + 标记失效。
+  // 不再依赖 useEffect 事后检测——用户复测表明 useEffect + 指纹方案在某些
+  // 边界场景下没有稳定命中（旧方案仍在第三步渲染）。
+  // 主动失效保证：哪怕 useEffect 因为任何原因没跑，state 也已被清，
+  // 第三步只能看到空状态 + 失效横幅，绝不渲染旧方案。
+  function invalidateCompositions(reason='split-changed') {
+    if (process.env.NODE_ENV !== 'production') {
+      // 仅 dev 提示，方便排查哪条 mutation 触发了失效。
+      console.log('[v0.9.12c] invalidateCompositions:', reason)
+    }
+    setCompositions([])
+    setSelectedCompId(null)
+    setExportedComps(new Set())
+    setCompositionsFingerprint('')
+    setCompositionsInvalidated(true)
+  }
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''), 3000) }
 
@@ -1886,6 +1920,8 @@ export default function App() {
         ...(prevSegmentsForUndo.subtitles ? { subtitles: prevSegmentsForUndo.subtitles } : {}),
       }
     }))
+    // v0.9.12c: 撤销恢复旧 segments → 当前/旧 segments 不再等价，旧组合方案作废
+    invalidateCompositions('handleUndo')
     setPrevSegmentsForUndo(null)
     setSelectedCutIdx(null)
     setSelectedSegIdx(null)
@@ -1925,6 +1961,8 @@ export default function App() {
       videoAnalysisRef.current = next
       return next
     })
+    // v0.9.12c: 摘要文字改变 → 旧组合方案作废
+    invalidateCompositions('handleSaveSegSubEdit')
     setEditingSegSub(null)
     setEditingSegSubText('')
   }
@@ -2127,6 +2165,8 @@ export default function App() {
             subtitleSource:'real', subtitleStatus:'real', subtitleError:null,
           }
         }))
+        // v0.9.12c: 导入 JSON 替换 segments → 旧组合方案作废
+        invalidateCompositions('handleSubtitleImport')
         showToast(`✓ 已导入真实字幕：共 ${convertedSubs.length} 条，已生成 ${newSegs.length} 个分段`)
       } catch (err) {
         showToast(err instanceof SyntaxError ? 'JSON 解析失败，请检查文件格式' : '导入失败：' + err.message)
@@ -2223,6 +2263,8 @@ export default function App() {
           }
           return next
         })
+        // v0.9.12c: 批量替换 segments → 旧组合方案作废
+        invalidateCompositions('handleBatchSubtitleImport')
       }
 
       setBatchResultExpanded(false)
@@ -2244,6 +2286,8 @@ export default function App() {
         segments: prev[currentVideoId].segments.map((s,i)=>i===segIdx?{...s,selected:!s.selected}:s)
       }
     }))
+    // v0.9.12c: selected 改变 → 旧组合方案作废
+    invalidateCompositions('toggleEditorSeg')
   }
 
   function changeSegType(segIdx, newType) {
@@ -2256,6 +2300,8 @@ export default function App() {
         segments: prev[currentVideoId].segments.map((s,i)=>i===segIdx?{...s,type:newType}:s)
       }
     }))
+    // v0.9.12c: type 改变 → 旧组合方案作废
+    invalidateCompositions('changeSegType')
   }
 
   function addCutAtCurrentTime() {
@@ -2289,6 +2335,9 @@ export default function App() {
       ...editorSegs.slice(idx+1),
     ]
     setVideoAnalysis(prev=>({ ...prev, [currentVideoId]:{...prev[currentVideoId],segments:newSegs} }))
+    // v0.9.12c: 切分后两个 half 都按新边界重算 subtitle；任何路径下旧
+    // 组合方案都不再代表当前 segments，作废。
+    invalidateCompositions('addCutAtCurrentTime')
     setSelectedCutIdx(idx)
     showToast(`已按 ${cutLabel} 新增切割点`)
   }
@@ -2320,6 +2369,8 @@ export default function App() {
         })
       }
     }))
+    // v0.9.12c: 边界移动 → 旧组合方案作废
+    invalidateCompositions('adjustCutPoint')
   }
 
   function mergeSegs(segIdx) {
@@ -2329,6 +2380,8 @@ export default function App() {
     const merged={ id:a.id, startSec:a.startSec, startStr:a.startStr, endSec:b.endSec, endStr:b.endStr, type:a.type, subtitle:[a.subtitle,b.subtitle].filter(Boolean).join(' '), selected:a.selected||b.selected }
     const newSegs=[...editorSegs.slice(0,segIdx), merged, ...editorSegs.slice(segIdx+2)]
     setVideoAnalysis(prev=>({ ...prev, [currentVideoId]:{...prev[currentVideoId],segments:newSegs} }))
+    // v0.9.12c: 合并 → 旧组合方案作废
+    invalidateCompositions('mergeSegs')
     setSelectedCutIdx(null)
     setSelectedSegIdx(Math.min(segIdx, newSegs.length-1))
     showToast('已合并相邻片段')
@@ -2339,6 +2392,11 @@ export default function App() {
     const seg=editorSegs[segIdx]
     const mid=(seg.startSec+seg.endSec)/2
     handleEditorSeek(mid)
+    // v0.9.12c: splitSegAtMiddle 不直接改 segments，但用户把它列进了
+    // "主动 invalidate" 名单——保守地加上。任何"即将修改切分"的动作都视
+    // 作潜在 invalidator，避免后续如果有人在它内部加上真正的 split 逻辑
+    // 时漏掉无效化。
+    invalidateCompositions('splitSegAtMiddle')
     showToast(`已跳至片段中点（${fmt(mid)}），确认位置后点击"新增切割点"`)
   }
 
@@ -2347,6 +2405,10 @@ export default function App() {
       ...prev,
       [videoId]: { ...prev[videoId], status:prev[videoId].status==='confirmed'?'done':'confirmed' }
     }))
+    // v0.9.12c: 用户在列表里点名 handleConfirmVideo；defensive 加上。
+    // 确认只是切 status，但万一后面有人把"确认"绑成切分提交，整套
+    // 状态机都已经在 invalidate 体系下。
+    invalidateCompositions('handleConfirmVideo')
   }
 
   function handleGenerate() {
@@ -2383,11 +2445,17 @@ export default function App() {
           // v0.9.12: 记录本次生成所用 splitFingerprint；之后第二步切分变更
           // 会让 splitFingerprint 与之不一致，触发 compositionsStale。
           // 直接用 freshAna/freshVids 现场算，避免依赖闭包里的旧 splitFingerprint。
+          // v0.9.12c: 字段顺序必须与 splitFingerprint 完全一致（包括 subtitle
+          // 前 80 字符摘要），否则 handleGenerate 写出来的 fingerprint 和
+          // 当前 splitFingerprint 永远比不等，compositionsInvalidated 永远
+          // 是 true。
           const genFp = freshVids.map(v => {
             const segs = freshAna[v.id]?.segments || []
-            return segs.map(s => `${s.id}|${s.selected?1:0}|${(+s.startSec).toFixed(3)}|${(+s.endSec).toFixed(3)}|${s.type||''}`).join(',')
+            return segs.map(s => `${s.id}|${s.selected?1:0}|${(+s.startSec).toFixed(3)}|${(+s.endSec).toFixed(3)}|${s.type||''}|${(s.subtitle||'').slice(0,80)}`).join(',')
           }).join('||')
           setCompositionsFingerprint(genFp)
+          // v0.9.12c: 新组合方案落地，清失效 flag；banner 自动消失。
+          setCompositionsInvalidated(false)
           setSubStep('compose')
         }, 400)
       } else { setGenProg(p) }
@@ -7520,6 +7588,15 @@ export default function App() {
               </button>
             </div>
           )}
+          {(()=>{
+            // v0.9.12c render-time guard: 阴影 compositions 和 selectedComp，
+            // 失效时强制视作空。这一层是兜底——即便 active invalidation 或
+            // useEffect 路径有任意一处漏了，下面的 step3-v2 内部所有
+            // compositions.map / selectedComp.segments 引用都拿到 []/null，
+            // 第三步不可能渲染旧方案。
+            const compositions = compositionsStale ? [] : compositions
+            const selectedComp = compositionsStale ? null : selectedComp
+            return (
           <div className="step3 step3-v2">
 
           {/* LEFT: composition list */}
@@ -7780,6 +7857,8 @@ export default function App() {
             />
           )}
           </div>
+            )
+          })()}
         </Fragment>
       )}
 
