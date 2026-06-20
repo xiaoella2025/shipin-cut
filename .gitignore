@@ -57,6 +57,7 @@ tmp/
 *.zip
 *.log
 logs/
+installer/dist/
 config/local_settings.json
 # 真实剪映草稿样本（参考用，不入版本控制）
 *_e3e97909*/
