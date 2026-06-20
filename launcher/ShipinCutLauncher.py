@@ -17,6 +17,7 @@ import urllib.request
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from typing import Mapping
 
 
 BACKEND_HOST = "127.0.0.1"
@@ -54,8 +55,42 @@ def resolve_project_root(anchor: Path | None = None) -> Path:
     raise RuntimeError("无法从启动器位置找到项目根目录，请确认程序文件完整。")
 
 
-def setup_logging(project_root: Path) -> tuple[logging.Logger, Path]:
-    log_dir = project_root / "logs" / "launcher"
+def resolve_user_data_root(environ: Mapping[str, str] | None = None) -> Path:
+    """Resolve the per-user writable root independently of the install directory."""
+    environ = environ or os.environ
+    local_app_data = environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        local_app_data = str(Path.home() / "AppData" / "Local")
+    return Path(local_app_data).expanduser().resolve() / "ShipinCut"
+
+
+def ensure_user_data_dirs(user_data_root: Path) -> dict[str, Path]:
+    paths = {
+        "launcher_logs": user_data_root / "logs" / "launcher",
+        "runtime": user_data_root / "runtime",
+        "config": user_data_root / "config",
+        "cache": user_data_root / "cache",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def prepare_runtime_vite_config(runtime_dir: Path, cache_dir: Path) -> Path:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    config_path = runtime_dir / "vite.config.mjs"
+    cache_value = json.dumps(cache_dir.as_posix(), ensure_ascii=False)
+    config_path.write_text(
+        "export default {\n"
+        "  base: '/shipin-cut/',\n"
+        f"  cacheDir: {cache_value},\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def setup_logging(log_dir: Path) -> tuple[logging.Logger, Path]:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"launcher_{datetime.now():%Y%m%d}.log"
 
@@ -180,7 +215,9 @@ def wait_for_state(checker, expected: str, timeout: int, process=None) -> bool:
     return False
 
 
-def start_process(command: list[str], cwd: Path, log_handle) -> subprocess.Popen:
+def start_process(
+    command: list[str], cwd: Path, log_handle, env: Mapping[str, str] | None = None
+) -> subprocess.Popen:
     flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     return subprocess.Popen(
         command,
@@ -189,6 +226,7 @@ def start_process(command: list[str], cwd: Path, log_handle) -> subprocess.Popen
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         creationflags=flags,
+        env=env,
     )
 
 
@@ -235,18 +273,29 @@ def run_launcher(no_browser: bool = False) -> int:
         print(f"[错误] {exc}")
         return 1
 
-    logger, log_path = setup_logging(project_root)
+    try:
+        user_data_root = resolve_user_data_root()
+        user_paths = ensure_user_data_dirs(user_data_root)
+        vite_config_path = prepare_runtime_vite_config(
+            user_paths["runtime"], user_paths["cache"] / "vite"
+        )
+        logger, log_path = setup_logging(user_paths["launcher_logs"])
+    except OSError as exc:
+        print(f"[错误] 无法创建用户数据目录：{exc}")
+        return 1
+
     logger.info("正在启动视频混剪工具")
     logger.info("项目根目录：%s", project_root)
+    logger.info("用户数据目录：%s", user_data_root)
     logger.info("启动日志：%s", log_path)
 
-    lock = SingleInstanceLock(project_root / "logs" / "launcher" / "launcher.lock")
+    lock = SingleInstanceLock(user_paths["runtime"] / "launcher.lock")
     if not lock.acquire():
         return wait_for_existing_launcher(logger, no_browser)
 
     owned: dict[str, subprocess.Popen] = {}
-    runtime_path = project_root / "logs" / "launcher" / "runtime.json"
-    child_log_path = project_root / "logs" / "launcher" / f"services_{datetime.now():%Y%m%d}.log"
+    runtime_path = user_paths["runtime"] / "runtime.json"
+    child_log_path = user_paths["launcher_logs"] / f"services_{datetime.now():%Y%m%d}.log"
     child_log = None
 
     try:
@@ -282,6 +331,7 @@ def run_launcher(no_browser: bool = False) -> int:
                 [sys.executable, str(project_root / "tools" / "local_export_server.py")],
                 project_root,
                 child_log,
+                dict(os.environ, SHIPIN_CUT_DATA_ROOT=str(user_data_root)),
             )
             owned["backend"] = process
             write_runtime_state(runtime_path, owned)
@@ -305,6 +355,8 @@ def run_launcher(no_browser: bool = False) -> int:
                     "--port",
                     str(FRONTEND_PORT),
                     "--strictPort",
+                    "--config",
+                    str(vite_config_path),
                 ],
                 project_root,
                 child_log,

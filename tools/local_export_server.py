@@ -36,7 +36,19 @@ SUBPROCESS_ENV = dict(os.environ, PYTHONIOENCODING="utf-8")
 
 SCRIPT_DIR     = Path(__file__).resolve().parent
 REPO_ROOT      = SCRIPT_DIR.parent
-WORKSPACE      = REPO_ROOT / "export_workspace"
+
+
+def resolve_writable_paths(repo_root, environ=None):
+    """Keep installed runtime data outside the read-only program directory."""
+    environ = environ or os.environ
+    data_root = environ.get("SHIPIN_CUT_DATA_ROOT")
+    if data_root:
+        data_root = Path(data_root).expanduser().resolve()
+        return data_root / "workspace", data_root / "config" / "local_settings.json"
+    return repo_root / "export_workspace", repo_root / "config" / "local_settings.json"
+
+
+WORKSPACE, LOCAL_SETTINGS = resolve_writable_paths(REPO_ROOT)
 DRAFTS_DIR     = WORKSPACE / "drafts"
 VIDEOS_DIR     = WORKSPACE / "videos"
 AUDIO_DIR      = WORKSPACE / "audio"
@@ -44,7 +56,6 @@ IMAGES_DIR     = WORKSPACE / "images"   # v0.9.8: background images
 EXPORT_SCRIPT  = SCRIPT_DIR / "export_video.py"
 WHISPER_CONFIG = REPO_ROOT / "local-tools" / "whisper.config.json"
 CURRENT_DRAFT  = "web-export-current.json"
-LOCAL_SETTINGS = REPO_ROOT / "config" / "local_settings.json"
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 JIANYING_EXE_NAMES = {"jianyingpro.exe", "capcut.exe"}

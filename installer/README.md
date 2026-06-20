@@ -34,6 +34,6 @@ installer\dist\ShipinCutSetup.exe
 
 ## 3A 边界
 
-这个雏形安装前端源码、Python 后端脚本、启动器和必要文档，但不包含 `node_modules`、Python runtime、ffmpeg、whisper-cli、模型文件及本地 pyJianYingDraft 虚拟环境。因此它只适合已准备 Python、Node/npm 和项目依赖的开发/验收机器。
+这个雏形安装前端源码、`node_modules`、Python 后端脚本、启动器和必要文档，但不包含 Python runtime、ffmpeg、whisper-cli、模型文件及本地 pyJianYingDraft 虚拟环境。因此它只适合已准备 Python、Node/npm 和媒体处理依赖的开发/验收机器。
 
 正式交付需要继续完成阶段 3B/3C，详见 `docs/安装包雏形说明-20260619.md`。

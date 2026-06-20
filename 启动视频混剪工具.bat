@@ -29,6 +29,6 @@ exit /b 1
 :done
 if "%EXIT_CODE%"=="0" exit /b 0
 echo.
-echo 启动失败，请查看 logs\launcher 下的日志，或联系管理员。
+echo 启动失败，请查看 %LOCALAPPDATA%\ShipinCut\logs\launcher 下的日志，或联系管理员。
 pause
 exit /b %EXIT_CODE%
