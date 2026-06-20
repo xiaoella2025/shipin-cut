@@ -569,6 +569,18 @@ function getSubtitlesForSeg(seg, subtitles) {
   return subtitles.filter(s => s.startSec >= seg.startSec && s.startSec < seg.endSec)
 }
 
+// v0.9.12b: 切分 / 调边界时按"哪些原始字幕落进这段 [startSec,endSec]"重算
+// seg.subtitle。修复"切分后两半 segment 都带原长文本"的根因——切分前的
+// long subtitle 不能直接 spread 给两个窄 half，否则第三步渲染时新生成
+// 的 3-1 仍会带原长句。
+function recomputeSegSubtitle(seg, subtitles) {
+  return (subtitles||[])
+    .filter(s => s.startSec >= seg.startSec && s.startSec < seg.endSec)
+    .map(s => (s.text||'').trim())
+    .filter(Boolean)
+    .join(' ')
+}
+
 function splitIntoSubtitleColumns(subtitles, cols = 2) {
   const count = subtitles.length
   if (!count) return []
@@ -1262,9 +1274,11 @@ export default function App() {
   const [selectedCompId, setSelectedCompId] = useState(null)
   // v0.9.12: 上一次 handleGenerate 生成组合方案时记录的 splitFingerprint，
   // 与当前 splitFingerprint 比对得到 compositionsStale；不为空才算数。
+  // v0.9.12b: 旧版本用 compositions.length>0 兜底，新版本里 split 一旦变化
+  // useEffect 已经把 compositions 清成 []，compositions.length>0 会把 stale
+  // 误判回 false。改为只看指纹是否一致。
   const [compositionsFingerprint, setCompositionsFingerprint] = useState('')
-  const compositionsStale = compositions.length > 0
-    && compositionsFingerprint !== ''
+  const compositionsStale = compositionsFingerprint !== ''
     && compositionsFingerprint !== splitFingerprint
 
   // ── step-3 composition editing ──
@@ -1523,15 +1537,35 @@ export default function App() {
   const totalSegCount  = uploadedVideos.reduce((s,v)=>s+(videoAnalysis[v.id]?.segments?.length||0), 0)
 
   // v0.9.12: 第二步字幕切分变更 → 旧组合方案失效闸门
-  // 每次 videoAnalysis 的 segments/selected/边界变都重算一个指纹；
+  // 每次 videoAnalysis 的 segments/selected/边界/subtitle 文本变都重算一个指纹；
   // 与上一次生成组合方案时记录的指纹不一致 → compositionsStale=true
   // 不再静默沿用旧方案。
+  // v0.9.12b: subtitle 文本也必须进指纹——addCutAtCurrentTime 切分后若不重算
+  // seg.subtitle（保留长文本到两半），splitFingerprint 仍会变（id/bounds 变了），
+  // 但安全网还要靠"切分后必须清空旧 compositions"兜底；指纹覆盖 subtitle 是
+  // 给"编辑片段摘要文字"那条路径的二次防线。
   const splitFingerprint = uploadedVideos.map(v => {
     const segs = videoAnalysis[v.id]?.segments || []
-    return segs.map(s => `${s.id}|${s.selected?1:0}|${s.startSec.toFixed(3)}|${s.endSec.toFixed(3)}|${s.type||''}`).join(',')
+    return segs.map(s => `${s.id}|${s.selected?1:0}|${s.startSec.toFixed(3)}|${s.endSec.toFixed(3)}|${s.type||''}|${(s.subtitle||'').slice(0,80)}`).join(',')
   }).join('||')
 
   // ── effects ──
+
+  // v0.9.12b: 第二步任何切分变更（id/边界/selected/type/subtitle 变化）都会让
+  // splitFingerprint 漂移；一旦和上次生成时记录的 compositionsFingerprint 不
+  // 一致，立刻清空旧 compositions 并把 selectedCompId / exportedComps 也复位。
+  // 这样做比"仅显示 stale 横幅让旧方案继续渲染"更安全——旧快照里每个 seg 都
+  // 是深拷贝的（旧 subtitle、旧 bounds），即使重新生成，在边界变动场景下也
+  // 容易出现半截文本残留。彻底清空后必须由用户点"立即重新生成"基于最新
+  // videoAnalysis.segments 重算。
+  useEffect(() => {
+    if (!compositionsFingerprint) return
+    if (splitFingerprint === compositionsFingerprint) return
+    if (!compositions.length && !selectedCompId && !exportedComps.size) return
+    setCompositions([])
+    setSelectedCompId(null)
+    setExportedComps(new Set())
+  }, [splitFingerprint, compositionsFingerprint])
 
   // comp timeline drag
   useEffect(()=>{
@@ -2241,10 +2275,17 @@ export default function App() {
     }
     saveUndoState()
     const seg=editorSegs[idx]
+    // v0.9.12b: 切分后必须按 [startSec,endSec] 重算两个 half 的 subtitle——
+    // 之前直接把 seg.subtitle（长文本）复制给两半，结果新生成的窄 3-1 在
+    // 第三步仍然渲染旧长句。
+    const firstHalf  = {...seg, id:seg.id+'a', endSec:time, endStr:fmt(time)}
+    firstHalf.subtitle  = recomputeSegSubtitle(firstHalf,  editorSubtitles)
+    const secondHalf = { id:seg.id+'b', startSec:time, endSec:seg.endSec, startStr:fmt(time), endStr:seg.endStr, type:seg.type, selected:seg.selected }
+    secondHalf.subtitle = recomputeSegSubtitle(secondHalf, editorSubtitles)
     const newSegs=[
       ...editorSegs.slice(0,idx),
-      {...seg, id:seg.id+'a', endSec:time, endStr:fmt(time)},
-      { id:seg.id+'b', startSec:time, endSec:seg.endSec, startStr:fmt(time), endStr:seg.endStr, type:seg.type, subtitle:seg.subtitle, selected:seg.selected },
+      firstHalf,
+      secondHalf,
       ...editorSegs.slice(idx+1),
     ]
     setVideoAnalysis(prev=>({ ...prev, [currentVideoId]:{...prev[currentVideoId],segments:newSegs} }))
@@ -2263,8 +2304,18 @@ export default function App() {
       [currentVideoId]: {
         ...prev[currentVideoId],
         segments: prev[currentVideoId].segments.map((s,i)=>{
-          if (i===cutIdx)   return {...s, endSec:clamped,   endStr:fmt(clamped)}
-          if (i===cutIdx+1) return {...s, startSec:clamped, startStr:fmt(clamped)}
+          if (i===cutIdx) {
+            // v0.9.12b: 边界移动后按新的 [startSec,endSec] 重算 subtitle，避免
+            // 上一个 half 仍带原范围的整段文本。
+            const updated = {...s, endSec:clamped, endStr:fmt(clamped)}
+            updated.subtitle = recomputeSegSubtitle(updated, editorSubtitles)
+            return updated
+          }
+          if (i===cutIdx+1) {
+            const updated = {...s, startSec:clamped, startStr:fmt(clamped)}
+            updated.subtitle = recomputeSegSubtitle(updated, editorSubtitles)
+            return updated
+          }
           return s
         })
       }
