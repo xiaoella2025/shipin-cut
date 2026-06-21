@@ -1,5 +1,5 @@
 ﻿#define MyAppName "视频混剪工具"
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.5.0"
 #define MyAppPublisher "ShipinCut"
 #define MyAppLauncher "启动视频混剪工具.bat"
 
@@ -38,6 +38,12 @@ Source: "..\src\*"; DestDir: "{app}\src"; Flags: ignoreversion recursesubdirs cr
 ; package.json / src/ 仅作开发文档用途，安装版运行时不读取它们。
 Source: "..\dist\*"; DestDir: "{app}\dist"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\launcher\*"; DestDir: "{app}\launcher"; Excludes: "__pycache__\*,*.pyc"; Flags: ignoreversion recursesubdirs createallsubdirs
+; v0.5.0 (阶段 3C-4): 内置 Python runtime（embeddable 3.11.9），安装到 {app}\runtime\python\。
+; 启动器 (3C-3) 优先查找 {app}\runtime\python\python.exe，找不到才回退系统 Python；
+; 此项为 3C-4 起安装版的强制依赖，缺失会让 Setup.exe 编译失败（不要加 skipifsourcedoesntexist）。
+; Excludes 防止把 .pyc / __pycache__ 一起打入安装包——这些是首次启动时由 embedded Python 现生成，
+; 真正的写入位置由 PYTHONPYCACHEPREFIX 重定向到 %LOCALAPPDATA%\ShipinCut\cache\pycache。
+Source: "..\installer\runtime\python\*"; DestDir: "{app}\runtime\python"; Excludes: "__pycache__\*,*.pyc"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\tools\*.py"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\jianying_draft\*.py"; DestDir: "{app}\tools\jianying_draft"; Flags: ignoreversion
 Source: "..\tools\jianying_draft\*.json"; DestDir: "{app}\tools\jianying_draft"; Flags: ignoreversion skipifsourcedoesntexist

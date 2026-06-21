@@ -8,6 +8,18 @@ echo  视频混剪工具 - 本地启动器
 echo ============================================================
 echo.
 
+REM v0.5.0 (3C-4): 安装版 launcher 自身也会被内置 Python 执行，
+REM 在 import launcher\ShipinCutLauncher.py 时 Python 会写
+REM __pycache__\ShipinCutLauncher.cpython-311.pyc 旁路 {app}\launcher\，
+REM 在真 Program Files 下会失败（目录只读）。所以在 bat 里就把
+REM PYTHONPYCACHEPREFIX 指向 LocalAppData，让 launcher 自身的 .pyc 也
+REM 落到 %LOCALAPPDATA%\ShipinCut\cache\pycache，不写 {app}。
+REM launcher 启后端时再把它原样继承给 backend（与 3C-3 行为一致）。
+if "%PYTHONPYCACHEPREFIX%"=="" (
+    set "PYTHONPYCACHEPREFIX=%LOCALAPPDATA%\ShipinCut\cache\pycache"
+    if not exist "%PYTHONPYCACHEPREFIX%" mkdir "%PYTHONPYCACHEPREFIX%" >nul 2>&1
+)
+
 REM v0.9.14 (3C-3): 优先使用项目内置 Python。
 REM 安装版布局：%~dp0\runtime\python\python.exe
 REM 开发态布局：%~dp0\installer\runtime\python\python.exe

@@ -5,7 +5,18 @@ python311.zip
 # packages placed in tools\pyjianying_runtime\.
 import site
 
-# 3C-2 POC: project vendored runtime. Path is relative to
-# installer\runtime\python\ (i.e. the directory containing this _pth),
-# going up three levels to the repo root, then into tools\pyjianying_runtime.
+# Path entries below are relative to the directory containing this _pth
+# file (i.e. .../runtime/python/). Both layouts are listed so the same
+# embedded distribution works in the developer's tree and in the
+# installed program directory.
+#
+# - ..\..\..\tools\pyjianying_runtime  =>  dev layout
+#     (shipin-cut\installer\runtime\python\  ->  shipin-cut\tools\pyjianying_runtime\)
+#
+# - ..\..\tools\pyjianying_runtime  =>  install layout (3C-4)
+#     ({app}\runtime\python\  ->  {app}\tools\pyjianying_runtime\)
+#
+# Either entry resolves to a non-existent directory in the other layout,
+# which the runtime simply skips, so listing both is harmless.
 ..\..\..\tools\pyjianying_runtime
+..\..\tools\pyjianying_runtime
