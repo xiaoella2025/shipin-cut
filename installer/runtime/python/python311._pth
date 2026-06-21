@@ -1,0 +1,11 @@
+python311.zip
+.
+
+# 3C-2 POC: enable site-packages so embedded Python can load third-party
+# packages placed in tools\pyjianying_runtime\.
+import site
+
+# 3C-2 POC: project vendored runtime. Path is relative to
+# installer\runtime\python\ (i.e. the directory containing this _pth),
+# going up three levels to the repo root, then into tools\pyjianying_runtime.
+..\..\..\tools\pyjianying_runtime
