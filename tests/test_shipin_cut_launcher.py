@@ -60,6 +60,7 @@ class TestUserDataPaths(unittest.TestCase):
             self.assertEqual(paths["runtime"], user_data_root / "runtime")
             self.assertEqual(paths["config"], user_data_root / "config")
             self.assertEqual(paths["cache"], user_data_root / "cache")
+            self.assertEqual(paths["pycache"], user_data_root / "cache" / "pycache")
             self.assertTrue(all(path.is_dir() for path in paths.values()))
             self.assertFalse((project_root / "logs").exists())
 
@@ -540,6 +541,218 @@ class TestServiceDetection(unittest.TestCase):
     @patch.object(launcher, "port_is_open", return_value=True)
     def test_frontend_foreign_port(self, _port, _fetch):
         self.assertEqual(launcher.frontend_state(), "occupied")
+
+
+class TestEmbeddedPython(unittest.TestCase):
+    """v0.9.14 (3C-3): 启动器必须能解析内置 Python 解释器并把环境变量注入后端。"""
+
+    def test_resolves_install_layout_first(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "ShipinCut"
+            (project_root / "runtime" / "python").mkdir(parents=True)
+            install_py = project_root / "runtime" / "python" / "python.exe"
+            install_py.write_text("", encoding="utf-8")
+            # 同时存在开发态布局，必须优先安装布局
+            (project_root / "installer" / "runtime" / "python").mkdir(parents=True)
+            dev_py = project_root / "installer" / "runtime" / "python" / "python.exe"
+            dev_py.write_text("", encoding="utf-8")
+
+            self.assertEqual(launcher.resolve_embedded_python(project_root), install_py.resolve())
+
+    def test_resolves_dev_layout_when_install_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "shipin-cut"
+            (project_root / "installer" / "runtime" / "python").mkdir(parents=True)
+            dev_py = project_root / "installer" / "runtime" / "python" / "python.exe"
+            dev_py.write_text("", encoding="utf-8")
+
+            self.assertEqual(launcher.resolve_embedded_python(project_root), dev_py.resolve())
+
+    def test_returns_none_when_no_embedded(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertIsNone(launcher.resolve_embedded_python(Path(td)))
+
+    def test_returns_none_when_partial_layout(self):
+        """只建 python 子目录但缺 python.exe 时不能误报命中。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "ShipinCut"
+            (project_root / "runtime" / "python").mkdir(parents=True)
+            # python 子目录存在但没 python.exe
+            self.assertIsNone(launcher.resolve_embedded_python(project_root))
+
+    def test_build_backend_env_sets_required_vars(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "ShipinCut"
+            (project_root / "tools" / "pyjianying_runtime").mkdir(parents=True)
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+            pycache_dir = user_data_root / "cache" / "pycache"
+
+            env = launcher.build_backend_env(
+                project_root, user_data_root, pycache_dir
+            )
+
+            self.assertEqual(env["SHIPIN_CUT_DATA_ROOT"], str(user_data_root))
+            self.assertIn(str(project_root), env["PYTHONPATH"].split(os.pathsep))
+            self.assertIn(
+                str(project_root / "tools" / "pyjianying_runtime"),
+                env["PYTHONPATH"].split(os.pathsep),
+            )
+            self.assertEqual(env["PYTHONPYCACHEPREFIX"], str(pycache_dir))
+            # 目录必须自动创建
+            self.assertTrue(pycache_dir.is_dir())
+
+    def test_build_backend_env_preserves_existing_pythonpath(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "ShipinCut"
+            (project_root / "tools" / "pyjianying_runtime").mkdir(parents=True)
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+            pycache_dir = user_data_root / "cache" / "pycache"
+
+            base_env = {"PYTHONPATH": "C:\\extra\\path"}
+            env = launcher.build_backend_env(
+                project_root, user_data_root, pycache_dir, base_env=base_env
+            )
+            parts = env["PYTHONPATH"].split(os.pathsep)
+            self.assertIn("C:\\extra\\path", parts)
+            self.assertIn(str(project_root), parts)
+
+    def test_build_backend_env_omits_missing_pyjianying(self):
+        """tools/pyjianying_runtime 不存在时（例如只装一半）不能把不存在的路径塞进 PYTHONPATH。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "ShipinCut"
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+            pycache_dir = user_data_root / "cache" / "pycache"
+
+            env = launcher.build_backend_env(
+                project_root, user_data_root, pycache_dir
+            )
+            self.assertNotIn("pyjianying_runtime", env["PYTHONPATH"])
+
+    def test_run_launcher_prefers_embedded_python(self):
+        """当项目根下有内置 Python 时，启动器必须优先用它跑后端。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "ShipinCut"
+            project_root.mkdir()
+            (project_root / "dist").mkdir()
+            (project_root / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
+            (project_root / "tools").mkdir()
+            (project_root / "tools" / "local_export_server.py").write_text(
+                "pass\n", encoding="utf-8"
+            )
+            (project_root / "package.json").write_text("{}", encoding="utf-8")
+            (project_root / "runtime" / "python").mkdir(parents=True)
+            embedded_py = project_root / "runtime" / "python" / "python.exe"
+            embedded_py.write_text("", encoding="utf-8")
+            (project_root / "tools" / "pyjianying_runtime").mkdir()
+
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+
+            null_logger = logging.getLogger("shipin_cut_launcher_embedded_test")
+            null_logger.handlers = [logging.NullHandler()]
+            null_logger.setLevel(logging.INFO)
+            null_logger.propagate = False
+
+            captured = {"cmd": None, "env": None}
+
+            def fake_start_process(command, cwd, log_handle, env=None):
+                captured["cmd"] = command
+                captured["env"] = env
+                # 立刻标记进程结束，让 run_launcher 走 wait_for_state 失败分支 → 退 1
+                proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(0)"])
+                return proc
+
+            with patch.object(launcher, "backend_state", return_value="stopped"), \
+                 patch.object(launcher, "static_frontend_state", return_value="shipin-cut"), \
+                 patch.object(launcher, "verify_python", return_value=True), \
+                 patch.object(launcher, "resolve_project_root", return_value=project_root), \
+                 patch.object(launcher, "resolve_user_data_root", return_value=user_data_root), \
+                 patch.object(launcher, "setup_logging",
+                              return_value=(null_logger, base / "no.log")), \
+                 patch.object(launcher, "start_process", side_effect=fake_start_process), \
+                 patch.object(launcher, "SingleInstanceLock") as fake_lock_cls, \
+                 patch.object(launcher, "wait_for_state", return_value=False):
+                fake_lock_cls.return_value.acquire.return_value = True
+                try:
+                    launcher.run_launcher(no_browser=True)
+                except SystemExit:
+                    pass
+
+            self.assertIsNotNone(captured["cmd"], "start_process must be called")
+            # 第一项必须是内置 Python 路径，不应是 sys.executable
+            self.assertEqual(
+                Path(captured["cmd"][0]).resolve(),
+                embedded_py.resolve(),
+                "launcher must use embedded python.exe, not sys.executable",
+            )
+            self.assertEqual(
+                Path(captured["cmd"][1]).name, "local_export_server.py"
+            )
+            # env 必须包含 PYTHONPATH 和 PYTHONPYCACHEPREFIX
+            self.assertIsNotNone(captured["env"])
+            self.assertIn("PYTHONPATH", captured["env"])
+            self.assertIn("PYTHONPYCACHEPREFIX", captured["env"])
+            self.assertEqual(
+                captured["env"]["SHIPIN_CUT_DATA_ROOT"], str(user_data_root)
+            )
+
+    def test_run_launcher_falls_back_when_no_embedded(self):
+        """无内置 Python 时回退到当前解释器，且仍然注入 PYTHONPATH/PYTHONPYCACHEPREFIX。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            project_root = base / "ShipinCut"
+            project_root.mkdir()
+            (project_root / "dist").mkdir()
+            (project_root / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
+            (project_root / "tools").mkdir()
+            (project_root / "tools" / "local_export_server.py").write_text(
+                "pass\n", encoding="utf-8"
+            )
+            (project_root / "package.json").write_text("{}", encoding="utf-8")
+            # 注意：没有 runtime/python/ 也没有 installer/runtime/python/
+
+            user_data_root = base / "LocalAppData" / "ShipinCut"
+
+            null_logger = logging.getLogger("shipin_cut_launcher_fallback_test")
+            null_logger.handlers = [logging.NullHandler()]
+            null_logger.setLevel(logging.INFO)
+            null_logger.propagate = False
+
+            captured = {"cmd": None, "env": None}
+
+            def fake_start_process(command, cwd, log_handle, env=None):
+                captured["cmd"] = command
+                captured["env"] = env
+                proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(0)"])
+                return proc
+
+            with patch.object(launcher, "backend_state", return_value="stopped"), \
+                 patch.object(launcher, "static_frontend_state", return_value="shipin-cut"), \
+                 patch.object(launcher, "verify_python", return_value=True), \
+                 patch.object(launcher, "resolve_project_root", return_value=project_root), \
+                 patch.object(launcher, "resolve_user_data_root", return_value=user_data_root), \
+                 patch.object(launcher, "setup_logging",
+                              return_value=(null_logger, base / "no.log")), \
+                 patch.object(launcher, "start_process", side_effect=fake_start_process), \
+                 patch.object(launcher, "SingleInstanceLock") as fake_lock_cls, \
+                 patch.object(launcher, "wait_for_state", return_value=False):
+                fake_lock_cls.return_value.acquire.return_value = True
+                try:
+                    launcher.run_launcher(no_browser=True)
+                except SystemExit:
+                    pass
+
+            self.assertIsNotNone(captured["cmd"])
+            # 没有 embedded，回退到当前解释器
+            self.assertEqual(Path(captured["cmd"][0]).resolve(), Path(sys.executable).resolve())
+            # 即使是回退路径，env 也必须有 PYTHONPYCACHEPREFIX
+            self.assertIn("PYTHONPYCACHEPREFIX", captured["env"])
 
 
 if __name__ == "__main__":

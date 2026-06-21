@@ -72,10 +72,43 @@ def ensure_user_data_dirs(user_data_root: Path) -> dict[str, Path]:
         "runtime": user_data_root / "runtime",
         "config": user_data_root / "config",
         "cache": user_data_root / "cache",
+        # v0.9.14 (3C-3): Python __pycache__ 重定向目标。安装版下 vendored
+        # 站点包位于 {app}\tools\pyjianying_runtime，{app} 不可写，所有
+        # __pycache__ 必须写到用户目录。LocalAppData 永远可写。
+        "pycache": user_data_root / "cache" / "pycache",
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
     return paths
+
+
+# v0.9.14 (3C-3): 内置 Python 解析。
+# 优先级：安装版布局 → 开发态布局。任意一个命中即返回绝对路径；都不存在返回 None。
+# 调用方负责回退到 sys.executable。
+EMBEDDED_PYTHON_CANDIDATES: tuple[tuple[str, ...], ...] = (
+    # 安装版布局：{app}\runtime\python\python.exe
+    ("runtime", "python", "python.exe"),
+    # 开发态布局：<repo>\installer\runtime\python\python.exe
+    ("installer", "runtime", "python", "python.exe"),
+)
+
+
+def resolve_embedded_python(project_root: Path) -> Path | None:
+    """Return the absolute path to the embedded Python interpreter, or None.
+
+    Lookup order:
+      1. ``<project_root>/runtime/python/python.exe``    (3C-4 install layout)
+      2. ``<project_root>/installer/runtime/python/python.exe``  (3C-2 dev layout)
+
+    Both x86 and x64 Windows binaries end in ``python.exe``; the embeddable
+    distribution is shipped as a single 64-bit folder, so there is no x86/x64
+    branch to disambiguate here.
+    """
+    for parts in EMBEDDED_PYTHON_CANDIDATES:
+        candidate = project_root.joinpath(*parts)
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
 
 
 def prepare_runtime_vite_config(runtime_dir: Path, cache_dir: Path, project_root: Path) -> Path:
@@ -192,10 +225,12 @@ def find_npm() -> str | None:
     return shutil.which("npm.cmd") or shutil.which("npm")
 
 
-def verify_python() -> bool:
+def verify_python(python: str | os.PathLike[str] | None = None) -> bool:
+    """Return True if the given Python (default: sys.executable) can run --version."""
+    target = str(python) if python is not None else sys.executable
     try:
         result = subprocess.run(
-            [sys.executable, "--version"],
+            [target, "--version"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5,
@@ -204,6 +239,38 @@ def verify_python() -> bool:
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def build_backend_env(
+    project_root: Path,
+    user_data_root: Path,
+    pycache_dir: Path,
+    base_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build the env used to spawn ``tools/local_export_server.py``.
+
+    Always sets:
+      * ``SHIPIN_CUT_DATA_ROOT`` — redirects runtime data to LocalAppData.
+      * ``PYTHONPATH`` — makes the embedded interpreter find the vendored
+        third-party packages under ``<project_root>/tools/pyjianying_runtime``
+        (pyJianYingDraft / pymediainfo / uiautomation / comtypes). Without
+        this the embeddable distribution has no site-packages of its own and
+        would fall back to system site-packages.
+      * ``PYTHONPYCACHEPREFIX`` — points ``__pycache__`` to a writable user
+        directory, so that ``import`` of the vendored chain does not try to
+        write ``__pycache__`` next to ``{app}/tools/pyjianying_runtime``.
+    """
+    env = dict(base_env if base_env is not None else os.environ)
+    env["SHIPIN_CUT_DATA_ROOT"] = str(user_data_root)
+    pyjianying = project_root / "tools" / "pyjianying_runtime"
+    py_path_parts = [str(project_root)]
+    if pyjianying.is_dir():
+        py_path_parts.append(str(pyjianying))
+    existing_pp = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(py_path_parts + ([existing_pp] if existing_pp else []))
+    pycache_dir.mkdir(parents=True, exist_ok=True)
+    env["PYTHONPYCACHEPREFIX"] = str(pycache_dir)
+    return env
 
 
 class SingleInstanceLock:
@@ -345,6 +412,24 @@ def run_launcher(no_browser: bool = False) -> int:
     else:
         logger.info("未检测到 dist/，使用 Vite dev 模式（需要 Node/npm）。")
 
+    # v0.9.14 (3C-3): 决定后端 Python 解释器。优先内置，否则回退到当前解释器。
+    # 即使是 dev 模式也走这个分支，原因是 PYTHONPATH/PYTHONPYCACHEPREFIX 注入
+    # 与解释器本身是耦合的，不应该分开配置。
+    embedded_python = resolve_embedded_python(project_root)
+    if embedded_python is not None:
+        backend_python = str(embedded_python)
+        if not verify_python(backend_python):
+            logger.error("找到内置 Python 但无法执行：%s", backend_python)
+            return 1
+        logger.info("使用内置 Python 启动后端：%s", backend_python)
+    else:
+        backend_python = sys.executable
+        logger.info(
+            "未找到内置 Python（%s），回退到当前解释器：%s",
+            " / ".join("/".join(parts) for parts in EMBEDDED_PYTHON_CANDIDATES),
+            backend_python,
+        )
+
     lock = SingleInstanceLock(user_paths["runtime"] / "launcher.lock")
     if not lock.acquire():
         return wait_for_existing_launcher(logger, no_browser, frontend_checker, frontend_url)
@@ -355,6 +440,9 @@ def run_launcher(no_browser: bool = False) -> int:
     child_log = None
 
     try:
+        # v0.9.14 (3C-3): 把"当前解释器是否能跑"和"后端解释器是否能跑"分开。
+        # 后端解释器已在前面 verify_python(backend_python) 校验过；这里再校验
+        # 当前解释器（用于 launcher 自身和 dev 模式下的子进程），保持向后兼容。
         if not verify_python():
             logger.error("未检测到 Python，请联系管理员安装运行环境。")
             return 1
@@ -390,11 +478,16 @@ def run_launcher(no_browser: bool = False) -> int:
             logger.info("检测到本地服务已运行，复用 8765 端口。")
         else:
             logger.info("正在启动本地服务")
+            backend_env = build_backend_env(
+                project_root,
+                user_data_root,
+                user_paths["pycache"],
+            )
             process = start_process(
-                [sys.executable, str(project_root / "tools" / "local_export_server.py")],
+                [backend_python, str(project_root / "tools" / "local_export_server.py")],
                 project_root,
                 child_log,
-                dict(os.environ, SHIPIN_CUT_DATA_ROOT=str(user_data_root)),
+                backend_env,
             )
             owned["backend"] = process
             write_runtime_state(runtime_path, owned)
