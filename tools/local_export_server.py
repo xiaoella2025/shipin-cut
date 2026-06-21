@@ -50,6 +50,14 @@ def resolve_writable_paths(repo_root, environ=None):
 
 
 WORKSPACE, LOCAL_SETTINGS = resolve_writable_paths(REPO_ROOT)
+# v4A: 兑换码激活状态文件，与 LOCAL_SETTINGS 同级（都在 config/ 下）。
+# 优先用 SHIPIN_CUT_DATA_ROOT（如安装版的 %LOCALAPPDATA%\ShipinCut），
+# 未设置时回退到仓库根的 config/（开发态）。永不允许写到 {app}。
+if os.environ.get("SHIPIN_CUT_DATA_ROOT"):
+    _data_root = Path(os.environ["SHIPIN_CUT_DATA_ROOT"]).expanduser().resolve()
+    ACTIVATION_PATH = _data_root / "config" / "activation.json"
+else:
+    ACTIVATION_PATH = REPO_ROOT / "config" / "activation.json"
 DRAFTS_DIR     = WORKSPACE / "drafts"
 VIDEOS_DIR     = WORKSPACE / "videos"
 AUDIO_DIR      = WORKSPACE / "audio"
@@ -62,7 +70,7 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 JIANYING_EXE_NAMES = {"jianyingpro.exe", "capcut.exe"}
 
 HOST = "127.0.0.1"
-PORT = 8765
+PORT = int(os.environ.get("SHIPIN_CUT_PORT", "8765"))  # 默认 8765；测试可覆盖
 
 # v0.9.13: 静态前端托管（阶段 3B）。
 # Vite 把 base 设为 /shipin-cut/，所以产物里所有 asset URL 都带 /shipin-cut/ 前缀；
@@ -454,6 +462,69 @@ def _save_local_settings(data):
     LOCAL_SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# ── v4A: 兑换码入口占位（仅本地模拟，不接真实后台）────────────────────
+# 本地激活状态文件 ACTIVATION_PATH，结构：
+#   { "status": "activated", "code": "SHIPIN-TEST-2026",
+#     "activatedAt": "2026-06-20T12:00:00", "source": "local-placeholder",
+#     "version": "4A" }
+# 默认 trial 时不写文件（懒写盘），每次激活成功才落盘。
+# 4A 不接服务器、不做远程校验、不锁功能——仅供入口占位与产品演示。
+
+ACTIVATION_VERSION = "4A"
+ACTIVATION_TRIAL_RESPONSE = {
+    "ok": True,
+    "status": "trial",
+    "source": "default-local-trial",
+    "version": ACTIVATION_VERSION,
+    "message": "当前为本地试用版本，核心功能可正常使用。",
+}
+# 4A 测试码：仅本地通过；下一阶段 4B 接真实后台后会替换为远程校验。
+ACTIVATION_TEST_CODES = {
+    "SHIPIN-TEST-2026",
+    "SHIPIN-VIP-LOCAL",
+    "MIXCUT-LOCAL-OK",
+}
+
+
+def _load_activation():
+    """读取本地激活状态。文件不存在 / 损坏时返回 None（视为 trial）。"""
+    try:
+        if ACTIVATION_PATH.is_file():
+            return json.loads(ACTIVATION_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[激活] 读取本地状态失败：{e}，按 trial 处理", flush=True)
+    return None
+
+
+def _save_activation(data):
+    """写入本地激活状态。ACTIVATION_PATH 已经在模块加载时定位到
+    %LOCALAPPDATA%/ShipinCut/config/activation.json（在 SHIPIN_CUT_DATA_ROOT
+    下），绝不会写到 {app}。"""
+    ACTIVATION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVATION_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _is_activation_under_protected_dir():
+    """安全断言：ACTIVATION_PATH 必须在 SHIPIN_CUT_DATA_ROOT（安装版）下，
+    或在仓库根的 config/（开发态）下，绝不允许落在 {app}/runtime、{app}/tools、
+    {app}/launcher 之类的程序目录里。"""
+    data_root = os.environ.get("SHIPIN_CUT_DATA_ROOT")
+    if data_root:
+        try:
+            ACTIVATION_PATH.relative_to(Path(data_root).expanduser().resolve())
+            return True
+        except ValueError:
+            return False
+    # 开发态：必须在 REPO_ROOT/config/ 下
+    try:
+        ACTIVATION_PATH.relative_to((REPO_ROOT / "config").resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def _is_allowed_jianying_exe(path):
     try:
         p = Path(path).expanduser()
@@ -804,6 +875,21 @@ class ExportHandler(BaseHTTPRequestHandler):
             auds = [f.name for f in AUDIO_DIR.iterdir()
                     if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
             self._json({"ok": True, "videos": sorted(vids), "audio": sorted(auds)})
+        elif self.path == "/activation-status":
+            # v4A: 返回本地激活状态。文件不存在时返回 trial（懒写盘）。
+            activation = _load_activation()
+            if activation and activation.get("status") == "activated":
+                self._json({
+                    "ok": True,
+                    "status": "activated",
+                    "activation": activation,
+                    "version": ACTIVATION_VERSION,
+                    "message": "当前设备已激活，核心功能可正常使用。",
+                })
+            else:
+                payload = dict(ACTIVATION_TRIAL_RESPONSE)
+                payload["activation"] = None
+                self._json(payload)
         elif self._serve_static_frontend():
             pass  # 静态前端已处理
         else:
@@ -1004,6 +1090,68 @@ class ExportHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/transcribe-video":
             self._handle_transcribe_video()
+            return
+        if self.path == "/activate-code":
+            # v4A: 接收 {code: "..."}，本地模拟校验。
+            # 失败时**绝不**回退到 inactive / locked 等阻断状态，
+            # 一律保留 trial，并返回温和 message。
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except Exception as e:
+                self._json({"ok": False, "status": "trial",
+                            "message": f"请求体解析失败：{e}"})
+                return
+            code = (payload.get("code") or "").strip()
+            if not code:
+                self._json({
+                    "ok": False,
+                    "status": "trial",
+                    "message": "请输入兑换码。",
+                })
+                return
+            if not _is_activation_under_protected_dir():
+                # 安全断言失败：配置环境异常。绝不在 {app} 下写。
+                self._json({
+                    "ok": False,
+                    "status": "trial",
+                    "message": "本地配置路径异常，未写入激活状态。请联系管理员。",
+                })
+                return
+            if code not in ACTIVATION_TEST_CODES:
+                print(f"[激活] 兑换码无效：{code!r}（保持 trial）", flush=True)
+                self._json({
+                    "ok": False,
+                    "status": "trial",
+                    "message": "兑换码无效，当前仍可继续试用。",
+                })
+                return
+            activation = {
+                "status": "activated",
+                "code": code,
+                "activatedAt": datetime.now().isoformat(timespec="seconds"),
+                "source": "local-placeholder",
+                "version": ACTIVATION_VERSION,
+            }
+            try:
+                _save_activation(activation)
+            except Exception as e:
+                print(f"[激活] 写入激活状态失败：{e}", flush=True)
+                self._json({
+                    "ok": False,
+                    "status": "trial",
+                    "message": f"激活状态保存失败：{e}，可继续试用。",
+                })
+                return
+            print(f"[激活] 激活成功：code={code}", flush=True)
+            self._json({
+                "ok": True,
+                "status": "activated",
+                "activation": activation,
+                "version": ACTIVATION_VERSION,
+                "message": "激活成功",
+            })
             return
         if self.path == "/export-jianying":
             # 接收 {mp4, srt?, name?} 生成剪映草稿

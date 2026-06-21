@@ -12157,6 +12157,196 @@ input[type=range] {
 .r3-sub-edit-ta:focus { border-color: var(--accent-hi); }
 .r3-sub-edit-acts { display: flex; gap: 6px; }
 .r3-sub-edit-save { background: var(--accent); border: none; border-radius: var(--r); color: #fff; font-size: 12px; padding: 4px 12px; cursor: pointer; transition: background 0.1s; }
+
+/* ── v4A: 兑换码入口占位（仅本地模拟，不接真实后台）──────── */
+/* 颜色用奶茶 / 豆沙系，与现有 UI 风格保持一致；不刺眼、不大面积红绿。 */
+.activation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-lift);
+  border: 1px solid var(--bdr-md);
+  color: var(--txt);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px 5px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+  white-space: nowrap;
+}
+.activation-badge:hover { border-color: var(--bdr-hi); background: var(--bg-surf); }
+.activation-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #b08d6e; /* milky-tea dot */
+  box-shadow: 0 0 0 2px rgba(176,141,110,0.18);
+  flex-shrink: 0;
+}
+.activation-badge.act-activated .activation-dot {
+  background: #7b8f6f; /* 豆沙绿，温和不刺眼 */
+  box-shadow: 0 0 0 2px rgba(123,143,111,0.18);
+}
+.activation-badge.act-trial .activation-dot {
+  background: #b08d6e; /* 奶茶棕 */
+  box-shadow: 0 0 0 2px rgba(176,141,110,0.18);
+}
+.activation-badge.act-unknown .activation-dot,
+.activation-badge.act-inactive .activation-dot {
+  background: #a8a29e; /* 灰，温和 */
+  box-shadow: 0 0 0 2px rgba(168,162,158,0.18);
+}
+.activation-label { letter-spacing: 0.02em; }
+
+.activation-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+  animation: act-fade-in 0.15s ease-out;
+}
+@keyframes act-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.activation-modal {
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-surf);
+  border: 1px solid var(--bdr-md);
+  border-radius: 12px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.35);
+  overflow: hidden;
+  animation: act-pop-in 0.18s ease-out;
+}
+@keyframes act-pop-in {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.activation-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--bdr-md);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--txt);
+}
+.activation-close {
+  background: none;
+  border: none;
+  color: var(--txt-2);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+  transition: all 0.1s;
+}
+.activation-close:hover { color: var(--txt); background: var(--bg-lift); }
+.activation-close:disabled { opacity: 0.4; cursor: not-allowed; }
+.activation-modal-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.activation-status-line {
+  font-size: 13px;
+  color: var(--txt-2);
+}
+.activation-status {
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  margin-left: 4px;
+}
+.activation-status.act-trial {
+  background: rgba(176,141,110,0.15);
+  color: #8a6a4f;
+}
+.activation-status.act-activated {
+  background: rgba(123,143,111,0.15);
+  color: #5f7050;
+}
+.activation-status.act-unknown,
+.activation-status.act-inactive {
+  background: rgba(168,162,158,0.18);
+  color: #78716c;
+}
+.activation-input-label {
+  font-size: 12px;
+  color: var(--txt-2);
+  margin-top: 2px;
+}
+.activation-input {
+  background: var(--bg);
+  border: 1px solid var(--bdr-md);
+  color: var(--txt);
+  border-radius: var(--r);
+  padding: 8px 11px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.1s;
+}
+.activation-input:focus { border-color: var(--accent); }
+.activation-input:disabled { opacity: 0.6; cursor: not-allowed; }
+.activation-hint {
+  font-size: 11px;
+  color: var(--txt-2);
+  line-height: 1.55;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--bg-lift);
+  border-radius: var(--r);
+  border: 1px solid var(--bdr-md);
+}
+.activation-modal-foot {
+  padding: 12px 16px;
+  border-top: 1px solid var(--bdr-md);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  background: var(--bg-lift);
+}
+.activation-toast {
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: var(--r);
+  line-height: 1.45;
+  animation: act-fade-in 0.12s ease-out;
+}
+.activation-toast.act-toast-ok {
+  background: rgba(123,143,111,0.15);
+  color: #5f7050;
+  border: 1px solid rgba(123,143,111,0.4);
+}
+.activation-toast.act-toast-err {
+  background: rgba(176,141,110,0.15);
+  color: #8a6a4f;
+  border: 1px solid rgba(176,141,110,0.4);
+}
+.activation-toast-fixed {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99999;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+  animation: act-fade-in 0.15s ease-out;
+  max-width: 80vw;
+}
 .r3-sub-edit-save:hover { background: var(--accent-hi); }
 .r3-sub-edit-cancel { background: none; border: 1px solid var(--bdr-md); border-radius: var(--r); color: var(--txt-2); font-size: 12px; padding: 4px 10px; cursor: pointer; transition: all 0.1s; }
 .r3-sub-edit-cancel:hover { border-color: var(--bdr-hi); color: var(--txt); }
+

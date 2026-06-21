@@ -755,5 +755,233 @@ class TestEmbeddedPython(unittest.TestCase):
             self.assertIn("PYTHONPYCACHEPREFIX", captured["env"])
 
 
+class TestActivationAPI(unittest.TestCase):
+    """v4A: 兑换码入口占位（仅本地模拟）。
+
+    验证：
+      - GET /activation-status 默认 trial（无文件时）
+      - POST /activate-code 输入测试码成功，activation.json 写到 LocalAppData
+      - POST /activate-code 输入错误码失败，但 status 仍为 trial
+      - activation.json 不会写到项目根 / 安装目录
+      - 失败重试仍安全（多次写入安全覆盖）
+    """
+
+    def setUp(self):
+        from http.client import HTTPConnection
+        # 用临时目录模拟 SHIPIN_CUT_DATA_ROOT，避免污染真实 %LOCALAPPDATA%
+        self._td_ctx = tempfile.TemporaryDirectory()
+        self.td = Path(self._td_ctx.name)
+        self.user_data_root = self.td / "LocalAppData" / "ShipinCut"
+        self.user_data_root.mkdir(parents=True)
+        self.config_dir = self.user_data_root / "config"
+        self.activation_path = self.config_dir / "activation.json"
+
+        # 把 SHIPIN_CUT_DATA_ROOT 注入环境，再 spawn 一次性后端进程
+        env = dict(os.environ, SHIPIN_CUT_DATA_ROOT=str(self.user_data_root))
+        # 用一个空闲端口
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        self.port = sock.getsockname()[1]
+        sock.close()
+
+        script = (ROOT / "tools" / "local_export_server.py").resolve()
+        env = dict(env, SHIPIN_CUT_PORT=str(self.port))
+        self.proc = subprocess.Popen(
+            [sys.executable, str(script)],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=str(ROOT),
+        )
+        # 等服务就绪
+        deadline = __import__("time").time() + 10
+        ready = False
+        while __import__("time").time() < deadline:
+            try:
+                conn = HTTPConnection("127.0.0.1", self.port, timeout=1)
+                conn.request("GET", "/health")
+                r = conn.getresponse()
+                _ = r.read()
+                if r.status == 200:
+                    ready = True
+                    break
+            except Exception:
+                __import__("time").sleep(0.2)
+            finally:
+                try: conn.close()
+                except Exception: pass
+        if not ready:
+            self.proc.terminate()
+            self.fail(f"local export server did not start on port {self.port}")
+
+    def tearDown(self):
+        try:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=3)
+            except Exception:
+                self.proc.kill()
+        finally:
+            self._td_ctx.cleanup()
+
+    def _request(self, method, path, body=None):
+        from http.client import HTTPConnection
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            headers = {}
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode("utf-8")
+                headers["Content-Type"] = "application/json; charset=utf-8"
+            conn.request(method, path, body=data, headers=headers)
+            r = conn.getresponse()
+            raw = r.read()
+            return r.status, json.loads(raw.decode("utf-8")) if raw else {}
+        finally:
+            conn.close()
+
+    def test_default_status_is_trial_when_no_file(self):
+        """GET /activation-status 在 activation.json 不存在时返回 trial。"""
+        status, body = self._request("GET", "/activation-status")
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("ok"))
+        self.assertEqual(body.get("status"), "trial")
+        self.assertEqual(body.get("source"), "default-local-trial")
+        self.assertEqual(body.get("version"), "4A")
+        # 懒写盘：trial 时不应该落 activation.json
+        self.assertFalse(self.activation_path.exists(),
+                         "trial 时不该落 activation.json")
+
+    def test_activate_with_test_code_succeeds(self):
+        """POST /activate-code 输入 SHIPIN-TEST-2026 激活成功。"""
+        status, body = self._request("POST", "/activate-code", {"code": "SHIPIN-TEST-2026"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("ok"))
+        self.assertEqual(body.get("status"), "activated")
+        self.assertEqual(body.get("message"), "激活成功")
+        activation = body.get("activation") or {}
+        self.assertEqual(activation.get("code"), "SHIPIN-TEST-2026")
+        self.assertEqual(activation.get("source"), "local-placeholder")
+        self.assertEqual(activation.get("version"), "4A")
+        self.assertIn("activatedAt", activation)
+        # activation.json 落到 LocalAppData/config/
+        self.assertTrue(self.activation_path.exists(),
+                         f"activation.json 应当写入 {self.activation_path}")
+        on_disk = json.loads(self.activation_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk.get("status"), "activated")
+        self.assertEqual(on_disk.get("code"), "SHIPIN-TEST-2026")
+
+    def test_activate_with_invalid_code_keeps_trial(self):
+        """POST /activate-code 输入错误码返回 ok=false，**绝不**改写 status。"""
+        # 先确认默认是 trial
+        _, before = self._request("GET", "/activation-status")
+        self.assertEqual(before.get("status"), "trial")
+
+        status, body = self._request("POST", "/activate-code", {"code": "WRONG-CODE-XYZ"})
+        self.assertEqual(status, 200)
+        self.assertFalse(body.get("ok"))
+        self.assertEqual(body.get("status"), "trial",
+                          "错误码不能让 status 变 inactive / unknown")
+        self.assertIn("无效", body.get("message", ""))
+        # activation.json 不应被错误码污染
+        self.assertFalse(self.activation_path.exists())
+
+        # 再 GET，状态仍是 trial
+        _, after = self._request("GET", "/activation-status")
+        self.assertEqual(after.get("status"), "trial")
+
+    def test_activate_with_empty_code_rejected(self):
+        """POST /activate-code 输入空字符串视为无效，不写文件。"""
+        status, body = self._request("POST", "/activate-code", {"code": ""})
+        self.assertEqual(status, 200)
+        self.assertFalse(body.get("ok"))
+        self.assertEqual(body.get("status"), "trial")
+        self.assertFalse(self.activation_path.exists())
+
+    def test_all_three_test_codes_accepted(self):
+        """4A 文档列出的 3 个测试码都应能激活。"""
+        from http.client import HTTPConnection
+        import socket as _s
+        for code in ("SHIPIN-TEST-2026", "SHIPIN-VIP-LOCAL", "MIXCUT-LOCAL-OK"):
+            # 每个测试码用独立的临时目录
+            with tempfile.TemporaryDirectory() as td2:
+                udr = Path(td2) / "LocalAppData" / "ShipinCut"
+                udr.mkdir(parents=True)
+                ap = udr / "config" / "activation.json"
+                # 找空闲端口
+                sock = _s.socket(); sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]; sock.close()
+                env = dict(os.environ, SHIPIN_CUT_DATA_ROOT=str(udr), SHIPIN_CUT_PORT=str(port))
+                p = subprocess.Popen(
+                    [sys.executable, str(ROOT / "tools" / "local_export_server.py")],
+                    env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    cwd=str(ROOT),
+                )
+                try:
+                    # 等就绪
+                    deadline = __import__("time").time() + 10
+                    while __import__("time").time() < deadline:
+                        try:
+                            c = HTTPConnection("127.0.0.1", port, timeout=1)
+                            c.request("GET", "/health")
+                            r = c.getresponse(); r.read()
+                            if r.status == 200: break
+                        except Exception:
+                            __import__("time").sleep(0.2)
+                        finally:
+                            try: c.close()
+                            except Exception: pass
+                    # POST 激活
+                    c = HTTPConnection("127.0.0.1", port, timeout=5)
+                    c.request("POST", "/activate-code",
+                              body=json.dumps({"code": code}).encode("utf-8"),
+                              headers={"Content-Type": "application/json; charset=utf-8"})
+                    r = c.getresponse(); raw = r.read(); c.close()
+                    j = json.loads(raw.decode("utf-8"))
+                    self.assertEqual(r.status, 200, f"{code}: HTTP {r.status}")
+                    self.assertTrue(j.get("ok"), f"{code}: ok=false, {j}")
+                    self.assertEqual(j.get("status"), "activated")
+                    self.assertTrue(ap.exists(), f"{code}: activation.json 未写入")
+                finally:
+                    p.terminate()
+                    try: p.wait(timeout=3)
+                    except Exception: p.kill()
+
+    def test_status_persists_across_requests(self):
+        """激活后 GET /activation-status 仍返回 activated（文件持久化）。"""
+        # 激活
+        self._request("POST", "/activate-code", {"code": "SHIPIN-TEST-2026"})
+        # 重新读
+        status, body = self._request("GET", "/activation-status")
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("status"), "activated")
+        # 文件在 LocalAppData
+        self.assertTrue(self.activation_path.exists())
+        self.assertTrue(str(self.activation_path).startswith(str(self.user_data_root)),
+                        f"activation.json 必须在 {self.user_data_root} 下")
+
+    def test_activation_path_never_under_project_root_or_install_dir(self):
+        """安全断言：activation.json 不会写到项目根，也不会写到 {app}。
+
+        即使用户在 {app} 下运行后端，ACTIVATION_PATH 仍要落到
+        %LOCALAPPDATA%/ShipinCut/config/，绝不写到 {app}。
+        """
+        # 已经在 setUp 时用 SHIPIN_CUT_DATA_ROOT 强制写到 LocalAppData
+        self._request("POST", "/activate-code", {"code": "MIXCUT-LOCAL-OK"})
+        self.assertTrue(self.activation_path.exists())
+        # 路径必须在 self.user_data_root 下，不能在 ROOT（项目根）下
+        try:
+            self.activation_path.relative_to(self.user_data_root.resolve())
+        except ValueError:
+            self.fail(f"activation.json 没落到 LocalAppData: {self.activation_path}")
+        # 不在项目根
+        try:
+            self.activation_path.relative_to(ROOT.resolve())
+            self.fail(f"activation.json 落到了项目根: {self.activation_path}")
+        except ValueError:
+            pass  # 期望：不在项目根
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

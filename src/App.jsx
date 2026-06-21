@@ -1362,6 +1362,15 @@ export default function App() {
   const [showDedupPanel, setShowDedupPanel]       = useState(false)  // v0.9.6: dedup in refine
   const [selectedEffectId, setSelectedEffectId]   = useState(null)   // v0.9.8h1: selected timeline effect
 
+  // ── v4A: 兑换码入口占位（仅本地模拟，不接真实后台）────────
+  // status: 'trial' | 'activated' | 'unknown'；'inactive' 不在状态机里（4A 永不阻断）。
+  // 4A 不接服务器、不做远程校验、不锁功能——仅供入口占位与产品演示。
+  const [activation, setActivation] = useState({ status: 'unknown', activation: null, message: '' })
+  const [showActivationModal, setShowActivationModal] = useState(false)
+  const [activationInput, setActivationInput] = useState('')
+  const [activationBusy, setActivationBusy] = useState(false)
+  const [activationToast, setActivationToast] = useState(null)  // {kind:'ok'|'err',text}
+
   // ── export ──
   const [showExport, setShowExport]   = useState(false)
   const [exportPhase, setExportPhase] = useState('confirm')
@@ -1468,6 +1477,61 @@ export default function App() {
   useEffect(()=>{ compPlaySegIdxRef.current=compPlaySegIdx },[compPlaySegIdx])
   useEffect(()=>{ refineIsPlayingRef.current=refineIsPlaying },[refineIsPlaying])
   useEffect(()=>{ refinePlaySegIdxRef.current=refinePlaySegIdx },[refinePlaySegIdx])
+
+  // v4A: 页面挂载时拉一次激活状态。失败时按 unknown 处理，**绝不**阻断 UI。
+  useEffect(() => {
+    let cancelled = false
+    fetch('http://127.0.0.1:8765/activation-status', { method: 'GET' })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(j => {
+        if (cancelled) return
+        setActivation({
+          status: (j && j.status) || 'trial',
+          activation: j && j.activation || null,
+          message: (j && j.message) || '',
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setActivation({ status: 'unknown', activation: null, message: '无法读取本地激活状态' })
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  // v4A: 提交兑换码。失败时显示温和提示，**不**会阻断工具使用。
+  const handleActivateSubmit = async () => {
+    const code = (activationInput || '').trim()
+    if (!code) {
+      setActivationToast({ kind: 'err', text: '请输入兑换码' })
+      return
+    }
+    setActivationBusy(true)
+    try {
+      const r = await fetch('http://127.0.0.1:8765/activate-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ code }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (r.ok && j && j.ok) {
+        setActivation({
+          status: 'activated',
+          activation: j.activation || null,
+          message: j.message || '激活成功',
+        })
+        setActivationInput('')
+        setActivationToast({ kind: 'ok', text: '激活成功' })
+        setShowActivationModal(false)
+      } else {
+        // 失败时**绝不**改写 status，保留 trial / unknown，仅显示温和提示
+        setActivationToast({ kind: 'err', text: (j && j.message) || '兑换码无效，当前仍可继续试用。' })
+      }
+    } catch (e) {
+      setActivationToast({ kind: 'err', text: '网络错误：' + (e && e.message ? e.message : String(e)) })
+    } finally {
+      setActivationBusy(false)
+    }
+  }
 
   // ── derived ──
   const enabledDedupKeys = Object.entries(dedup).filter(([,v])=>v).map(([k])=>k)
@@ -4180,6 +4244,20 @@ export default function App() {
           })}
         </nav>
         <div className="header-r">
+          {/* v4A: 兑换码入口占位。状态徽章 + 弹窗。点击打开，不阻断核心功能。 */}
+          <button
+            className={`activation-badge act-${activation.status}`}
+            onClick={()=>{ setShowActivationModal(true); setActivationToast(null) }}
+            title={activation.message || (activation.status === 'activated' ? '已激活' : activation.status === 'trial' ? '试用中' : '激活状态')}
+          >
+            <span className="activation-dot" aria-hidden="true" />
+            <span className="activation-label">
+              {activation.status === 'activated' ? '已激活'
+                : activation.status === 'trial' ? '试用中'
+                : activation.status === 'unknown' ? '状态未知'
+                : '未激活'}
+            </span>
+          </button>
           <button className="btn-ghost btn-sm" onClick={()=>showToast('项目保存功能将在后续版本接入')}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             保存
@@ -7860,6 +7938,67 @@ export default function App() {
             )
           })()}
         </Fragment>
+      )}
+
+      {/* v4A: 兑换码激活弹窗（仅本地模拟）。点击遮罩关闭；按 Esc 也关闭。 */}
+      {showActivationModal && (
+        <div className="activation-overlay" onClick={()=>!activationBusy && setShowActivationModal(false)}>
+          <div className="activation-modal" onClick={e=>e.stopPropagation()}>
+            <div className="activation-modal-head">
+              <span>激活工具</span>
+              <button className="activation-close" disabled={activationBusy}
+                onClick={()=>setShowActivationModal(false)} aria-label="关闭">×</button>
+            </div>
+            <div className="activation-modal-body">
+              <div className="activation-status-line">
+                当前状态：
+                <b className={`activation-status act-${activation.status}`}>
+                  {activation.status === 'activated' ? '已激活'
+                    : activation.status === 'trial' ? '试用中'
+                    : activation.status === 'unknown' ? '状态未知'
+                    : '未激活'}
+                </b>
+              </div>
+              <label className="activation-input-label" htmlFor="activation-code-input">请输入兑换码</label>
+              <input
+                id="activation-code-input"
+                className="activation-input"
+                type="text"
+                value={activationInput}
+                onChange={e=>setActivationInput(e.target.value)}
+                placeholder="例如：SHIPIN-TEST-2026"
+                disabled={activationBusy}
+                onKeyDown={e=>{ if (e.key==='Enter') handleActivateSubmit() }}
+                autoFocus
+              />
+              {activationToast && (
+                <div className={`activation-toast act-toast-${activationToast.kind}`}>
+                  {activationToast.text}
+                </div>
+              )}
+              <div className="activation-hint">
+                当前为本地试用版本，激活状态仅保存在本机。<br />
+                本轮（4A）仅用于入口占位，后续会接入正式授权后台。
+              </div>
+            </div>
+            <div className="activation-modal-foot">
+              <button className="btn-ghost btn-sm" disabled={activationBusy}
+                onClick={()=>setShowActivationModal(false)}>取消</button>
+              <button className="btn-primary btn-sm" disabled={activationBusy}
+                onClick={handleActivateSubmit}>
+                {activationBusy ? '兑换中…' : '兑换'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v4A: 顶部 toast 提示（短消息）。3 秒后自动消失。 */}
+      {activationToast && !showActivationModal && (
+        <div className={`activation-toast-fixed act-toast-${activationToast.kind}`}
+          onAnimationEnd={()=>setTimeout(()=>setActivationToast(null), 3000)}>
+          {activationToast.text}
+        </div>
       )}
 
     </div>
